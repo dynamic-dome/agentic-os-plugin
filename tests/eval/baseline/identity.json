@@ -1,0 +1,23 @@
+{
+ "_provenance": "hand-authored expected signature (current-body spec); replace via capture_protocol.md on first real capture",
+ "_body_sha256": null,
+ "briefing_blocks": [
+  "LAST SESSION",
+  "PROJECT STATUS",
+  "STATISTICS",
+  "HEALTH"
+ ],
+ "gates_fired": {
+  "fast_path": false,
+  "recovery": false,
+  "soul_candidate": true,
+  "user_candidate": true,
+  "escalation": false
+ },
+ "files_written": [],
+ "json_keys_touched": {},
+ "questions_asked": [
+  "soul_candidate_gate",
+  "user_candidate_gate"
+ ]
+}

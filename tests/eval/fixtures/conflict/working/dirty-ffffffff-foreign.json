@@ -1,0 +1,11 @@
+{
+ "session_id": "ffffffff-foreign",
+ "agent": "claude",
+ "dirty": true,
+ "started": "2026-07-01T06:00:00+02:00",
+ "updated": "2026-07-01T06:10:00+02:00",
+ "touched_files": [
+  "x.md"
+ ],
+ "write_count": 1
+}

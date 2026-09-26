@@ -1,0 +1,4 @@
+# Fixture stores are hashed byte-for-byte by preprocess_state.py (the fast-path
+# scenario commits a precomputed state-hash). EOL normalization would change the
+# bytes and break the fast-path test on checkout — pin fixtures to raw bytes.
+fixtures/** -text

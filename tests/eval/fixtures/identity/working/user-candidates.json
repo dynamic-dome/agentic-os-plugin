@@ -1,0 +1,11 @@
+[
+ {
+  "id": "uc-1",
+  "key": "editor",
+  "value": "neovim",
+  "status": "inferred",
+  "occurrences": 3,
+  "confidence": 0.8,
+  "last_seen": "2026-07-01"
+ }
+]

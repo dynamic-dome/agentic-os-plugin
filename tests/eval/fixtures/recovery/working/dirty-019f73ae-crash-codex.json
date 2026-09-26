@@ -1,0 +1,12 @@
+{
+ "session_id": "019f73ae-crash-codex",
+ "agent": "codex",
+ "dirty": true,
+ "started": "2026-07-01T07:00:00+02:00",
+ "updated": "2026-07-01T07:42:00+02:00",
+ "touched_files": [
+  "some/file.py",
+  "other/file.md"
+ ],
+ "write_count": 4
+}

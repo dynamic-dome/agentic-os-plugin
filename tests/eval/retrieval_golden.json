@@ -1,0 +1,230 @@
+{
+  "_provenance": {
+    "task": "membrain T-42 (memperfectflowharvest.md, Rosine R2)",
+    "created": "2026-07-21",
+    "canon": "membrain/memauthority.md (authority matrix) + skills/DEPENDENCIES.md (store ownership)",
+    "purpose": "Makes the authority matrix MEASURABLE: for a typical question, which source leads? Until now the matrix was canonical prose with no test path.",
+    "layer": "Schicht 1 validates this file; Schicht 2 scores a recorded run against it (--score)."
+  },
+  "sources": {
+    "open-tasks": {"kind": "store", "anchor": "open-tasks.json", "note": "SSoT for next steps"},
+    "decisions": {"kind": "store", "anchor": "decisions.json", "note": "SSoT for decisions of record"},
+    "learnings": {"kind": "store", "anchor": "learnings.json", "note": "distilled transferable experience"},
+    "patterns": {"kind": "store", "anchor": "patterns.json", "note": "recurrence + backflow status"},
+    "errors": {"kind": "store", "anchor": "errors.json", "note": "episodic error events"},
+    "iteration-log": {"kind": "store", "anchor": "iteration-log.md", "note": "episodic what-happened"},
+    "project-context": {"kind": "store", "anchor": "project-context.md", "note": "CACHE, not SoT"},
+    "session-summary": {"kind": "store", "anchor": "session-summary.md", "note": "rendered handoff, never a harvest source"},
+    "identity-user": {"kind": "store", "anchor": "user.md", "note": "stable user facts / working style"},
+    "identity-soul": {"kind": "store", "anchor": "soul.md", "note": "agent self-model, gated"},
+    "global-memory": {"kind": "store", "anchor": "~/.claude-memory/global/", "note": "cross-project layer"},
+    "native-feedback": {"kind": "artifact", "rationale": "Claude-native memory owns user corrections/preferences; outside .agent-memory by design"},
+    "skill-file": {"kind": "artifact", "rationale": "the real SKILL.md / hook file is the ONLY proof of actual behavior"},
+    "docs-project": {"kind": "artifact", "rationale": "docs/PROJECT.md+ARCHITECTURE.md are SoT for stack/architecture (context-keeper Step 1.5); project-context.md only caches them"},
+    "dependencies-graph": {"kind": "artifact", "rationale": "skills/DEPENDENCIES.md owns store-writer ownership"},
+    "wiki-concept": {"kind": "artifact", "rationale": "Obsidian concept/synthesis page — readable projection, leading only for concept questions"},
+    "wiki-session-note": {"kind": "artifact", "rationale": "Obsidian session note — historical narrative, never operational truth"},
+    "atlas-capability-card": {"kind": "index", "rationale": "Atlas card selects candidates; it is a map, never the proof"},
+    "atlas-search": {"kind": "index", "rationale": "semantic entry point; similarity is not authority"}
+  },
+  "cases": [
+    {
+      "id": "R01",
+      "question": "Was steht als Nächstes an?",
+      "question_type": "next-steps",
+      "expected_leading_source": "open-tasks",
+      "allowed_supporting": ["session-summary", "project-context"],
+      "typical_wrong_pick": "session-summary",
+      "why": "open-tasks.json is the SSoT for next steps; the handoff only renders a pointer to it."
+    },
+    {
+      "id": "R02",
+      "question": "Gibt es aktuell Blocker in diesem Projekt?",
+      "question_type": "next-steps",
+      "expected_leading_source": "open-tasks",
+      "allowed_supporting": ["errors", "session-summary"],
+      "typical_wrong_pick": "wiki-session-note",
+      "why": "Blockers are task state, not narrative; harvesting them from a session note re-creates duplicate tasks."
+    },
+    {
+      "id": "R03",
+      "question": "Warum wurde Format X als Speicherformat gewählt?",
+      "question_type": "architecture-decision",
+      "expected_leading_source": "decisions",
+      "allowed_supporting": ["wiki-concept", "project-context"],
+      "typical_wrong_pick": "wiki-concept",
+      "why": "decisions.json is canonical; the wiki page is a projection that may lag."
+    },
+    {
+      "id": "R04",
+      "question": "Gilt die Entscheidung zu Y noch, oder wurde sie abgelöst?",
+      "question_type": "architecture-decision",
+      "expected_leading_source": "decisions",
+      "allowed_supporting": ["wiki-concept"],
+      "typical_wrong_pick": "session-summary",
+      "why": "Supersession is recorded in the decision store; a summary can only report the state at its write time."
+    },
+    {
+      "id": "R05",
+      "question": "Welchen Stack und welche Architektur nutzt dieses Projekt?",
+      "question_type": "project-state",
+      "expected_leading_source": "docs-project",
+      "allowed_supporting": ["project-context", "decisions"],
+      "typical_wrong_pick": "project-context",
+      "why": "context-keeper Step 1.5 treats docs/ as SoT; project-context.md is an explicit cache and loses on drift."
+    },
+    {
+      "id": "R06",
+      "question": "Was ist in der letzten Session passiert?",
+      "question_type": "handoff",
+      "expected_leading_source": "session-summary",
+      "allowed_supporting": ["iteration-log", "open-tasks"],
+      "typical_wrong_pick": "wiki-session-note",
+      "why": "The handoff is exactly this question's artifact — the one case where the rendered doc IS the right entry point."
+    },
+    {
+      "id": "R07",
+      "question": "Hatten wir diesen Fehler schon einmal?",
+      "question_type": "past-error",
+      "expected_leading_source": "errors",
+      "allowed_supporting": ["learnings", "patterns", "iteration-log"],
+      "typical_wrong_pick": "atlas-search",
+      "why": "A semantically similar hit is not proof of the same error event; the episodic store decides."
+    },
+    {
+      "id": "R08",
+      "question": "Wie oft ist Fehlerklasse Z inzwischen aufgetreten?",
+      "question_type": "past-error",
+      "expected_leading_source": "patterns",
+      "allowed_supporting": ["errors", "iteration-log"],
+      "typical_wrong_pick": "learnings",
+      "why": "Recurrence counting lives in patterns (occurrences/first_seen/last_seen), not in individual learnings."
+    },
+    {
+      "id": "R09",
+      "question": "Was haben wir daraus gelernt, dass Build X fehlschlug?",
+      "question_type": "experience",
+      "expected_leading_source": "learnings",
+      "allowed_supporting": ["errors", "iteration-log"],
+      "typical_wrong_pick": "wiki-concept",
+      "why": "The learning abstracts the episode; the concept page is general knowledge, not this project's experience."
+    },
+    {
+      "id": "R10",
+      "question": "Gibt es ein wiederkehrendes Muster bei Problem Y?",
+      "question_type": "experience",
+      "expected_leading_source": "patterns",
+      "allowed_supporting": ["learnings", "errors"],
+      "typical_wrong_pick": "learnings",
+      "why": "A single learning cannot establish recurrence — that is precisely the patterns layer's job."
+    },
+    {
+      "id": "R11",
+      "question": "Kann Skill A die Aufgabe B tatsächlich erledigen?",
+      "question_type": "capability",
+      "expected_leading_source": "skill-file",
+      "allowed_supporting": ["atlas-capability-card", "learnings", "patterns"],
+      "typical_wrong_pick": "atlas-capability-card",
+      "why": "THE canonical trap (pattern P1): the card selects, the real file proves. Cards have been stale repeatedly."
+    },
+    {
+      "id": "R12",
+      "question": "Welcher Skill passt überhaupt für Aufgabe C?",
+      "question_type": "capability",
+      "expected_leading_source": "atlas-capability-card",
+      "allowed_supporting": ["atlas-search", "skill-file"],
+      "typical_wrong_pick": "wiki-concept",
+      "why": "Selection IS the card's job — the inverse of R11. Both must hold, or the rule collapses into 'always read files'."
+    },
+    {
+      "id": "R13",
+      "question": "Welche Constraints und Gates hat Skill A wirklich?",
+      "question_type": "capability",
+      "expected_leading_source": "skill-file",
+      "allowed_supporting": ["atlas-capability-card"],
+      "typical_wrong_pick": "atlas-capability-card",
+      "why": "Gate logic lives in the body; a card summarises purpose, never the full gate contract."
+    },
+    {
+      "id": "R14",
+      "question": "Wie will der User, dass ich Commits formuliere?",
+      "question_type": "user-preference",
+      "expected_leading_source": "native-feedback",
+      "allowed_supporting": ["identity-user"],
+      "typical_wrong_pick": "learnings",
+      "why": "Corrections and preferences are native-memory territory; storing them as learnings mixes experience with instruction."
+    },
+    {
+      "id": "R15",
+      "question": "Wie arbeitet der User am liebsten (Arbeitsstil, Rolle, Expertise)?",
+      "question_type": "identity",
+      "expected_leading_source": "identity-user",
+      "allowed_supporting": ["identity-soul", "native-feedback"],
+      "typical_wrong_pick": "learnings",
+      "why": "Stable user facts are identity, gated through the candidate queue — not per-session experience."
+    },
+    {
+      "id": "R16",
+      "question": "Welches Selbstbild und welche Leitwerte hat der Agent?",
+      "question_type": "identity",
+      "expected_leading_source": "identity-soul",
+      "allowed_supporting": ["identity-user"],
+      "typical_wrong_pick": "identity-user",
+      "why": "soul.md describes the AGENT, user.md the USER — the most common mis-file in the identity pipeline."
+    },
+    {
+      "id": "R17",
+      "question": "Wie funktioniert Konzept K architektonisch?",
+      "question_type": "concept",
+      "expected_leading_source": "wiki-concept",
+      "allowed_supporting": ["atlas-search", "docs-project", "decisions"],
+      "typical_wrong_pick": "project-context",
+      "why": "Concept knowledge is exactly what the wiki leads on; the context cache holds project state, not explanations."
+    },
+    {
+      "id": "R18",
+      "question": "Welcher Skill darf patterns.json schreiben?",
+      "question_type": "ownership",
+      "expected_leading_source": "dependencies-graph",
+      "allowed_supporting": ["skill-file"],
+      "typical_wrong_pick": "project-context",
+      "why": "DEPENDENCIES.md owns the writer matrix; when it disagrees with a SKILL.md, the SKILL.md wins — so both, cache never."
+    },
+    {
+      "id": "R19",
+      "question": "Wurde Pattern P eigentlich jemals umgesetzt?",
+      "question_type": "backflow",
+      "expected_leading_source": "patterns",
+      "allowed_supporting": ["skill-file", "iteration-log"],
+      "typical_wrong_pick": "wiki-session-note",
+      "why": "implemented_by/validated_by carry the answer; the skill file verifies it actually landed (memory-audit Step 3.4)."
+    },
+    {
+      "id": "R20",
+      "question": "Ist Learning L überhaupt noch gültig?",
+      "question_type": "staleness",
+      "expected_leading_source": "learnings",
+      "allowed_supporting": ["patterns", "decisions"],
+      "typical_wrong_pick": "session-summary",
+      "why": "review_after/superseded_by live on the record itself; a summary never expires and would assert stale validity."
+    },
+    {
+      "id": "R21",
+      "question": "Welche Erkenntnisse gelten projektübergreifend?",
+      "question_type": "cross-project",
+      "expected_leading_source": "global-memory",
+      "allowed_supporting": ["patterns", "learnings"],
+      "typical_wrong_pick": "patterns",
+      "why": "The local store holds project scope; cross-project truth only exists after the promotion gate (>=2 source_projects)."
+    },
+    {
+      "id": "R22",
+      "question": "Wo im Gedächtnis steht überhaupt etwas zu Thema T?",
+      "question_type": "discovery",
+      "expected_leading_source": "atlas-search",
+      "allowed_supporting": ["atlas-capability-card"],
+      "typical_wrong_pick": "learnings",
+      "why": "Discovery is the index's purpose; going straight to one store is how a retrieval-gap gets misread as a knowledge-gap."
+    }
+  ]
+}

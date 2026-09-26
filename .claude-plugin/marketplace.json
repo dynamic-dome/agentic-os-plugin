@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agentic-os-marketplace",
+  "description": "Agent memory system for Claude Code",
+  "owner": {
+    "name": "Dominic Meiser",
+    "email": "noreply@local"
+  },
+  "plugins": [
+    {
+      "name": "agentic-os",
+      "description": "Agent memory system with 5 skills. Tracks iterations, extracts patterns, and generates skills from recurring workflows.",
+      "category": "development",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/dynamic-dome/agentic-os-plugin.git"
+      },
+      "homepage": "https://github.com/dynamic-dome/agentic-os-plugin"
+    }
+  ]
+}
