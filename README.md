@@ -55,14 +55,17 @@ Then run `/agentic-os:init` in a project. `/agentic-os:status` shows the health 
 ## Optional: a handoff across projects
 
 If you keep a central folder `~/AI/`, the skills also read and write a cross-project handoff there
-(`~/AI/.agent-memory/session-summary.md` and a status board `~/AI/cross-project-status.md`). The paths are
-fixed in this version.
+(`~/AI/.agent-memory/session-summary.md` and a status board `~/AI/cross-project-status.md`). At the start of
+a session in a new project, they also read a workflow file `~/AI/SESSION-WORKFLOW.md` if it exists. The paths
+are fixed in this version.
 
 ## Limits
 
 - Built and used on Windows 11 with Git Bash. Other platforms are untested.
 - Skills and README are in English, some internal docs (`docs/ARCHITECTURE.md`, `docs/CHANGELOG.md`) are in German.
 - `scripts/measure_session_cost.py` measures context size per API call from a session transcript.
+- Some comments and the changelog refer to `membrain`, a private research repository in which several of
+  the designs were worked out. Those references cannot be followed from here.
 - Tests: `bash tests/run-all.sh`.
 
 More about the design (in German): https://dynamic-dome.com/systeme/agent-memory/
