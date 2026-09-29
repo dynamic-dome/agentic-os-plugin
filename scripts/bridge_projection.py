@@ -21,11 +21,21 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
-BEGIN = ("<!-- bridge:begin — generiert von agentic-os bridge_projection, "
-         "NICHT von Hand editieren -->")
 END = "<!-- bridge:end -->"
 BEGIN_PREFIX = "<!-- bridge:begin"
+
+
+def begin_line(today=None):
+    """DCO-8974: render the generation date into the marker so a stale block
+    (learnings.json/open-tasks.json changed but the projection was never
+    re-run) is visible in the AGENTS.md diff instead of silently drifting.
+    Date-only (not a full timestamp) so two runs on the same day stay
+    idempotent (tests 3/15)."""
+    day = today or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return (f"{BEGIN_PREFIX} — generiert von agentic-os bridge_projection am "
+            f"{day}, NICHT von Hand editieren -->")
 CAP = 6
 TASK_CAP = 5
 TEXT_CAP = 220
@@ -88,7 +98,7 @@ def project_label(mem_dir):
 
 
 def render_block(approved, tasks, label):
-    lines = [BEGIN]
+    lines = [begin_line()]
     if tasks:
         lines.append(f"## Bridge: Offene Tasks ({label})")
         for t in tasks[:TASK_CAP]:

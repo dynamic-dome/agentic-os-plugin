@@ -321,6 +321,19 @@ def main():
         check("loop guard: codex learning excluded", "[L2]" not in txt and "Codex tip echoed" not in txt, txt)
         check("loop guard: count line says 1 approved", "1 approved" in p.stdout, p.stdout)
 
+    # 20. bridge:begin marker carries the generation date (DCO-8974: Staleness
+    # sichtbar machen) and stays idempotent within the same day (test 3/15).
+    with tempfile.TemporaryDirectory() as tmp:
+        import datetime as _dt
+        mem, agents = setup(tmp, [learning("L1", "2026-07-16", "x", bridge="approved")], foreign)
+        run([mem, "--agents-md", agents], cwd=tmp)
+        content = read(agents)
+        today = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+        begin_line = next(ln for ln in content.splitlines() if ln.startswith(BEGIN))
+        check("marker: generation date present", today in begin_line, begin_line)
+        run([mem, "--agents-md", agents], cwd=tmp)
+        check("marker: idempotent same-day re-run", read(agents) == content)
+
     n = len(FAILURES)
     print(f"=== {n} failure(s) ===" if n else "=== all tests passed ===")
     return 1 if n else 0

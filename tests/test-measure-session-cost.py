@@ -176,6 +176,24 @@ class TestMeasureSessionCost(unittest.TestCase):
         self.assertEqual(entry["task"], "wrap-up")
         self.assertEqual(entry["api_calls"], 1)
 
+    def test_append_trace_nested_store_guard(self):
+        """DCO-9192: a relative default mem-dir with a cwd already inside
+        .agent-memory must not create .agent-memory/.agent-memory/metrics
+        (mirrors cost-trace.sh's guard, b34d055)."""
+        write_jsonl(self.transcript, [rec("m1", cache_read=100, out=5)])
+        mem = os.path.join(self.tmp, ".agent-memory")
+        nested_cwd = os.path.join(mem, "working")
+        os.makedirs(nested_cwd, exist_ok=True)
+        proc = subprocess.run(
+            [sys.executable, SCRIPT, self.transcript, "--append-trace", ".agent-memory"],
+            capture_output=True, text=True, encoding="utf-8", cwd=nested_cwd, timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        d = json.loads(proc.stdout)
+        self.assertTrue(d["ok"])
+        self.assertIn("nested-store guard", d.get("trace_warning", ""))
+        self.assertFalse(os.path.isdir(os.path.join(nested_cwd, ".agent-memory")))
+
     def test_append_trace_failure_stays_fail_soft(self):
         """A trace that cannot be written must not change exit code or stdout."""
         write_jsonl(self.transcript, [rec("m1", cache_read=10, out=1)])

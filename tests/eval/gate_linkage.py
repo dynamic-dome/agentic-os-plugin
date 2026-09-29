@@ -57,7 +57,7 @@ BOOTSTRAP_GATES = [
     ]},
     {"name": "recovery-tail-downgrade", "clauses": [
         ["writes_since_consolidation <= 5"],             # trigger: few tail writes
-        ["15 minutes"],                                  # trigger: near consolidation
+        ["120 minutes"],                                 # trigger: near consolidation (DCO-9209, widened from 15 min)
         ["downgrade"],                                   # action: one-line note
     ]},
     {"name": "soul-candidate-gate", "clauses": [

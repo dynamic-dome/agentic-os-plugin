@@ -171,6 +171,18 @@ def main():
               not any(ln.lstrip().startswith("{") for ln in p.stdout.splitlines()),
               p.stdout[-120:])
 
+        # 11b. Nested-store guard (DCO-9192): a relative default mem-dir with a
+        # cwd already inside .agent-memory must not create .agent-memory/.agent-memory
+        nested_cwd = os.path.join(mem, "working")
+        os.makedirs(nested_cwd, exist_ok=True)
+        p = run([".agent-memory", "--write-hash"], cwd=nested_cwd)
+        check("nested-store guard: still exits 0", p.returncode == 0, f"rc={p.returncode}")
+        nested_store = os.path.join(nested_cwd, ".agent-memory")
+        check("nested-store guard: no nested .agent-memory created",
+              not os.path.isdir(nested_store), nested_store)
+        check("nested-store guard: warns on stderr",
+              "nested-store guard" in p.stderr, p.stderr[:200])
+
         # 11. Non-ASCII state content must not crash on cp1252 stdout (fail-soft)
         tasks_cjk = [{"id": "T3", "title": "emoji \U0001F600 and CJK 中文", "status": "open"}]
         with open(os.path.join(mem, "context", "open-tasks.json"), "w", encoding="utf-8") as f:

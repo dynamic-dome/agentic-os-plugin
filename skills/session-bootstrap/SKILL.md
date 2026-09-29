@@ -223,9 +223,11 @@ wrap-up). Sources: `working/dirty-*.json` (PostToolUse dirty-tracker hook) and
    by a later session's wrap-up; the flag survived a crash between edit and marker).
 4b. **Tail-write downgrade (wrap-up's own late writes):** if the dirty file carries
    `last_consolidated_at` (hook preserves the consolidation fact on re-dirty) AND
-   `writes_since_consolidation <= 5` AND `updated` is within **15 minutes** of
-   `last_consolidated_at` AND the `session_id` appears in the marker's
-   `consolidated_sessions`, downgrade to a one-line note: the session WAS wrapped
+   `writes_since_consolidation <= 5` AND `updated` is within **120 minutes** of
+   `last_consolidated_at` (widened from 15 min — DCO-9209: a Session 2026-09-09
+   wrapped-up run false-flagged at an 83-min gap between marker 13:32:39 and the
+   wiki-note/commit tail-write at 14:55, commit 9946ace) AND the `session_id`
+   appears in the marker's `consolidated_sessions`, downgrade to a one-line note: the session WAS wrapped
    up; the flag was re-set by the wrap-up's own post-marker writes (native memory,
    handoff files). The note MUST still name the count and the tail-written files
    (`{n} Writes nach Konsolidierung, z.B. {file}`) — downgraded, never silent.

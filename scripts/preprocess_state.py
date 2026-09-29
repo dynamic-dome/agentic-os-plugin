@@ -42,6 +42,20 @@ STATE_FILES = [
 HASH_FILE = os.path.join("working", "state-hash")
 
 
+def _nested_store_guard(mem_dir):
+    """True if writing under mem_dir would nest a store inside .agent-memory.
+
+    Mirrors cost-trace.sh's guard (b34d055, DCO-9192): resolve mem_dir to an
+    absolute path and check its PARENT for an .agent-memory path segment — a
+    relative default (".agent-memory") combined with a cwd that already sits
+    inside a store (e.g. a caller cd'd into .agent-memory/working) would
+    otherwise create .agent-memory/.agent-memory/working.
+    """
+    parent = os.path.dirname(os.path.abspath(mem_dir))
+    segments = re.split(r"[\\/]+", parent)
+    return ".agent-memory" in segments
+
+
 def read_text(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -254,12 +268,17 @@ def main():
         state["current_state_hash"] = compute_state_hash(mem)
 
         if args.write_hash:
-            workdir = os.path.join(mem, "working")
-            os.makedirs(workdir, exist_ok=True)
-            tmp = os.path.join(workdir, "state-hash.tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write(state["current_state_hash"])
-            os.replace(tmp, os.path.join(mem, HASH_FILE))
+            if _nested_store_guard(mem):
+                print(f"preprocess_state: refusing to create a store inside "
+                      f".agent-memory ({os.path.abspath(mem)}) — skipping "
+                      f"--write-hash (nested-store guard)", file=sys.stderr)
+            else:
+                workdir = os.path.join(mem, "working")
+                os.makedirs(workdir, exist_ok=True)
+                tmp = os.path.join(workdir, "state-hash.tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(state["current_state_hash"])
+                os.replace(tmp, os.path.join(mem, HASH_FILE))
     except Exception as e:  # fail-soft: never block real work
         print(f"preprocess_state: degraded ({e})", file=sys.stderr)
 

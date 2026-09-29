@@ -34,6 +34,19 @@ import re
 import sys
 from datetime import datetime, timezone
 
+
+def _nested_store_guard(mem_dir):
+    """True if writing under mem_dir would nest a store inside .agent-memory.
+
+    Mirrors cost-trace.sh's guard (b34d055, DCO-9192): resolve mem_dir to an
+    absolute path and check its PARENT for an .agent-memory path segment — a
+    relative default combined with a cwd that already sits inside a store
+    would otherwise create .agent-memory/.agent-memory/metrics.
+    """
+    parent = os.path.dirname(os.path.abspath(mem_dir))
+    segments = re.split(r"[\\/]+", parent)
+    return ".agent-memory" in segments
+
 # Opus-5 list prices, USD per token. Override with --rates "in,cache_read,cache_write,out".
 DEFAULT_RATES = {
     "input": 15.0 / 1_000_000,
@@ -176,6 +189,9 @@ def analyse(calls, rates, rewrite_threshold, top):
 def append_trace(mem_dir, result, task):
     """Write a MEASURED record next to cost-trace.sh's estimates ("estimate": false).
     Fail-soft: a failed trace never changes the exit code or the stdout payload."""
+    if _nested_store_guard(mem_dir):
+        return (f"refusing to create a store inside .agent-memory "
+                f"({os.path.abspath(mem_dir)}) — nested-store guard")
     try:
         metrics = os.path.join(mem_dir, "metrics")
         os.makedirs(metrics, exist_ok=True)
