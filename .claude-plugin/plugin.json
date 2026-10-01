@@ -1,5 +1,5 @@
 {
   "name": "agentic-os",
-  "version": "5.1.5",
+  "version": "5.2.0",
   "description": "Persistent per-project agent memory for Claude Code (.agent-memory/): session-bootstrap + wrap-up as the supported two-call bracket, deterministic scripts for every store write, five judgment skills, three script-core commands and two command hooks."
 }

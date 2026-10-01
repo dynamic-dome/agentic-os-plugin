@@ -26,22 +26,21 @@ import os
 import re
 import sys
 
-# Load-limit rule (200 lines / 25 000 bytes) has one home: the native audit.
+# Load-limit rule (200 lines / 25 000 bytes) has one home: the native audit;
+# the short-form rule (150 / 200 chars) one in projection_text (shared with AGENTS.md).
 from native_memory_audit import count_lines, load_level
+from projection_text import BOM, POINTER, assemble, entry_line, read_raw
+from projection_text import strip_block as _strip_block
 
 BEGIN = ("<!-- bridge:claude-native:begin — generiert von agentic-os "
          "memory_index_projection, NICHT von Hand editieren -->")
 END = "<!-- bridge:claude-native:end -->"
 BEGIN_PREFIX = "<!-- bridge:claude-native:begin"
 HEADING = "## Bridge: Learnings + Feedback (learnings.json, kuratiert)"
-POINTER = "Kurzfassungen — Volltext per ID: .agent-memory/learnings/learnings.json"
 CAP = 20
-# MEMORY.md is loaded into every session, so CAP bounds the count and these two bound
-# the length. The native memory-index guard sees Write/Edit tool calls only, never
-# this script — the line limit has to be enforced here.
-SUMMARY_CHARS = 150
-LINE_LIMIT = 200
-ELLIPSIS = "…"
+# MEMORY.md is loaded into every session: CAP bounds the count, projection_text the
+# length. The native memory-index guard sees Write/Edit tool calls only, never this
+# script — the line limit has to be enforced here.
 
 
 def native_memory_md(project_root, home=None):
@@ -70,31 +69,10 @@ def load_approved(mem_dir):
     return approved
 
 
-def shorten(text, limit):
-    """Whitespace-collapsed text, cut to <= limit chars at a word boundary + ellipsis."""
-    text = " ".join(str(text or "").split())
-    if len(text) <= limit:
-        return text
-    head = text[:limit - len(ELLIPSIS)]
-    cut = head.rfind(" ")
-    if cut > 0:
-        head = head[:cut]
-    return head.rstrip(" ,;:-—") + ELLIPSIS
-
-
-def render_line(e):
-    src = ", codex" if e.get("source_agent", "claude") == "codex" else ""
-    prefix = f"- [{e.get('id')}] ({e.get('date')}{src}) "
-    room = max(LINE_LIMIT - len(prefix), len(ELLIPSIS))
-    line = prefix + shorten(e.get("text"), min(SUMMARY_CHARS, room))
-    # an absurdly long id/date alone could still exceed the limit: hard cap
-    return line if len(line) <= LINE_LIMIT else line[:LINE_LIMIT - len(ELLIPSIS)] + ELLIPSIS
-
-
 def render_block(approved):
     lines = [BEGIN, HEADING, POINTER]
     for e in approved[:CAP]:
-        lines.append(render_line(e))
+        lines.append(entry_line(e))
     overflow = len(approved) - CAP
     if overflow > 0:
         lines.append(f"({overflow} weitere approved: .agent-memory/learnings/learnings.json)")
@@ -103,22 +81,8 @@ def render_block(approved):
 
 
 def strip_block(text):
-    out, inside, found = [], False, False
-    for line in text.split("\n"):
-        if not inside and line.startswith(BEGIN_PREFIX):
-            inside, found = True, True
-            continue
-        if inside:
-            if line.strip() == END:
-                inside = False
-            continue
-        out.append(line)
-    if not found:
-        return text
-    result = "\n".join(out)
-    while result.endswith("\n\n"):
-        result = result[:-1]
-    return result
+    """Remove the managed block (shared rule in projection_text)."""
+    return _strip_block(text, BEGIN_PREFIX, END)
 
 
 def load_report(text):
@@ -163,31 +127,25 @@ def main(argv):
     if approved is None:
         return 1
     exists = os.path.isfile(target)
-    current = ""
-    if exists:
-        with open(target, "r", encoding="utf-8") as f:
-            current = f.read()
+    bom, current, eol = read_raw(target) if exists else (False, "", "\n")
+    on_disk = (BOM if bom else "") + current
 
     if not approved:
         if exists and BEGIN_PREFIX in current:
-            stripped = strip_block(current)
+            stripped = (BOM if bom else "") + strip_block(current)
             write_atomic(target, stripped)
             load, warning = load_report(stripped)
             print(f"memory-index: 0 approved — block removed from {target}{load}")
         else:
-            load, warning = load_report(current) if exists else ("", None)
+            load, warning = load_report(on_disk) if exists else ("", None)
             print(f"memory-index: no approved learnings, nothing to do{load}")
         if warning:
             print(warning)
         return 0
 
-    block = render_block(approved)
-    base = strip_block(current) if exists else ""
-    if base and not base.endswith("\n"):
-        base += "\n"
-    new = base + ("\n" if base else "") + block
+    new = assemble(bom, strip_block(current) if exists else "", render_block(approved), eol)
     load, warning = load_report(new)
-    if exists and new == current:
+    if exists and new == on_disk:
         print(f"memory-index: {len(approved)} approved — block up to date{load}")
     else:
         write_atomic(target, new)

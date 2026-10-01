@@ -101,6 +101,12 @@ SECTION_BY_SIGNAL = {
 
 SUMMARY_MAX_LINES = 30
 REVIEW_AFTER_DAYS = 90
+# One home for the 150: the projections' short-form rule. The own dir goes on the
+# path because callers also load this file by path (importlib), not only as a script.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from projection_text import SUMMARY_CHARS as SUMMARY_MAX  # noqa: E402
 
 
 class PlanError(Exception):
@@ -474,6 +480,14 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
                 _dt.date.fromisoformat(date) + _dt.timedelta(days=REVIEW_AFTER_DAYS)
             ).isoformat(),
         }
+        # Optional short form the projections (MEMORY.md / AGENTS.md) show instead of
+        # cutting the full text at 150 chars. Additive: written only when supplied.
+        summary = " ".join(str(it.get("summary") or "").split())
+        if summary:
+            entry["summary"] = summary
+            if len(summary) > SUMMARY_MAX:
+                tally["warnings"].append(
+                    f"{entry['id']}: summary {len(summary)} Zeichen > {SUMMARY_MAX} — die Projektion kuerzt sie")
         # Step 3d.1: derived from importance alone. Plan-supplied bridge_status
         # is deliberately dropped - "approved" exists only via the [j/n] gate.
         if entry["importance"] >= 4:

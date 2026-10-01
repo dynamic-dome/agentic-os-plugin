@@ -173,6 +173,15 @@ def main():
         check("pointer to the full text present",
               "Volltext per ID: .agent-memory/learnings/learnings.json" in block, block[:400])
 
+    # 7a. an author-written summary wins over the cut of the full text
+    with tempfile.TemporaryDirectory() as tmp:
+        e = learning("L7", "2026-08-01", "Kontext " * 40 + "Schluss: die Regel.")
+        e["summary"] = "Die Regel in einem Satz."
+        mem, md = setup(tmp, [e], memory_body="")
+        run([mem, "--memory-md", md], cwd=tmp)
+        check("summary used instead of the text cut",
+              "- [L7] (2026-08-01) Die Regel in einem Satz." in read(md), read(md)[-300:])
+
     # 7b. the 200-char limit holds even when id/date alone are too long (Codex verifier P2)
     with tempfile.TemporaryDirectory() as tmp:
         mem, md = setup(tmp, [learning("L" + "9" * 195, "2026-08-01", "kurz")], memory_body="")
@@ -204,6 +213,63 @@ def main():
         p = run([mem, "--memory-md", md], cwd=tmp)
         check("0 approved: load share + warning still reported",
               "Ladegrenze" in p.stdout and "WARNUNG" in p.stdout and read(md) == hand_many, p.stdout)
+
+    # 9. line endings of the existing MEMORY.md are kept (a CRLF index stays CRLF, the
+    #    handwritten part byte-identical); the load share counts the bytes really written
+    with tempfile.TemporaryDirectory() as tmp:
+        hand_crlf = "- [a](a.md) — a\r\n- [b](b.md) — b\r\n"
+        mem, md = setup(tmp, [learning("L1", "2026-08-01", "Kurz")], memory_body="")
+        with open(md, "wb") as f:
+            f.write(hand_crlf.encode("utf-8"))
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        with open(md, "rb") as f:
+            data = f.read()
+        check("CRLF file stays CRLF (no bare LF)",
+              data.count(b"\n") == data.count(b"\r\n") and BEGIN.encode() in data,
+              repr(data[-120:]))
+        check("handwritten CRLF part byte-identical", data.startswith(hand_crlf.encode("utf-8")))
+        sys.path.insert(0, os.path.dirname(SCRIPT))
+        import native_memory_audit as nma
+        pct, _limit, _lvl = nma.load_level(len(data), nma.count_lines(data))
+        check("load share counts the written bytes (incl. CR)", f"Ladegrenze {pct} %" in p.stdout,
+              f"{pct} vs {p.stdout.strip()}")
+        p2 = run([mem, "--memory-md", md], cwd=tmp)
+        with open(md, "rb") as f:
+            check("CRLF: second run byte-identical", f.read() == data and "up to date" in p2.stdout, p2.stdout)
+
+    # 9b. mixed line endings: the handwritten part stays byte-identical (only the block is ours)
+    with tempfile.TemporaryDirectory() as tmp:
+        mem, md = setup(tmp, [learning("L1", "2026-08-01", "Kurz")], memory_body="")
+        mixed = b"# Kopf\nNotiz\r\n"
+        with open(md, "wb") as f:
+            f.write(mixed)
+        run([mem, "--memory-md", md], cwd=tmp)
+        with open(md, "rb") as f:
+            first = f.read()
+        check("mixed line endings: handwritten part byte-identical", first.startswith(mixed), repr(first[:40]))
+        run([mem, "--memory-md", md], cwd=tmp)
+        with open(md, "rb") as f:
+            check("mixed line endings: second run byte-identical", f.read() == first)
+
+    # 9c. a BOM before a block at the very start: block still found (no duplicate), BOM kept
+    with tempfile.TemporaryDirectory() as tmp:
+        mem, md = setup(tmp, [learning("L1", "2026-08-01", "Kurz")], memory_body="")
+        old = ("\ufeff" + BEGIN + " alt -->\n## alt\n- [L0] (2026-01-01) alt\n" + END + "\n").encode("utf-8")
+        with open(md, "wb") as f:
+            f.write(old)
+        run([mem, "--memory-md", md], cwd=tmp)
+        with open(md, "rb") as f:
+            data = f.read()
+        check("BOM + block at start: exactly one block, BOM kept",
+              data.count(BEGIN.encode()) == 1 and data.startswith(b"\xef\xbb\xbf") and b"[L0]" not in data,
+              repr(data[:80]))
+        with open(os.path.join(mem, "learnings", "learnings.json"), "w", encoding="utf-8") as f:
+            json.dump([learning("L1", "2026-08-01", "Kurz", bridge="candidate")], f)
+        run([mem, "--memory-md", md], cwd=tmp)
+        with open(md, "rb") as f:
+            data = f.read()
+        check("BOM + 0 approved: block removed, BOM kept",
+              BEGIN.encode() not in data and data.startswith(b"\xef\xbb\xbf"), repr(data[:80]))
 
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")

@@ -35,7 +35,7 @@ model is stateless, so cost is the sum of context length over calls).
                          "options_considered": [ { "option": "...", "pros": [], "cons": [] } ],
                          "decision": "...", "consequences": "...",
                          "supersedes": null, "tags": [] } ],
-  "learnings":       [ { "text": "...", "importance": 3, "tags": [], "derived_from": [] } ],
+  "learnings":       [ { "text": "...", "summary": "...", "importance": 3, "tags": [], "derived_from": [] } ],
   "user_candidates": [ { "key": "kebab-key", "observation": "...", "signal_type": "preference",
                          "confidence": 0.5, "evidence": [], "confirmed": false,
                          "status": "observed", "trust_source": "conversation" } ],
@@ -102,6 +102,7 @@ Append to `learnings/learnings.json`:
 ```json
 {
   "id": "L{next_number}", "date": "{YYYY-MM-DD}", "text": "{insight with context}",
+  "summary": "{conclusion, <= 150 chars, optional}",
   "importance": 3, "tags": ["tag1", "tag2"], "layer": "short-term",
   "superseded_by": null, "last_relevant": "{YYYY-MM-DD}",
   "derived_from": ["iteration-{n}", "E{id}"], "review_after": "{YYYY-MM-DD}"
@@ -115,6 +116,12 @@ importance: 5 = prevents data loss/security issue · 4 = prevents multi-attempt 
 iteration numbers from `iteration-log.md` (`iteration-{n}`), error IDs from
 `errors.json` (`E{n}`), decision IDs (`D{n}`). No traceable origin → `[]`. Never
 invent provenance; an honest empty list beats a guessed reference.
+
+**`summary` (short form, optional — strongly recommended for `importance >= 4`):** the
+conclusion in one sentence, <= 150 characters — the rule, not its context. The MEMORY.md
+and AGENTS.md projections show it instead of the first 150 characters of `text`, which
+are usually context. Omit it rather than paraphrase badly; without it the projection
+cuts `text`. Longer than 150 → kept, but the tally warns and the projection cuts it.
 
 **`review_after` (staleness contract):** date when the learning's validity should be
 re-checked; default = `date` + 90 days (matches the bootstrap STALE threshold). Set

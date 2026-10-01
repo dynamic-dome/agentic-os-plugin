@@ -4,6 +4,32 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-01] Release v5.2.0 — AGENTS.md-Kurzfassungen, summary-Feld, Zeilenenden erhalten
+
+MINOR (neues optionales Store-Feld `summary`). Drei Folgepunkte aus 5.1.5.
+(1) `bridge_projection.py` (AGENTS.md fuer Codex) kappte Learnings hart bei 220 Zeichen mitten im Wort, ohne
+Whitespace-Normalisierung (ein Zeilenumbruch im Text sprengte die Liste), Zeilen bis ~250 Zeichen. Jetzt
+dieselbe Regel wie der MEMORY.md-Block: neues Modul `scripts/projection_text.py` (Kurzfassung <= 150 Zeichen
+an der Wortgrenze, jede Zeile <= 200, Verweiszeile auf den Volltext) als einzige Quelle fuer beide
+Projektionen; auch Task-Titel halten die 200 ein. `TEXT_CAP` entfaellt.
+(2) Optionales Feld `summary` in `learnings.json`: die Kernaussage in einem Satz (<= 150 Zeichen), von
+wrap-up Step 3b geschrieben (fuer `importance >= 4` dringend empfohlen). Beide Projektionen zeigen es statt des
+Textanfangs, der meist Kontext statt Schlussfolgerung ist. Additiv, nie backfilled; laenger als 150 -> bleibt,
+Tally-Warnung, die Projektion kuerzt. Schema in wrap-up SKILL.md 3b + `references/wrapup-schemas.md`.
+(3) Beide Projektionen lasen im Textmodus und schrieben mit `newline=""` - eine CRLF-Datei wurde LF (beim
+Neuerzeugen nach 5.1.5 am DCO-Index beobachtet), entgegen der Zusage "ausserhalb der Marker byte-identisch".
+Jetzt behalten sie das Zeilenende der vorhandenen Datei (Regel wie `handoff.py` seit 5.1.2); die Ladequote
+zaehlt die tatsaechlich geschriebenen Bytes inklusive CR.
+Codex-Verifier, fuenf Befunde: gemischte Zeilenenden und ein BOM vor dem Startmarker (Block wurde nicht
+erkannt und verdoppelt) - die Projektionen lassen jetzt alles ausserhalb des Blocks roh und schreiben nur den
+Block im Stil der Datei; `strip_block` liegt einmal in `projection_text.py` und trimmt den eigenen Trenner auch
+bei CRLF (sonst waere pro Lauf eine Leerzeile gewachsen); lange `project_id` haelt die Task-Ueberschrift <= 200;
+ein Test pruefte die falsche Ausgabe. Abgelehnt: "Leerzeile vor dem Marker geht verloren" - das ist der Trenner,
+den die Projektion beim Einfuegen selbst setzt.
+Tests: apply_wrapup 135/135, memory-index-projection 41, bridge-projection 63 Checks; ALL TEST SUITES PASSED.
+
+---
+
 ## [2026-10-01] Release v5.1.5 — learnings.md mit Kopf, Decay einmal pro Stufe, MEMORY.md-Kurzfassungen
 
 PATCH. Drei Befunde aus einem `/agentic-os:maintain`-Lauf am 2026-10-01 (Plugin 5.1.4).

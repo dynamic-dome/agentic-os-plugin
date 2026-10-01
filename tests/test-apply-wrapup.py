@@ -179,6 +179,22 @@ check(md.startswith("# Learnings\n\n" + LEARNINGS_MD_HEADER + "\n"),
 check(new["bridge_status"] == "candidate",
       "importance >= 4 derives bridge_status=candidate (Step 3d.1)")
 
+# --- 1-summary. optional short form for the projections (additive field) ------
+mem = make_mem()
+rc, out = run(mem, {"date": "2026-10-01", "learnings": [
+    {"text": "Langer Kontext zuerst, dann die eigentliche Regel am Ende.", "importance": 4,
+     "summary": "  Regel:\n immer  zuerst messen. "},
+    {"text": "Ohne Kurzfassung", "importance": 3},
+    {"text": "Zu lange Kurzfassung", "importance": 3, "summary": "s" * 151},
+]})
+rows = {r["id"]: r for r in load(mem, "learnings/learnings.json")}
+check(rc == 0 and rows["L2"].get("summary") == "Regel: immer zuerst messen.",
+      f"summary stored whitespace-collapsed ({rows.get('L2', {}).get('summary')!r})")
+check("summary" not in rows["L3"], "no summary in the plan -> no field (additive, never backfilled)")
+check(rows["L4"].get("summary") == "s" * 151
+      and any("L4" in w and "summary" in w for w in out["tally"]["warnings"]),
+      f"overlong summary kept but warned, run not aborted ({out['tally']['warnings']})")
+
 # --- 1a. --render-learnings: maintain 5.2 regenerates without a plan ----------
 mem = make_mem()
 write(mem, "learnings/learnings.md", "# Learnings\n\n- handgebaut, ohne Kopf\n")

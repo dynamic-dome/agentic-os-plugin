@@ -144,9 +144,10 @@ def main():
         check("cap: overflow visible", "6 ältere" in block, block[-200:])
         check("cap: newest kept", "[L12]" in block and "[L6]" not in block)
 
-    # 6b. Text-Cap 220: langer Text wird mit Ellipse gekuerzt, kurzer bleibt
+    # 6b. Kurzfassung wie in MEMORY.md (projection_text): Wortgrenze, <= 150 Zeichen Text,
+    #     jede Zeile <= 200, Verweis auf den Volltext; kurzer Text bleibt
     with tempfile.TemporaryDirectory() as tmp:
-        long_text = "x" * 300
+        long_text = " ".join(f"wort{i:03d}" for i in range(80))
         mem, agents = setup(tmp, [
             learning("L1", "2026-07-16", long_text, bridge="approved"),
             learning("L2", "2026-07-17", "kurz", bridge="approved"),
@@ -154,23 +155,55 @@ def main():
         run([mem, "--agents-md", agents], cwd=tmp)
         block = read(agents)
         l1 = [ln for ln in block.splitlines() if ln.startswith("- [L1]")][0]
-        check("text-cap: truncated with ellipsis",
-              l1.endswith("…") and len(l1) < 260, f"len={len(l1)}")
-        check("text-cap: short text intact", "- [L2] (2026-07-17) kurz" in block)
+        summary = l1.split(") ", 1)[-1]
+        check("short form: cut at a word boundary with ellipsis, <= 150 chars",
+              summary.endswith("…") and len(summary) <= 150
+              and summary[:-1].rstrip().split(" ")[-1] in long_text.split(" "), f"{len(summary)}: {summary}")
+        check("short form: short text intact", "- [L2] (2026-07-17) kurz" in block)
+        check("short form: pointer to the full text",
+              "Volltext per ID: .agent-memory/learnings/learnings.json" in block)
 
-    # 6c. Text-Cap Grenze: 220 bleibt ganz, 221 wird zu 219 Zeichen + Ellipse (= 220)
+    # 6c. Grenze: 150 bleibt ganz, 151 (ohne Leerzeichen) -> 149 + Ellipse; Umbrueche kollabiert
     with tempfile.TemporaryDirectory() as tmp:
         mem, agents = setup(tmp, [
-            learning("L1", "2026-07-16", "y" * 220, bridge="approved"),
-            learning("L2", "2026-07-17", "z" * 221, bridge="approved"),
+            learning("L1", "2026-07-16", "y" * 150, bridge="approved"),
+            learning("L2", "2026-07-17", "z" * 151, bridge="approved"),
+            learning("L3", "2026-07-15", "erste Zeile\nzweite   Zeile", bridge="approved"),
         ], foreign)
+        write_tasks(mem, [task("T-1", "Titel " * 60)])
         run([mem, "--agents-md", agents], cwd=tmp)
-        block = read(agents)
+        content = read(agents)
+        block = content[content.index(BEGIN):]
         l1 = [ln for ln in block.splitlines() if ln.startswith("- [L1]")][0]
         l2 = [ln for ln in block.splitlines() if ln.startswith("- [L2]")][0]
-        check("text-cap: exactly 220 intact", l1.endswith("y" * 220) and "…" not in l1)
-        check("text-cap: 221 -> 219 + ellipsis",
-              l2.endswith("z" * 219 + "…") and not l2.endswith("z" * 220 + "…"))
+        check("short form: exactly 150 intact", l1.endswith("y" * 150) and "…" not in l1)
+        check("short form: 151 -> 149 + ellipsis",
+              l2.endswith("z" * 149 + "…") and not l2.endswith("z" * 150 + "…"))
+        check("short form: newlines collapsed", "- [L3] (2026-07-15) erste Zeile zweite Zeile" in block)
+        check("every block line <= 200 chars (learnings and task titles)",
+              all(len(ln) <= 200 for ln in block.splitlines()),
+              str([len(ln) for ln in block.splitlines() if len(ln) > 200]))
+
+    # 6c2. ein sehr langes project_id haelt die Task-Ueberschrift trotzdem <= 200
+    with tempfile.TemporaryDirectory() as tmp:
+        mem, agents = setup(tmp, [], foreign)
+        with open(os.path.join(mem, "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"project_id": "p" * 250}, f)
+        write_tasks(mem, [task("T-1", "kurz")])
+        run([mem, "--agents-md", agents], cwd=tmp)
+        content = read(agents)
+        block = content[content.index(BEGIN):]
+        check("long project_id: task heading <= 200 chars",
+              all(len(ln) <= 200 for ln in block.splitlines()),
+              str([len(ln) for ln in block.splitlines() if len(ln) > 200]))
+
+    # 6d. summary-Feld schlaegt den Schnitt des Volltexts (gleiche Regel wie MEMORY.md)
+    with tempfile.TemporaryDirectory() as tmp:
+        e = learning("L1", "2026-07-16", "Kontext " * 40 + "Schluss.", bridge="approved")
+        e["summary"] = "Kernaussage fuer Codex."
+        mem, agents = setup(tmp, [e], foreign)
+        run([mem, "--agents-md", agents], cwd=tmp)
+        check("summary used in AGENTS.md", "- [L1] (2026-07-16) Kernaussage fuer Codex." in read(agents))
 
     # 7. superseded approved wird ausgeschlossen
     with tempfile.TemporaryDirectory() as tmp:
@@ -333,6 +366,30 @@ def main():
         check("marker: generation date present", today in begin_line, begin_line)
         run([mem, "--agents-md", agents], cwd=tmp)
         check("marker: idempotent same-day re-run", read(agents) == content)
+
+    # 21. Zeilenenden der vorhandenen AGENTS.md bleiben erhalten (CRLF bleibt CRLF)
+    with tempfile.TemporaryDirectory() as tmp:
+        mem, agents = setup(tmp, [learning("L1", "2026-07-16", "kurz", bridge="approved")], "")
+        crlf = "# AGENTS.md\r\n\r\nFremder Inhalt.\r\n"
+        with open(agents, "wb") as f:
+            f.write(crlf.encode("utf-8"))
+        run([mem, "--agents-md", agents], cwd=tmp)
+        with open(agents, "rb") as f:
+            data = f.read()
+        check("CRLF AGENTS.md stays CRLF, foreign part byte-identical",
+              data.count(b"\n") == data.count(b"\r\n") and data.startswith(crlf.encode("utf-8"))
+              and b"[L1]" in data, repr(data[-80:]))
+        run([mem, "--agents-md", agents], cwd=tmp)
+        with open(agents, "rb") as f:
+            check("CRLF AGENTS.md: second run byte-identical (no growing blank lines)", f.read() == data)
+        mixed = "# Kopf\nNotiz\r\n"
+        with open(agents, "wb") as f:
+            f.write(mixed.encode("utf-8"))
+        run([mem, "--agents-md", agents], cwd=tmp)
+        with open(agents, "rb") as f:
+            data = f.read()
+        check("mixed line endings: foreign part byte-identical", data.startswith(mixed.encode("utf-8")),
+              repr(data[:40]))
 
     n = len(FAILURES)
     print(f"=== {n} failure(s) ===" if n else "=== all tests passed ===")
