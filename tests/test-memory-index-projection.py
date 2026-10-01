@@ -138,6 +138,73 @@ def main():
         p = run(["--print-native-dir", tmp, "--home", tmp], cwd=tmp)
         check("print-native-dir", p.returncode == 0 and p.stdout.strip().endswith(os.path.join("memory")), p.stdout)
 
+    # 7. entries are short forms (~150 chars + [Lnn] reference), every block line <= 200 chars.
+    #    MEMORY.md is loaded into every session; the native memory-index guard only sees
+    #    Write/Edit tool calls, never this script, so the limit must hold here.
+    with tempfile.TemporaryDirectory() as tmp:
+        long_text = " ".join(f"wort{i:03d}" for i in range(80))          # ~640 chars of words
+        wrapped = "Erste Zeile des Learnings\nzweite Zeile   mit  Luecken"  # newline must not split the entry
+        no_space = "x" * 400                                               # a URL-like token without blanks
+        rows = [learning("L101", "2026-08-03", long_text, agent="codex"),
+                learning("L102", "2026-08-02", wrapped),
+                learning("L103", "2026-08-01", no_space)]
+        mem, md = setup(tmp, rows, memory_body="")
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        txt = read(md)
+        block = txt[txt.index(BEGIN):]
+        entry = {l[3:7]: l for l in block.split("\n") if l.startswith("- [")}
+        check("all three entries rendered", sorted(entry) == ["L101", "L102", "L103"], str(sorted(entry)))
+        check("every block line <= 200 chars",
+              all(len(l) <= 200 for l in block.split("\n")),
+              str([len(l) for l in block.split("\n") if len(l) > 200]))
+        long_line = entry.get("L101", "")
+        summary = long_line.split(") ", 1)[-1]
+        check("long text cut to a ~150-char summary with ellipsis",
+              summary.endswith("…") and len(summary) <= 150 and long_text.startswith(summary[:-1].rstrip()),
+              f"{len(summary)}: {summary!r}")
+        check("cut lands on a word boundary", summary[:-1].rstrip().split(" ")[-1] in long_text.split(" "),
+              summary)
+        check("id + date + codex marker kept as the reference", long_line.startswith("- [L101] (2026-08-03, codex) "),
+              long_line[:60])
+        check("newlines and runs of blanks collapsed",
+              entry.get("L102", "").endswith(") Erste Zeile des Learnings zweite Zeile mit Luecken"), entry.get("L102"))
+        check("blank-free token hard-cut", entry.get("L103", "").endswith("…") and len(entry.get("L103", "")) <= 200,
+              str(len(entry.get("L103", ""))))
+        check("pointer to the full text present",
+              "Volltext per ID: .agent-memory/learnings/learnings.json" in block, block[:400])
+
+    # 7b. the 200-char limit holds even when id/date alone are too long (Codex verifier P2)
+    with tempfile.TemporaryDirectory() as tmp:
+        mem, md = setup(tmp, [learning("L" + "9" * 195, "2026-08-01", "kurz")], memory_body="")
+        run([mem, "--memory-md", md], cwd=tmp)
+        block = read(md)
+        check("overlong id: every line <= 200 chars",
+              all(len(l) <= 200 for l in block.split("\n")),
+              str([len(l) for l in block.split("\n")]))
+
+    # 8. load limit (200 lines / 25 000 bytes, same rule as native_memory_audit.py): the block
+    #    sits at the END of MEMORY.md, so it is the first thing Claude Code cuts off.
+    with tempfile.TemporaryDirectory() as tmp:
+        mem, md = setup(tmp, [learning("L1", "2026-08-01", "Kurz")], memory_body="- [a](a.md) — a\n")
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        check("load share reported", "Ladegrenze" in p.stdout and "(ok)" in p.stdout
+              and "WARNUNG" not in p.stdout, p.stdout)
+    with tempfile.TemporaryDirectory() as tmp:
+        hand_many = "".join(f"- [n{i}](n{i}.md) — zeile {i}\n" for i in range(230))
+        mem, md = setup(tmp, [learning("L1", "2026-08-01", "Kurz")], memory_body=hand_many)
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        check("over the load limit -> warning, exit 0",
+              p.returncode == 0 and "WARNUNG" in p.stdout and "(truncated)" in p.stdout, p.stdout)
+        check("block is still written (warning, not refusal)", BEGIN in read(md))
+    # 0 approved: no block, but an oversized MEMORY.md must still be reported (Codex verifier P2)
+    with tempfile.TemporaryDirectory() as tmp:
+        hand_many = "".join(f"- [n{i}](n{i}.md) — zeile {i}\n" for i in range(230))
+        mem, md = setup(tmp, [learning("L1", "2026-08-01", "Kurz", bridge="candidate")],
+                        memory_body=hand_many)
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        check("0 approved: load share + warning still reported",
+              "Ladegrenze" in p.stdout and "WARNUNG" in p.stdout and read(md) == hand_many, p.stdout)
+
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")
     return 1 if FAILURES else 0

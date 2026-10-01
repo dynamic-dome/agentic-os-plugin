@@ -37,7 +37,7 @@
 │
 ├── learnings/
 │   ├── learnings.json                  # Structured learnings + salience metadata (read by bootstrap/wrap-up)
-│   └── learnings.md                    # Human-readable learnings mirror
+│   └── learnings.md                    # Generated projection of learnings.json (apply_wrapup.py)
 │
 ├── working/
 │   └── current-session.json            # Volatile working memory for the active session
@@ -88,7 +88,7 @@
 | `test-results.json` | > 100 entries | Keep newest 100, archive rest to `test-results-archive-{YYYY-MM}.json` |
 | `patterns.json` | `last_seen` > 60 days OR `confidence` < 0.3 | Archive stale/low-confidence entries to `patterns-archive-{YYYY-MM}.json` |
 | `decisions.json` | `status: superseded` > 90 days | Archive superseded; keep all `active` regardless of age |
-| `learnings/learnings.md` | > 200 lines | Keep last 12 months, archive older to `learnings-archive-{YYYY}.md` |
+| `learnings/learnings.md` | > 200 lines | Projection of `learnings.json` — archive the JSON, then `apply_wrapup.py <mem> --render-learnings`; never cut the `.md` by hand |
 | `session-summary.md` | > 30 lines | Compress to 30 lines (never drop "Open Items") |
 
 If an archive file for the current month already exists, append to it instead of overwriting.

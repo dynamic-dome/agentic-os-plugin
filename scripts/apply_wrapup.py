@@ -492,9 +492,13 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
         r["id"] for r in rows if r.get("bridge_status") == "candidate"]
 
 
+LEARNINGS_MD_HEADER = "*Auto-generated from learnings.json — do not edit directly.*"
+
+
 def render_learnings_md(mem, rows, dry, touched):
-    """learnings.md is a pure projection of learnings.json - fully deterministic."""
-    out = ["# Learnings", ""]
+    """learnings.md is a pure projection of learnings.json - fully deterministic.
+    The header is the marker /agentic-os:maintain Step 5.2 and memory-audit check."""
+    out = ["# Learnings", "", LEARNINGS_MD_HEADER, ""]
     for imp in (5, 4, 3, 2, 1):
         bucket = [r for r in rows if int(r.get("importance", 3)) == imp and not r.get("superseded_by")]
         if not bucket:
@@ -863,11 +867,30 @@ def main() -> int:
     ap.add_argument("--session-id", default="")
     ap.add_argument("--plan", default="-", help="plan JSON file, '-' for stdin")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--render-learnings", action="store_true",
+                    help="only regenerate learnings.md from learnings.json (no plan, no marker)")
     args = ap.parse_args()
 
     if not os.path.isdir(args.mem):
         print(json.dumps({"ok": False, "error": f"memory dir not found: {args.mem}"}))
         return 1
+
+    if args.render_learnings:
+        # Strict read: unlike load_json (wrap-up's quarantine contract), a render-only
+        # run must never rename the source or project an empty store over a real one.
+        touched: list = []
+        try:
+            with open(os.path.join(args.mem, "learnings", "learnings.json"), encoding="utf-8") as fh:
+                rows = json.load(fh)
+            if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+                raise PlanError("learnings.json is not a JSON list of objects")
+            render_learnings_md(args.mem, rows, args.dry_run, touched)
+        except (PlanError, OSError, ValueError) as e:
+            print(json.dumps({"ok": False, "error": f"render failed: {e}"}, ensure_ascii=False))
+            return 2
+        print(json.dumps({"ok": True, "dry_run": args.dry_run, "files_written": touched},
+                         ensure_ascii=False))
+        return 0
 
     try:
         raw = sys.stdin.read() if args.plan == "-" else open(args.plan, encoding="utf-8").read()

@@ -514,14 +514,22 @@ echo ""
 echo "-- maintain: global confidence decay (floor 0.3, archive not delete) --"
 if [ -f "$MM_FILE" ]; then
     if grep -qiE "\(global-decay\)" "$MM_FILE" \
-       && grep -qiE "apply_decay" "$MM_FILE" \
+       && grep -qE "scripts/global_decay\.py" "$MM_FILE" \
        && grep -qiE "0\.1 per .*90|90-day step" "$MM_FILE" \
        && grep -qiE "floor(ed)? at 0\.3" "$MM_FILE" \
+       && grep -qiE "decay_steps_applied" "$MM_FILE" \
        && grep -qiE "lifecycle: ?.archived|never hard-delete" "$MM_FILE"; then
-        pass "maintain: global decay present — -0.1/90d, floor 0.3, archive not delete"
+        pass "maintain: global decay present — global_decay.py, -0.1/90d booked once, floor 0.3, archive not delete"
     else
-        fail "maintain: global decay missing — must apply_decay (-0.1 per 90 days, floor 0.3), set lifecycle:archived past 365d, never hard-delete"
+        fail "maintain: global decay missing — must run scripts/global_decay.py (-0.1 per 90 days booked once via decay_steps_applied, floor 0.3), set lifecycle:archived past 365d, never hard-delete"
     fi
+fi
+# The decay formula has ONE home (global_decay.py). A second copy in the sourceable
+# helpers would let the prose path decay from the stored value again (2026-10-01 bug).
+if grep -qE "^apply_decay\(\)" "$PLUGIN_ROOT/scripts/global-schema.sh" 2>/dev/null; then
+    fail "global-schema.sh still defines apply_decay — the decay rule lives only in scripts/global_decay.py"
+else
+    pass "decay rule has a single home (global-schema.sh defines no apply_decay)"
 fi
 
 # --- session-bootstrap 4.A staleness wrap (read-only display, NO write) ---

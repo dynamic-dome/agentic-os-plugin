@@ -7,7 +7,8 @@ Rules under test:
   - frozen flag: dormant AND (newest - oldest) <= 7 d (write-once store)
   - orphans: *.md notes (except MEMORY.md) not linked from MEMORY.md
   - dead_links: MEMORY.md links to *.md files that do not exist
-  - injection level from MEMORY.md size: >=16384 "critical", >=10240 "warn", else "ok"
+  - injection level = share of Claude Code's load limit (first 200 lines or 25 000 bytes,
+    whichever is hit first): <60 % ok, <85 % warn, <100 % critical, >=100 % truncated
   - audit() scans only <root>/*/memory dirs, honors --exclude, is READ-ONLY
   - CLI writes --json/--md reports, exits 0, survives non-cp1252 output
 
@@ -54,6 +55,20 @@ def _mk_store(root, slug, notes, index_lines=None, mtimes=None):
         for name, ts in mtimes.items():
             os.utime(os.path.join(mem, name), (ts, ts))
     return mem
+
+
+def _mk_index_bytes(root, slug, data):
+    """Store whose MEMORY.md has EXACTLY these bytes (binary write: text mode
+    would turn \n into \r\n on Windows and shift every boundary cell)."""
+    mem = os.path.join(root, slug, "memory")
+    os.makedirs(mem, exist_ok=True)
+    with open(os.path.join(mem, "MEMORY.md"), "wb") as f:
+        f.write(data)
+    return mem
+
+
+def _one_line(n_bytes):
+    return b"x" * (n_bytes - 1) + b"\n"
 
 
 def main():
@@ -122,19 +137,55 @@ def main():
         _check(r4b["dead_links"] == [],
                "subdir link to existing archive file is NOT a dead link")
 
-        # --- injection levels ---
-        s5 = _mk_store(root, "p-big", {"e.md": "x"},
-                       index_lines=["- [e](e.md) — pad\n" + "z" * 11000])
-        r5 = nma.scan_store(s5, now)
-        _check(r5["injection_level"] == "warn",
-               "MEMORY.md >= 10 KB -> injection_level warn")
-        s6 = _mk_store(root, "p-huge", {"f.md": "x"},
-                       index_lines=["- [f](f.md) — pad\n" + "z" * 17000])
-        r6 = nma.scan_store(s6, now)
-        _check(r6["injection_level"] == "critical",
-               "MEMORY.md >= 16 KB -> injection_level critical")
+        # --- injection level = share of the load limit (200 lines / 25 000 bytes) ---
+        _check("fully injected" not in (nma.__doc__ or ""),
+               "docstring no longer claims MEMORY.md is fully injected")
+        byte_cells = [(14999, "ok"), (15000, "warn"), (21249, "warn"),
+                      (21250, "critical"), (24999, "critical"), (25000, "truncated")]
+        for n, want in byte_cells:
+            r = nma.scan_store(_mk_index_bytes(root, f"b-{n}", _one_line(n)), now)
+            _check(r["injection_level"] == want and r["memory_md_bytes"] == n
+                   and r.get("load_limit") == "bytes",
+                   f"{n} bytes in one line -> {want} ({r['injection_level']}, {r.get('load_pct')} %)")
+        line_cells = [(119, "ok"), (120, "warn"), (169, "warn"),
+                      (170, "critical"), (199, "critical"), (200, "truncated")]
+        for n, want in line_cells:
+            r = nma.scan_store(_mk_index_bytes(root, f"l-{n}", b"a\n" * n), now)
+            _check(r["injection_level"] == want and r.get("memory_md_lines") == n
+                   and r.get("load_limit") == "lines",
+                   f"{n} short lines -> {want} ({r['injection_level']}, {r.get('load_pct')} %)")
+        mixed = b"a" * 68 + b"\n"
+        mixed = mixed * 179 + b"a" * (12500 - len(mixed) * 179 - 1) + b"\n"   # 12 500 B, 180 lines
+        r = nma.scan_store(_mk_index_bytes(root, "p-mixed", mixed), now)
+        _check(r["memory_md_bytes"] == 12500 and r.get("memory_md_lines") == 180
+               and r.get("load_pct") == 90.0 and r.get("load_limit") == "lines"
+               and r["injection_level"] == "critical",
+               f"50 % bytes + 90 % lines -> the maximum wins ({r.get('load_pct')}, {r.get('load_limit')})")
+        r = nma.scan_store(_mk_index_bytes(root, "p-crlf", b"line\r\n" * 120), now)
+        _check(r.get("memory_md_lines") == 120 and r["injection_level"] == "warn",
+               f"CRLF counts as one line ({r.get('memory_md_lines')})")
+        r = nma.scan_store(_mk_index_bytes(root, "p-tail", b"a\n" * 119 + b"a"), now)
+        _check(r.get("memory_md_lines") == 120, f"last line without newline is counted ({r.get('memory_md_lines')})")
+        r = nma.scan_store(_mk_index_bytes(root, "p-zero", b""), now)
+        _check(r.get("memory_md_lines") == 0 and r.get("load_pct") == 0.0 and r["injection_level"] == "ok",
+               "empty MEMORY.md -> 0 lines, 0 %, ok")
+        os.makedirs(os.path.join(root, "p-noindex", "memory"), exist_ok=True)
+        r = nma.scan_store(os.path.join(root, "p-noindex", "memory"), now)
+        _check(r.get("memory_md_lines") == 0 and r.get("load_pct") == 0.0 and r["injection_level"] == "ok",
+               "no MEMORY.md -> 0 lines, 0 %, ok")
         _check(r1["injection_level"] == "ok",
                "small MEMORY.md -> injection_level ok")
+        trunc_root = tempfile.mkdtemp()
+        _mk_index_bytes(trunc_root, "t-cut", b"a\n" * 250)
+        _mk_index_bytes(trunc_root, "t-warn", _one_line(16000))
+        _mk_index_bytes(trunc_root, "t-ok", b"a\n")
+        tres = nma.audit(trunc_root, now)
+        _check(tres["summary"].get("truncated") == 1 and tres["summary"]["injection_warn"] == 2,
+               f"summary counts truncated separately, injection_warn keeps every non-ok ({tres['summary']})")
+        tmd = nma.render_markdown(tres, now)
+        _check("2 Stores mit Injektions-Warnung (davon 1 abgeschnitten)." in tmd,
+               "Summary line names the truncated stores")
+        _check("125.0 %" in tmd, "table shows the load share")
 
         # --- empty store: no notes -> classification "empty", not active ---
         s7 = _mk_store(root, "p-empty", {})

@@ -333,6 +333,22 @@ fi
 
 echo ""
 
+# Run global decay tests (maintain Step 4b, booked once per 90-day step)
+echo ">>> Running global decay tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-global-decay.py"; then
+    echo ">>> Global decay tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Global decay tests: SKIPPED (no python found)"
+else
+    echo ">>> Global decay tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
 # Run review sweep tests (memory hub decay report, Phase 4)
 echo ">>> Running review sweep tests..."
 PY_BIN=""

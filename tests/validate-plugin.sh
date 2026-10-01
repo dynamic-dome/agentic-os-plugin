@@ -1058,11 +1058,19 @@ else
                    session-summary.md; do
             [ -f "$SCHEMA_TMP/.agent-memory/$req" ] || MISSING="$MISSING $req"
         done
+        # The init stub must carry the projection header that maintain 5.2 and
+        # memory-audit check — otherwise every fresh store is flagged "regenerate".
+        LMD_STUB=$(sed -n 3p "$SCHEMA_TMP/.agent-memory/learnings/learnings.md" 2>/dev/null)
         rm -rf "$SCHEMA_TMP"
         if [ -z "$MISSING" ]; then
             pass "mem-schema.sh produces all schema files (full list)"
         else
             fail "mem-schema.sh did not create:$MISSING"
+        fi
+        if [ "$LMD_STUB" = "*Auto-generated from learnings.json — do not edit directly.*" ]; then
+            pass "mem-schema.sh learnings.md stub carries the auto-generated header (same as apply_wrapup render)"
+        else
+            fail "mem-schema.sh learnings.md stub lacks the auto-generated header (line 3: '$LMD_STUB')"
         fi
     fi
 

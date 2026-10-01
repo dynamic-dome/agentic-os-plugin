@@ -4,8 +4,10 @@
 MEMORY.md is the ONLY native-memory file Claude loads at session start, so
 approved learnings + feedback rendered here are always present for Claude —
 including source_agent=codex entries (that is the Codex->Claude half of the
-bridge). Everything outside the markers (handwritten index lines) stays
-byte-identical. learnings.json stays canonical; regenerate any time.
+bridge). Each entry is a short form (~150 chars, line <= 200) behind its [id];
+the full text stays in learnings.json. Everything outside the markers
+(handwritten index lines) stays byte-identical. learnings.json stays canonical;
+regenerate any time.
 
 Usage:
   python memory_index_projection.py <mem-dir> --memory-md <path>
@@ -24,12 +26,22 @@ import os
 import re
 import sys
 
+# Load-limit rule (200 lines / 25 000 bytes) has one home: the native audit.
+from native_memory_audit import count_lines, load_level
+
 BEGIN = ("<!-- bridge:claude-native:begin — generiert von agentic-os "
          "memory_index_projection, NICHT von Hand editieren -->")
 END = "<!-- bridge:claude-native:end -->"
 BEGIN_PREFIX = "<!-- bridge:claude-native:begin"
 HEADING = "## Bridge: Learnings + Feedback (learnings.json, kuratiert)"
+POINTER = "Kurzfassungen — Volltext per ID: .agent-memory/learnings/learnings.json"
 CAP = 20
+# MEMORY.md is loaded into every session, so CAP bounds the count and these two bound
+# the length. The native memory-index guard sees Write/Edit tool calls only, never
+# this script — the line limit has to be enforced here.
+SUMMARY_CHARS = 150
+LINE_LIMIT = 200
+ELLIPSIS = "…"
 
 
 def native_memory_md(project_root, home=None):
@@ -58,11 +70,31 @@ def load_approved(mem_dir):
     return approved
 
 
+def shorten(text, limit):
+    """Whitespace-collapsed text, cut to <= limit chars at a word boundary + ellipsis."""
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    head = text[:limit - len(ELLIPSIS)]
+    cut = head.rfind(" ")
+    if cut > 0:
+        head = head[:cut]
+    return head.rstrip(" ,;:-—") + ELLIPSIS
+
+
+def render_line(e):
+    src = ", codex" if e.get("source_agent", "claude") == "codex" else ""
+    prefix = f"- [{e.get('id')}] ({e.get('date')}{src}) "
+    room = max(LINE_LIMIT - len(prefix), len(ELLIPSIS))
+    line = prefix + shorten(e.get("text"), min(SUMMARY_CHARS, room))
+    # an absurdly long id/date alone could still exceed the limit: hard cap
+    return line if len(line) <= LINE_LIMIT else line[:LINE_LIMIT - len(ELLIPSIS)] + ELLIPSIS
+
+
 def render_block(approved):
-    lines = [BEGIN, HEADING]
+    lines = [BEGIN, HEADING, POINTER]
     for e in approved[:CAP]:
-        src = ", codex" if e.get("source_agent", "claude") == "codex" else ""
-        lines.append(f"- [{e.get('id')}] ({e.get('date')}{src}) {e.get('text')}")
+        lines.append(render_line(e))
     overflow = len(approved) - CAP
     if overflow > 0:
         lines.append(f"({overflow} weitere approved: .agent-memory/learnings/learnings.json)")
@@ -87,6 +119,19 @@ def strip_block(text):
     while result.endswith("\n\n"):
         result = result[:-1]
     return result
+
+
+def load_report(text):
+    """Load share of the MEMORY.md as written -> (suffix for the status line, warning|None).
+    The block sits at the END of the file, so it is the first part Claude Code cuts off."""
+    data = text.encode("utf-8")
+    pct, limit, level = load_level(len(data), count_lines(data))
+    warning = None
+    if level == "truncated":
+        warning = (f"memory-index: WARNUNG MEMORY.md liegt bei {pct} % der Ladegrenze "
+                   f"(200 Zeilen / 25 000 Bytes, Engpass {limit}) — der Bruecken-Block am Ende "
+                   f"wird nicht vollstaendig geladen; handgeschriebene Index-Zeilen kuerzen")
+    return f" · Ladegrenze {pct} % {limit} ({level})", warning
 
 
 def write_atomic(path, text):
@@ -125,10 +170,15 @@ def main(argv):
 
     if not approved:
         if exists and BEGIN_PREFIX in current:
-            write_atomic(target, strip_block(current))
-            print(f"memory-index: 0 approved — block removed from {target}")
+            stripped = strip_block(current)
+            write_atomic(target, stripped)
+            load, warning = load_report(stripped)
+            print(f"memory-index: 0 approved — block removed from {target}{load}")
         else:
-            print("memory-index: no approved learnings, nothing to do")
+            load, warning = load_report(current) if exists else ("", None)
+            print(f"memory-index: no approved learnings, nothing to do{load}")
+        if warning:
+            print(warning)
         return 0
 
     block = render_block(approved)
@@ -136,12 +186,15 @@ def main(argv):
     if base and not base.endswith("\n"):
         base += "\n"
     new = base + ("\n" if base else "") + block
+    load, warning = load_report(new)
     if exists and new == current:
-        print(f"memory-index: {len(approved)} approved — block up to date")
-        return 0
-    write_atomic(target, new)
-    cap = f" (capped at {CAP})" if len(approved) > CAP else ""
-    print(f"memory-index: {len(approved)} approved -> {target}{cap}")
+        print(f"memory-index: {len(approved)} approved — block up to date{load}")
+    else:
+        write_atomic(target, new)
+        cap = f" (capped at {CAP})" if len(approved) > CAP else ""
+        print(f"memory-index: {len(approved)} approved -> {target}{cap}{load}")
+    if warning:
+        print(warning)
     return 0
 
 

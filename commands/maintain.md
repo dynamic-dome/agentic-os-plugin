@@ -1,6 +1,6 @@
 ---
 name: maintain
-description: Compacts, archives and integrity-checks the .agent-memory/ store. Script core (memory-thresholds.sh, gc_dirty_markers.py, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh); prose only where a threshold is exceeded. Run on demand or when wrap-up / the SessionStart briefing print THRESHOLD lines.
+description: Compacts, archives and integrity-checks the .agent-memory/ store. Script core (memory-thresholds.sh, gc_dirty_markers.py, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh, global_decay.py); prose only where a threshold is exceeded. Run on demand or when wrap-up / the SessionStart briefing print THRESHOLD lines.
 disable-model-invocation: true
 allowed_tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
 ---
@@ -41,7 +41,9 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/extract_patterns.py" .agent-memory --refre
 - `native_memory_audit.py`: exit 0 → copy its `**Summary:**` line verbatim into the
   report. Exit 2 (usage/path) or 1 (crash) → one line "native audit failed: …" and
   continue. This is a REPORTER: it never rotates, deletes or edits native stores;
-  `warn`/`critical` injection warnings are surfaced, not fixed.
+  `warn`/`critical`/`truncated` injection warnings are surfaced, not fixed. The level is the
+  share of Claude Code's load limit (first 200 lines or 25 000 bytes, whichever is hit first):
+  `truncated` means part of that MEMORY.md is never loaded — name those stores explicitly.
 - `review_sweep.py`: emit its one-line result verbatim; any count > 0 → name the report
   path. Keep / supersede / retire are owner decisions taken in Step 5.
 - `extract_patterns.py --refresh`: rewrites `patterns/patterns.md` from
@@ -59,13 +61,15 @@ error. Count repairs for the report.
 ## Step 3: Archive what the thresholds flagged (only on exit 10)
 
 For every flagged store file (`iterations/iteration-log.md`, `iterations/errors.json`,
-`learnings/learnings.json`, `session-summary.md`, `learnings/learnings.md`): keep the newest
+`learnings/learnings.json`, `session-summary.md`): keep the newest
 entries within the script's limit, move the rest to `{filename}-archive-{YYYY-MM}.{ext}` in
-the same directory (append if this month's archive exists). For `session-summary.md` /
-`learnings.md` compress instead of cut: keep the date header, top 5 "What Was Done"
-bullets, ALL "Open Items", top 3 "Next Steps", the stats footer; `learnings.md` keeps the
-last 12 months and is deduplicated by normalized text (lowercase, stripped punctuation,
-collapsed whitespace).
+the same directory (append if this month's archive exists). For `session-summary.md`
+compress instead of cut: keep the date header, top 5 "What Was Done"
+bullets, ALL "Open Items", top 3 "Next Steps", the stats footer.
+
+`learnings/learnings.md` is never cut or compressed by hand — it is a projection of
+`learnings.json`. After archiving `learnings.json` (or when `learnings.md` is flagged),
+re-render it: `python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --render-learnings`.
 
 Also delete files directly in `working/` matching `*.py`, `*.tmp`, `*.bak` older than the
 `working/` staleness window in `memory-thresholds.sh` (7 days). Never delete
@@ -83,23 +87,39 @@ Also delete files directly in `working/` matching `*.py`, `*.tmp`, `*.bak` older
 ## Step 4b: Decay the global layer (global-decay)
 
 Only when `~/.claude-memory/global/` exists. This is the **only** place confidence decays —
-never on the read path (session-bootstrap stays read-only). `. "${CLAUDE_PLUGIN_ROOT}/scripts/global-schema.sh"`,
-then for each entry in the global `patterns.json` / `learnings.json`:
+never on the read path (session-bootstrap stays read-only). The script owns the rule — run it,
+do not compute or write decayed values by hand:
 
-1. `new_confidence = apply_decay(confidence, days_since(last_relevant))` — **−0.1 per full
-   90-day step without recall, floored at 0.3**. Write it back.
-2. Decayed `confidence <= 0.3` AND `days_since(last_relevant) > 365` → set
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/scripts/global_decay.py" ~/.claude-memory/global           # preview
+python "${CLAUDE_PLUGIN_ROOT}/scripts/global_decay.py" ~/.claude-memory/global --apply   # write
+```
+
+What it does to the global `patterns.json` / `learnings.json`:
+
+1. **−0.1 per full 90-day step since `last_relevant`, floored at 0.3** (a value already
+   below the floor is never raised). Each step is booked exactly once:
+   `decay_steps_applied` counts the steps already subtracted, `decay_anchor` names the
+   `last_relevant` they were counted from — only the delta is subtracted, so a second run
+   in the same quarter changes nothing. A recall moves `last_relevant`; the anchor then no
+   longer matches and the count restarts.
+2. Decayed `confidence <= 0.3` AND `last_relevant` older than 365 days → set
    `lifecycle: "archived"` (the pull-lifecycle filter stops serving it).
 3. **Never hard-delete** — archived entries stay for audit, exactly like `superseded` ones.
 
-`last_relevant` is bumped only by a genuine recall, never by this pass and never by a read.
+Carry its first line (`global-decay: … decayed, … archived, … unchanged, … skipped`) into the
+report; `skipped` > 0 means entries whose `last_relevant`, `confidence` or
+`decay_steps_applied` cannot be evaluated (they never decay) — list the ids it prints.
+Exit 1 (unreadable store) writes nothing — report it and continue. `last_relevant` is bumped
+only by a genuine recall, never by this pass and never by a read.
 
 ## Step 5: Consistency
 
 1. `.agent-memory/open-tasks.json` at the ROOT must not exist (canonical:
    `context/open-tasks.json`). If both exist: merge into `context/`, delete the root copy.
 2. `learnings/learnings.md` header must contain "Auto-generated from learnings.json";
-   otherwise regenerate it from `learnings.json`.
+   otherwise regenerate it with the Step 3 `--render-learnings` command (never by hand —
+   the layout is owned by `apply_wrapup.py`).
 3. **soul.md anti-bloat:** if `identity/soul.md` exceeds **80 lines**, warn
    "soul.md is {n} lines (cap 80) — condense; an overlong identity file dilutes its
    effect". Never edit soul.md here (user-owned).

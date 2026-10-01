@@ -52,11 +52,6 @@ passes_promotion_gate 0.6 2 2; assert_rc "gate fails when occ<3" 1 $?
 passes_promotion_gate 0.5 3 2; assert_rc "gate fails when conf<0.6" 1 $?
 passes_promotion_gate 0.6 3 1; assert_rc "gate fails when projects<2" 1 $?
 
-echo "-- apply_decay: -0.1 per 90 days, floor 0.3 --"
-assert_eq "decay one step" "0.80" "$(apply_decay 0.9 90)"
-assert_eq "decay floors at 0.3 (not 0.15)" "0.30" "$(apply_decay 0.35 180)"
-assert_eq "decay no-op under 90 days" "0.70" "$(apply_decay 0.7 89)"
-
 echo "-- is_denied: privacy denylist (MEM_GLOBAL_DENY_TAGS) --"
 is_denied api_key; assert_rc "denied tag is blocked" 0 $?
 is_denied credentials; assert_rc "credentials blocked" 0 $?

@@ -16,8 +16,10 @@ Known limit: markdown link targets containing parentheses are not parsed
 (harness note names are slug-based; worst case is a visible false-positive
 orphan, never a write).
 
-Injection level (MEMORY.md is fully injected at session start of its project):
-  ok < 10 KB <= warn < 16 KB <= critical
+Injection level: Claude Code loads only the first 200 lines OR the first 25 KB of
+MEMORY.md at session start, whichever limit is hit first; the rest is cut off. The
+level is the share of the more loaded limit (load_pct, load_limit "lines"/"bytes"):
+  ok < 60 % <= warn < 85 % <= critical < 100 % <= truncated
 
 Usage:
   python native_memory_audit.py [--projects-root P] [--json OUT] [--md OUT]
@@ -34,8 +36,14 @@ import time
 
 ACTIVE_MAX_AGE_D = 21
 FROZEN_MAX_SPAN_D = 7
-WARN_BYTES = 10240
-CRITICAL_BYTES = 16384
+# Load limits (code.claude.com/docs/en/memory: "first 200 lines or 25KB, whichever comes
+# first"). The docs leave open whether 25KB means 25 000 or 25 600 bytes; the stricter
+# reading is used so a store never looks safer than it is.
+LOAD_LIMIT_LINES = 200
+LOAD_LIMIT_BYTES = 25_000
+WARN_PCT = 60
+CRITICAL_PCT = 85
+TRUNCATED_PCT = 100  # exactly at a limit already counts as truncated (owner: ">= 100 %")
 DAY = 86400.0
 
 _LINK_RE = re.compile(r"\]\(([^)#?]+\.md)\)")
@@ -62,13 +70,45 @@ def _index_links(index_path):
     return out
 
 
+def count_lines(data):
+    """Lines as Claude Code counts them: CRLF is one line, a last line without
+    a trailing newline still counts. Empty file -> 0."""
+    if not data:
+        return 0
+    return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
+
+
+def load_level(n_bytes, n_lines):
+    """Share of the more loaded load limit -> (load_pct, load_limit, level).
+    The level comes from the UNROUNDED share: 21 249 B is 84.996 % (warn),
+    which rounds to 85.0 for display only."""
+    byte_share = 100.0 * n_bytes / LOAD_LIMIT_BYTES
+    line_share = 100.0 * n_lines / LOAD_LIMIT_LINES
+    share = max(byte_share, line_share)
+    limit = "lines" if line_share > byte_share else "bytes"
+    if share >= TRUNCATED_PCT:
+        level = "truncated"
+    elif share >= CRITICAL_PCT:
+        level = "critical"
+    elif share >= WARN_PCT:
+        level = "warn"
+    else:
+        level = "ok"
+    return round(share, 1), limit, level
+
+
 def scan_store(store_dir, now):
     """Audit one memory/ dir. Read-only; returns a plain dict."""
     notes = sorted(f for f in os.listdir(store_dir)
                    if f.endswith(".md") and f != "MEMORY.md")
     memory_md = os.path.join(store_dir, "MEMORY.md")
     has_index = os.path.isfile(memory_md)
-    memory_md_bytes = os.path.getsize(memory_md) if has_index else 0
+    data = b""
+    if has_index:
+        with open(memory_md, "rb") as f:
+            data = f.read()
+    memory_md_bytes = len(data)
+    memory_md_lines = count_lines(data)
 
     mtimes = []
     total_bytes = memory_md_bytes
@@ -90,12 +130,7 @@ def scan_store(store_dir, now):
         classification = "dormant"
     frozen = classification == "dormant" and span_d <= FROZEN_MAX_SPAN_D
 
-    if memory_md_bytes >= CRITICAL_BYTES:
-        injection_level = "critical"
-    elif memory_md_bytes >= WARN_BYTES:
-        injection_level = "warn"
-    else:
-        injection_level = "ok"
+    load_pct, load_limit, injection_level = load_level(memory_md_bytes, memory_md_lines)
 
     active_links = _index_links(memory_md) if has_index else []
     linked = {os.path.basename(t) for t in active_links}
@@ -116,6 +151,9 @@ def scan_store(store_dir, now):
         "notes": len(notes),
         "total_bytes": total_bytes,
         "memory_md_bytes": memory_md_bytes,
+        "memory_md_lines": memory_md_lines,
+        "load_pct": load_pct,
+        "load_limit": load_limit,
         "newest": newest,
         "oldest": oldest,
         "age_days": round(age_d, 1) if age_d is not None else None,
@@ -154,6 +192,8 @@ def audit(projects_root, now, exclude=None):
         "dead_links": sum(len(s["dead_links"]) for s in stores),
         "injection_warn": sum(1 for s in stores
                               if s["injection_level"] != "ok"),
+        "truncated": sum(1 for s in stores
+                         if s["injection_level"] == "truncated"),
     }
     return {"stores": stores, "summary": summary}
 
@@ -171,7 +211,8 @@ def render_markdown(result, now):
         status = s["classification"] + (" (frozen)" if s["frozen"] else "")
         lines.append(
             f"| {s['slug']} | {s['notes']} | {kb(s['total_bytes'])} | "
-            f"{kb(s['memory_md_bytes'])} | {s['injection_level']} | {status} | "
+            f"{kb(s['memory_md_bytes'])} | {s['injection_level']} "
+            f"({s['load_pct']} % {s['load_limit']}) | {status} | "
             f"{s['age_days'] if s['age_days'] is not None else '-'} | "
             f"{', '.join(s['orphans']) or '-'} | "
             f"{', '.join(s['dead_links']) or '-'} |")
@@ -180,7 +221,7 @@ def render_markdown(result, now):
               f"**Summary:** {sm['active']} active · {sm['dormant']} dormant "
               f"(davon {sm['frozen']} frozen) · {sm['orphans']} Orphans · "
               f"{sm['dead_links']} tote Links · {sm['injection_warn']} Stores "
-              f"mit Injektions-Warnung.", ""]
+              f"mit Injektions-Warnung (davon {sm['truncated']} abgeschnitten).", ""]
     return "\n".join(lines)
 
 

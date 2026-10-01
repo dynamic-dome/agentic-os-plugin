@@ -2,7 +2,8 @@
 
 > Reflects v5.0.0. The local store schema is owned by `scripts/mem-schema.sh`
 > (see `references/memory-structure.md`); the **global** layer's pure logic
-> (provenance, promotion gate, decay, privacy denylist) lives in `scripts/global-schema.sh`.
+> (provenance, promotion gate, privacy denylist) lives in `scripts/global-schema.sh`;
+> confidence decay with per-step bookkeeping lives only in `scripts/global_decay.py`.
 > All scaling/archiving threshold NUMBERS live in `scripts/memory-thresholds.sh`
 > (threshold SSoT — read by session-bootstrap Step 3, wrap-up Step 9, /agentic-os:maintain Step 1).
 > When this graph disagrees with a skill's own SKILL.md, the SKILL.md wins.
@@ -105,7 +106,7 @@ SESSION END (manual: /agentic-os:wrap-up — no hook can trigger it; a skipped
 
 | Command | Script core | Writes |
 |---|---|---|
-| /agentic-os:maintain | memory-thresholds.sh, gc_dirty_markers.py, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh, global-schema.sh (apply_decay) | archives/*, repaired JSON, compacted session-summary.md + learnings.md, working/ scratch cleanup, global decayed confidence + lifecycle:archived (never hard-delete) |
+| /agentic-os:maintain | memory-thresholds.sh, gc_dirty_markers.py, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh, apply_wrapup.py --render-learnings, global_decay.py | archives/*, repaired JSON, compacted session-summary.md, re-rendered learnings.md, working/ scratch cleanup, global decayed confidence (booked once: decay_steps_applied + decay_anchor) + lifecycle:archived (never hard-delete) |
 | /agentic-os:log | apply_wrapup.py (`iterations` section) | iteration-log.md, errors.json, working/current-session.json |
 | /agentic-os:sync-context | global-schema.sh (is_denied, compute_scope, passes_promotion_gate), mem-schema.sh (MEM_GLOBAL_DENY_TAGS) | local + ~/.claude-memory/global/{patterns,learnings,projects}.json with provenance schema; privacy-filter before gate; pull serves lifecycle:active only |
 

@@ -123,6 +123,19 @@ def load(mem, rel):
     return json.loads(read(mem, rel))
 
 
+LEARNINGS_MD_HEADER = "*Auto-generated from learnings.json — do not edit directly.*"
+
+
+def snapshot(mem):
+    files = {}
+    for base, _dirs, names in os.walk(mem):
+        for n in names:
+            p = os.path.join(base, n)
+            with open(p, "rb") as fh:
+                files[os.path.relpath(p, mem).replace(os.sep, "/")] = fh.read()
+    return files
+
+
 def run(mem, plan, *extra):
     proc = subprocess.run(
         [sys.executable, SCRIPT, mem, "--session-id", "sess-A", *extra],
@@ -161,8 +174,37 @@ md = read(mem, "learnings/learnings.md")
 check("L2" in md and "L1" in md, "learnings.md is a full projection of learnings.json")
 check(md.index("## Importance 5") < md.index("## Importance 4"),
       "learnings.md sorted by importance descending")
+check(md.startswith("# Learnings\n\n" + LEARNINGS_MD_HEADER + "\n"),
+      "learnings.md opens with the header maintain 5.2 / memory-audit check for")
 check(new["bridge_status"] == "candidate",
       "importance >= 4 derives bridge_status=candidate (Step 3d.1)")
+
+# --- 1a. --render-learnings: maintain 5.2 regenerates without a plan ----------
+mem = make_mem()
+write(mem, "learnings/learnings.md", "# Learnings\n\n- handgebaut, ohne Kopf\n")
+before = snapshot(mem)
+proc = subprocess.run([sys.executable, SCRIPT, mem, "--render-learnings"],
+                      input="", capture_output=True, text=True, encoding="utf-8")
+md = read(mem, "learnings/learnings.md")
+check(proc.returncode == 0 and md.startswith("# Learnings\n\n" + LEARNINGS_MD_HEADER + "\n")
+      and "**L1**" in md and "handgebaut" not in md,
+      f"--render-learnings rebuilds learnings.md from learnings.json (rc={proc.returncode}, {proc.stderr.strip()[:120]})")
+after = snapshot(mem)
+check({k: v for k, v in after.items() if k != "learnings/learnings.md"}
+      == {k: v for k, v in before.items() if k != "learnings/learnings.md"},
+      "--render-learnings touches nothing but learnings.md (no marker, no dirty flags)")
+# A render-only run must not quarantine the source or render an empty projection
+# (Codex verifier P1): corrupt or missing learnings.json -> exit 2, store unchanged.
+for case, setup_src in (("corrupt", lambda m: write(m, "learnings/learnings.json", "{oops")),
+                        ("missing", lambda m: os.remove(os.path.join(m, "learnings", "learnings.json"))),
+                        ("non-object rows", lambda m: write(m, "learnings/learnings.json", "[1]"))):
+    mem = make_mem()
+    setup_src(mem)
+    before = snapshot(mem)
+    proc = subprocess.run([sys.executable, SCRIPT, mem, "--render-learnings"],
+                          input="", capture_output=True, text=True, encoding="utf-8")
+    check(proc.returncode == 2 and snapshot(mem) == before,
+          f"--render-learnings with {case} learnings.json: exit 2, nothing renamed or written (rc={proc.returncode})")
 
 # --- 1b. bridge_status: derivation + trust boundary --------------------------
 mem = make_mem()

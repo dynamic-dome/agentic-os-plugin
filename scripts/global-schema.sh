@@ -2,7 +2,7 @@
 # Agentic OS — Global Memory Schema Helpers (4.A)
 # ------------------------------------------------
 # Pure, sourceable functions backing the global cross-project layer
-# (~/.claude-memory/global/). The /agentic-os:sync-context, /agentic-os:maintain and migration
+# (~/.claude-memory/global/). The /agentic-os:sync-context and migration
 # flows SOURCE this file and call these helpers — the logic lives here (not inline
 # in the SKILL prompts) so its invariants get real strip->FAIL unit tests (L11),
 # not just marker greps. Tested by tests/test-global-schema.sh.
@@ -57,20 +57,9 @@ sys.exit(0 if (conf >= 0.6 and occ >= 3 and projs >= 2) else 1)
 "
 }
 
-# apply_decay <confidence> <age_days> -> stdout: decayed confidence (2 decimals)
-# -0.1 per full 90-day step since last recall, floored at 0.3. Never below the floor.
-# Decay is applied only by /agentic-os:maintain (manual), never on the read path.
-apply_decay() {
-  local conf="$1" age="$2"
-  python -c "
-import sys
-conf, age = float('$conf'), int('$age')
-steps = age // 90
-new = conf - 0.1 * steps
-new = max(0.3, new)   # floor — a stale fact decays toward, not past, 0.3
-sys.stdout.write(f'{new:.2f}')
-"
-}
+# Confidence decay is NOT a helper here: it needs per-entry bookkeeping
+# (decay_steps_applied/decay_anchor) so a second run does not decay the same step
+# again. The rule lives only in scripts/global_decay.py (maintain Step 4b).
 
 # is_denied <tag> -> rc 0=denied (must never be pushed) / 1=allowed
 # Reads MEM_GLOBAL_DENY_TAGS from mem-schema.sh (SSoT). The privacy pre-filter in

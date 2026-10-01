@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '4.5'
+  version: '4.6'
   part-of: agentic-os
   layer: core
 ---
@@ -214,8 +214,12 @@ as-is (consumers use `.get()`); do NOT backfill.
 
 ### 3c: Regenerate learnings.md
 
-Regenerate `learnings.md` from the JSON (header `*Auto-generated from learnings.json —
-do not edit directly.*`; entries `- [{id}] ({'*' * importance}) {text}` grouped by date).
+**Done by `apply_wrapup.py` automatically** whenever the plan adds a learning — never
+by hand. `learnings.md` is a pure projection of `learnings.json`: header
+`*Auto-generated from learnings.json — do not edit directly.*`, then one
+`## Importance {n}` section per level (5 → 1), entries
+`- **{id}** ({date}) {text}  #{tags}` newest first, superseded entries omitted.
+Regenerate without a plan: `python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --render-learnings`.
 
 ### 3d: Bridge candidates gate (bridge-gate)
 

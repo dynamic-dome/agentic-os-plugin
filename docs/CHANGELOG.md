@@ -4,6 +4,50 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-01] Release v5.1.5 — learnings.md mit Kopf, Decay einmal pro Stufe, MEMORY.md-Kurzfassungen
+
+PATCH. Drei Befunde aus einem `/agentic-os:maintain`-Lauf am 2026-10-01 (Plugin 5.1.4).
+(1) `apply_wrapup.py` schrieb `learnings.md` ohne den Kopf `*Auto-generated from learnings.json — do not
+edit directly.*`, den maintain 5.2 und memory-audit pruefen - jeder Store galt als "regenerate", und die
+Doku (wrap-up 3c: nach Datum gruppiert; maintain 3: von Hand kuerzen/deduplizieren) beschrieb ein anderes
+Format als das Skript. Eine Wahrheit: `learnings.md` ist reine Projektion aus `apply_wrapup.py` (Kopf, dann
+`## Importance 5..1`, neueste zuerst). Neu `apply_wrapup.py <mem> --render-learnings` (ohne Plan, ohne Marker)
+fuer maintain 3/5.2; der Init-Platzhalter in `mem-schema.sh` ist byte-identisch zum Render eines leeren Stores.
+(2) maintain 4b zog die 90-Tage-Stufen vom gespeicherten Wert ab - jeder weitere Lauf wertete dieselbe Stufe
+erneut ab. Neu `scripts/global_decay.py` (Preview, `--apply`) als einziger Ort der Regel: Buchfuehrung je
+Eintrag mit `decay_steps_applied` + `decay_anchor` (das `last_relevant`, gegen das gezaehlt wurde), nur die
+Differenz wird abgezogen; ein Recall verschiebt `last_relevant`, der Zaehler beginnt dann neu (ein Zaehler ohne
+Anker haette die naechsten Stufen verschluckt). Eintraege mit Zaehler aber ohne Anker (manueller Workaround vom
+2026-10-01) gelten als gegen das aktuelle `last_relevant` gebucht. Zwei Nebenfunde: `last_relevant` steht im
+Bestand teils als ISO-Zeitstempel (jetzt gelesen), und der alte Helfer hob Werte unter 0,3 auf 0,3 an (jetzt
+unberuehrt). `apply_decay` aus `global-schema.sh` entfernt, ein Test haelt die Regel an einer Stelle.
+(3) `memory_index_projection.py` begrenzte nur die Anzahl (20), nicht die Laenge - der Bruecken-Block machte
+in einem Projekt 12 von 13,5 KB der `MEMORY.md` aus. Jetzt Kurzfassung (Whitespace normalisiert, ab 150 Zeichen
+an der Wortgrenze mit `…` gekuerzt) hinter der `[Lnn]`-ID, jede Zeile <= 200 Zeichen, Verweiszeile auf den
+Volltext in `learnings.json`.
+(4) `native_memory_audit.py`: Die Injektionsstufe hing an selbst gesetzten 10/16 KB, und der Docstring
+behauptete, MEMORY.md werde vollstaendig geladen. Claude Code laedt aber nur die ersten 200 Zeilen ODER 25 KB
+(code.claude.com/docs/en/memory; offen, ob 25 000 oder 25 600 Bytes gemeint sind - die strengere Lesart
+25 000 gilt). Stufe jetzt = Anteil der staerker ausgelasteten Grenze: ok < 60 %, warn < 85 %, critical < 100 %,
+truncated >= 100 %, bestimmt auf dem UNGERUNDETEN Verhaeltnis (21 249 B = 84,996 % bleibt warn). Zeilen
+binaer gezaehlt (CRLF = eine Zeile, letzte Zeile ohne Umbruch zaehlt). Neue Felder `memory_md_lines`,
+`load_pct`, `load_limit`; Summary-Zeile nennt "(davon N abgeschnitten)". `memory_index_projection.py`
+nutzt dieselbe Regel und meldet seine Ladequote; ab 100 % warnt es, weil der Bruecken-Block am Dateiende als
+Erstes abgeschnitten wird.
+Codex-Verifier zu (1)-(3), vier Befunde, alle eingearbeitet: `--render-learnings` liest strikt (kaputte oder
+fehlende Quelle -> Exit 2, nichts umbenannt oder geschrieben; vorher Quarantaene + leere Projektion);
+die 200-Zeichen-Grenze gilt auch bei ueberlanger ID; `global_decay.py` ueberspringt ungueltige
+`decay_steps_applied` und meldet sie (`skipped`) und schreibt erst, wenn alle Stores berechnet sind (vorher
+Abbruch nach halbem Schreiben); DEPENDENCIES-Kopf nennt `global_decay.py`. Zweiter Verifier-Lauf
+(#9543 + Fixes), drei Befunde eingearbeitet: `--render-learnings` lehnt auch Nicht-Objekt-Zeilen mit Exit 2
+ab; `global_decay.py` meldet Eintraege mit unlesbarem `last_relevant` oder nicht-numerischer Confidence als
+`skipped` statt sie still als `unchanged` zu zaehlen (archivierte bleiben bewusst ausser Betracht); die
+Projektion meldet die Ladequote auch bei 0 freigegebenen Eintraegen.
+Tests: apply_wrapup 132/132, validate-plugin 150/150, validate-skills 101/101, native-memory-audit 44 Checks,
+memory-index-projection +13, neu test-global-decay (28 Checks); ALL TEST SUITES PASSED.
+
+---
+
 ## [2026-09-26] Release v5.1.4 — Wiki-Notizen schema-konform, Rolling-Synthese ohne Nachtraege
 
 PATCH. Befund aus dem Wiki (DCO #9450, 2026-09-25): Der WikiRAG-Rebuild stand vom 2026-07-22 bis

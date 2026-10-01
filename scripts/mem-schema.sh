@@ -80,7 +80,8 @@ EOFILE
   # Markdown stubs
   [ -f "$MEMORY_DIR/iterations/iteration-log.md" ] || printf '# Iteration Log\n\n*No entries yet.*\n' > "$MEMORY_DIR/iterations/iteration-log.md"
   [ -f "$MEMORY_DIR/patterns/patterns.md" ]        || printf '# Pattern Catalog\n\n*No patterns detected yet.*\n' > "$MEMORY_DIR/patterns/patterns.md"
-  [ -f "$MEMORY_DIR/learnings/learnings.md" ]      || printf '# Learnings\n\n*No session learnings yet.*\n' > "$MEMORY_DIR/learnings/learnings.md"
+  # Byte-identical to apply_wrapup.py's render of an empty learnings.json (projection header).
+  [ -f "$MEMORY_DIR/learnings/learnings.md" ]      || printf '# Learnings\n\n*Auto-generated from learnings.json — do not edit directly.*\n' > "$MEMORY_DIR/learnings/learnings.md"
 
   # identity/soul-candidates.md — soul.md growth queue (Stufe B): wrap-up appends proposed
   # identity signals here; session-bootstrap surfaces them for a [j/n] gate. NEVER auto-written
