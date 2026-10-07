@@ -69,6 +69,9 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import apply_wrapup as _aw  # noqa: E402  (archived_rows: one archive rule for all writers)
+import contextlib  # noqa: E402
+import store_lock  # noqa: E402
+import store_snapshot  # noqa: E402
 
 # This script owns patterns/ and nothing else. Every other memory file belongs
 # to another writer (apply_wrapup.py, the skills, the bootstrap gate).
@@ -692,15 +695,103 @@ def main() -> int:
     ap.add_argument("--refresh", action="store_true",
                     help="regenerate patterns.md from patterns.json even when nothing changed")
     ap.add_argument("--plan", default="-", help="plan JSON file, '-' for stdin")
+    ap.add_argument("--restore-archive", action="store_true",
+                    help="bring archived patterns back unchanged (5.3.0, needs --ids)")
+    ap.add_argument("--ids", default="", help="comma-separated pattern ids for --restore-archive")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--lock-timeout", type=float, default=store_lock.TIMEOUT_SECONDS)
     args = ap.parse_args()
 
     if not os.path.isdir(args.mem):
         print(json.dumps({"ok": False, "error": f"memory dir not found: {args.mem}"}))
         return 1
-    if not (args.update or args.apply or args.refresh):
-        print(json.dumps({"ok": False, "error": "need --update, --apply or --refresh"}))
+    if not (args.update or args.apply or args.refresh or args.restore_archive):
+        print(json.dumps({"ok": False, "error": "need --update, --apply, --refresh or --restore-archive"}))
         return 1
+    # One store lock per run (5.3.0) - the same lock apply_wrapup takes, so a
+    # pattern update and a wrap-up cannot lose each other's writes.
+    guard = (contextlib.nullcontext() if args.dry_run
+             else store_lock.store_lock(args.mem, timeout=args.lock_timeout))
+    try:
+        with guard:
+            if args.restore_archive:
+                return restore_archive(args)
+            return run(args)
+    except OSError as e:  # LockTimeout included
+        print(json.dumps({"ok": False, "error": f"io error: {e}", "files_written": []},
+                         ensure_ascii=False))
+        return 2
+
+
+ARCHIVE_STAMPS = ("archived_at", "archived_by", "archive_reason", "archived")
+
+
+def restore_archive(args) -> int:
+    """Archived patterns back into patterns.json, numbers untouched (D-013).
+
+    Only ids the caller names (restore_plan.py's protection class after the
+    owner gate). A live id is skipped, so a second run changes nothing; an id
+    found in no archive is rejected. Archive files are only read.
+    """
+    ids = [i.strip() for i in args.ids.split(",") if i.strip()]
+    date = _dt.date.today().isoformat()
+    touched: list = []
+    try:
+        if not ids:
+            raise PlanError("--restore-archive needs --ids")
+        patterns = load_json(args.mem, "patterns/patterns.json", [])
+        live = {str(p.get("id")) for p in patterns if isinstance(p, dict)}
+        folder = os.path.join(args.mem, "patterns")
+        found: dict = {}
+        if os.path.isdir(folder):
+            for fn in sorted(os.listdir(folder)):
+                if not (fn.endswith(".json") and fn != "patterns.json"
+                        and (fn.startswith("patterns-archive") or fn.startswith("patterns.json-archive"))):
+                    continue
+                for row in _restore_rows(os.path.join(folder, fn)):
+                    found.setdefault(str(row.get("id")), (fn, row))
+        missing = [i for i in ids if i not in found and i not in live]
+        if missing:
+            raise PlanError(f"not in any pattern archive: {', '.join(missing)}")
+        restored, skipped = [], []
+        for pid in ids:
+            if pid in live:
+                skipped.append(pid)
+                continue
+            fn, row = found[pid]
+            entry = {k: v for k, v in row.items() if k not in ARCHIVE_STAMPS}
+            entry["restored_from"] = fn
+            entry["restored_at"] = date
+            patterns.append(entry)
+            live.add(pid)
+            restored.append(pid)
+        if restored:
+            if not args.dry_run:
+                store_snapshot.take(args.mem)
+            write_json(args.mem, "patterns/patterns.json", patterns, args.dry_run, touched)
+            write_atomic(args.mem, "patterns/patterns.md", render_patterns_md(patterns, date),
+                         args.dry_run, touched)
+    except (PlanError, ValueError) as e:
+        print(json.dumps({"ok": False, "error": f"plan rejected: {e}", "files_written": touched},
+                         ensure_ascii=False))
+        return 2
+    print(json.dumps({"ok": True, "dry_run": args.dry_run, "restored": restored,
+                      "skipped_live": skipped, "files_written": touched}, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _restore_rows(path):
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise PlanError(f"archive {os.path.basename(path)} is unreadable ({e})")
+    if isinstance(data, dict):
+        data = next((v for v in data.values() if isinstance(v, list)), [])
+    return [r for r in data if isinstance(r, dict)] if isinstance(data, list) else []
+
+
+def run(args) -> int:
 
     date = _dt.date.today().isoformat()
     tally = {"patterns_added": 0, "patterns_updated": 0, "patterns_normalized": 0}

@@ -66,6 +66,7 @@ must crash loudly rather than be reported as a well-formed failure.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import json
 import os
@@ -90,7 +91,12 @@ APPLIER_OWNED = {
     "iterations/errors.json":        "iterations",
     "working/current-session.json":  "iterations",
     "context/decisions.json":        "decisions",
+    # 5.3.0: the generic path could overwrite the whole store with any plan-
+    # supplied content; now only the learnings and restore appliers reach it.
+    "learnings/learnings.json":      "learnings",
 }
+_FORBIDDEN_CI = {k.lower() for k in FORBIDDEN}
+_OWNED_CI = {k.lower(): v for k, v in APPLIER_OWNED.items()}
 
 SECTION_BY_SIGNAL = {
     "preference": "Preferences",
@@ -101,12 +107,24 @@ SECTION_BY_SIGNAL = {
 
 SUMMARY_MAX_LINES = 30
 REVIEW_AFTER_DAYS = 90
+# Step 3a in code (5.3.0): token Jaccard >= DUP_MIN to any live learning is a
+# duplicate - the rule the skill text always stated, now applied without the
+# model reading the whole learnings.json. NEAR_MIN..DUP_MIN goes back to the
+# model as near_duplicates for its own verdict (plan field `duplicate_of`).
+DUP_MIN = 0.6
+NEAR_MIN = 0.2
+NEAR_TOP = 3
+DERIVED_MAX = 30
+SUPERSEDE_PREFIXES = ("fixed:", "obsolete:", "moved:", "codex:")
 # One home for the 150: the projections' short-form rule. The own dir goes on the
 # path because callers also load this file by path (importlib), not only as a script.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from projection_text import SUMMARY_CHARS as SUMMARY_MAX  # noqa: E402
+from projection_text import anchor_ok, split_anchor  # noqa: E402
+import store_lock  # noqa: E402
+import store_snapshot  # noqa: E402
 
 
 class PlanError(Exception):
@@ -131,9 +149,11 @@ def canon(rel: str) -> str:
 
 def _p(mem: str, rel: str, via: str | None = None) -> str:
     key = canon(rel)
-    if key in FORBIDDEN:
+    # Case-folded lookup: Windows resolves "Learnings/Learnings.json" to the
+    # protected file, so a case variant must not pass the guard (5.3.0).
+    if key.lower() in _FORBIDDEN_CI:
         raise PlanError(f"refusing to write {key}: owned by another script")
-    owner = APPLIER_OWNED.get(key)
+    owner = _OWNED_CI.get(key.lower())
     if owner and owner != via:
         raise PlanError(f"refusing to write {key}: only the '{owner}' applier may touch it")
     return os.path.join(mem, key)
@@ -219,7 +239,7 @@ def preflight_readable(mem: str, plan: dict | None = None) -> None:
         _check_utf8(mem, "iterations/iteration-log.md")
     if plan.get("decisions"):
         archived_rows(mem, "context/decisions.json")
-    if plan.get("learnings"):
+    if plan.get("learnings") or (plan.get("restore") or {}).get("learnings") or plan.get("principles"):
         archived_rows(mem, "learnings/learnings.json")
     if spec.get("add"):
         archived_rows(mem, "context/open-tasks.json")
@@ -337,6 +357,79 @@ def norm(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
+def _is_iso_date(value) -> bool:
+    try:
+        _dt.date.fromisoformat(str(value)[:10])
+        return True
+    except ValueError:
+        return False
+
+
+def field_errors(row: dict) -> list:
+    """Shape rules for a learning row this script WRITES (5.3.0).
+
+    Only written or changed rows are checked; the legacy store is reported by
+    --lint and never blocks - four stores hold None or float importance today,
+    and a whole-store gate would lock every one of them out of wrap-up.
+    """
+    errs = []
+    imp = row.get("importance")
+    if isinstance(imp, bool) or not isinstance(imp, int) or not 1 <= imp <= 5:
+        errs.append(f"importance {imp!r} is not an int 1..5")
+    if not str(row.get("text") or "").strip():
+        errs.append("empty text")
+    if "date" in row and not _is_iso_date(row.get("date")):
+        errs.append(f"date {row.get('date')!r} is not ISO")
+    tags = row.get("tags", [])
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        errs.append("tags is not a list of strings")
+    der = row.get("derived_from", [])
+    if not isinstance(der, list) or not all(isinstance(d, str) for d in der):
+        errs.append("derived_from is not a list of strings")
+    elif len(der) > DERIVED_MAX:
+        errs.append(f"derived_from has {len(der)} entries (max {DERIVED_MAX})")
+    return errs
+
+
+def supersede_errors(row: dict, by_id: dict) -> list:
+    """superseded_by must name a real successor or carry a proof prefix (D-021),
+    and following the chain must never come back to the row itself."""
+    sup = row.get("superseded_by")
+    if sup in (None, ""):
+        return []
+    sup = str(sup)
+    if sup.startswith(SUPERSEDE_PREFIXES):
+        return []
+    if sup not in by_id:
+        return [f"superseded_by {sup} names no known entry and carries no proof prefix"]
+    seen, cur = {str(row.get("id"))}, sup
+    while cur and cur in by_id:
+        if cur in seen:
+            return [f"superseded_by chain from {row.get('id')} is a cycle"]
+        seen.add(cur)
+        nxt = by_id[cur].get("superseded_by")
+        cur = str(nxt) if nxt and not str(nxt).startswith(SUPERSEDE_PREFIXES) else None
+    return []
+
+
+def lint_learnings(mem: str) -> list:
+    """Every live row that breaks the write rules - a report, never a gate."""
+    rows = load_json(mem, "learnings/learnings.json", [])
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    out, seen = [], set()
+    for r in rows:
+        if not isinstance(r, dict):
+            out.append({"id": None, "errors": ["row is not an object"]})
+            continue
+        errs = field_errors(r) + supersede_errors(r, by_id)
+        if str(r.get("id")) in seen:
+            errs.append("duplicate id")
+        seen.add(str(r.get("id")))
+        if errs:
+            out.append({"id": r.get("id"), "errors": errs})
+    return out
+
+
 # ------------------------------------------------------------------- steps
 
 def validate_plan(mem, plan):
@@ -350,16 +443,30 @@ def validate_plan(mem, plan):
     for it in (plan.get("iterations") or []):
         if not (it.get("title") or "").strip():
             raise PlanError("iteration without 'title'")
+    if plan.get("date") is not None and not (
+            isinstance(plan["date"], str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", plan["date"])
+            and _is_iso_date(plan["date"])):
+        # Every applier stamps this date; a bad one used to surface only in the
+        # learnings applier, after the iteration log was written (Codex 5.3.0).
+        raise PlanError(f"plan date {plan['date']!r} is not YYYY-MM-DD")
+    live_ids = None
     for lrn in (plan.get("learnings") or []):
         if not (lrn.get("text") or "").strip():
             raise PlanError("learning without 'text'")
-        try:
-            int(lrn.get("importance", 3))
-        except (TypeError, ValueError):
-            # Uncaught, this ValueError surfaced as a traceback mid-run
-            # instead of the fail-soft JSON (Codex review 2026-07-27).
-            raise PlanError(f"learning with non-numeric importance "
-                            f"{lrn.get('importance')!r}")
+        # 5.3.0: strict shape before the first byte. A "5" or a 0 used to be
+        # coerced and written; a None crashed after the iteration log was written.
+        probe = {"text": lrn.get("text"), "importance": lrn.get("importance", 3),
+                 "tags": lrn.get("tags", []), "derived_from": lrn.get("derived_from", [])}
+        errs = field_errors({k: ([] if v is None and k in ("tags", "derived_from") else v)
+                             for k, v in probe.items()})
+        if errs:
+            raise PlanError(f"learning '{str(lrn.get('text'))[:40]}': {'; '.join(errs)}")
+        if lrn.get("duplicate_of"):
+            if live_ids is None:
+                live_ids = {str(r.get("id")) for r in load_json(mem, "learnings/learnings.json", [])
+                            if isinstance(r, dict)}
+            if str(lrn["duplicate_of"]) not in live_ids:
+                raise PlanError(f"duplicate_of points at unknown learning {lrn['duplicate_of']}")
     for cand in (plan.get("user_candidates") or []):
         if not (cand.get("key") or "").strip():
             raise PlanError("user candidate without 'key'")
@@ -369,6 +476,8 @@ def validate_plan(mem, plan):
     for task in ((plan.get("open_tasks") or {}).get("add") or []):
         if not (task.get("title") or "").strip():
             raise PlanError("open task without 'title'")
+
+    validate_principles(mem, plan)
 
     sups = [d.get("supersedes") for d in (plan.get("decisions") or []) if d.get("supersedes")]
     titles = [(d.get("title") or "").strip() for d in (plan.get("decisions") or [])]
@@ -572,25 +681,53 @@ def apply_decisions(mem, plan, date, dry, touched, tally):
     write_json(mem, "context/decisions.json", rows, dry, touched, via="decisions")
 
 
+def _near(text, rows, lo, hi=1.01):
+    """Live rows whose token Jaccard to `text` lies in [lo, hi), best first."""
+    hits = []
+    for r in rows:
+        score = _jaccard(text, r.get("text", ""))
+        if lo <= score < hi:
+            hits.append((score, r))
+    hits.sort(key=lambda x: -x[0])
+    return hits
+
+
 def apply_learnings(mem, plan, date, dry, touched, tally):
     items = plan.get("learnings") or []
     rows = load_json(mem, "learnings/learnings.json", [])
     archive = archived_rows(mem, "learnings/learnings.json") if items else []
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
     seen = {norm(r.get("text")) for r in rows}
-    added = []
+    added, refreshed = [], False
     for it in items:
         text = (it.get("text") or "").strip()
         if not text:
             raise PlanError("learning without 'text'")
-        if norm(text) in seen:
+        # Step 3a in code: the model's verdict on a near duplicate it was shown
+        # (duplicate_of), else exact text, else Jaccard >= DUP_MIN.
+        twin = by_id.get(str(it.get("duplicate_of") or ""))
+        if twin is None and norm(text) in seen:
+            twin = next((r for r in rows if norm(r.get("text")) == norm(text)), None)
+        if twin is None:
+            close = _near(text, rows, DUP_MIN)
+            twin = close[0][1] if close else None
+        if twin is not None or norm(text) in seen:
+            if twin is not None and twin.get("last_relevant") != date:
+                twin["last_relevant"] = date
+                refreshed = True
             tally["learnings_skipped_duplicate"] += 1
             continue
+        near = _near(text, rows, NEAR_MIN, DUP_MIN)[:NEAR_TOP]
+        if near:
+            tally["near_duplicates"][text[:60]] = [
+                {"id": r.get("id"), "score": round(sc, 2), "text": str(r.get("text", ""))[:200]}
+                for sc, r in near]
         seen.add(norm(text))
         entry = {
             "id": next_id(rows + added, "L", reserved=archive),
             "date": date,
             "text": text,
-            "importance": int(it.get("importance", 3)),
+            "importance": it.get("importance", 3),  # shape checked in validate_plan
             "tags": list(it.get("tags") or []),
             "layer": "short-term",
             "superseded_by": None,
@@ -613,17 +750,232 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
         if entry["importance"] >= 4:
             entry["bridge_status"] = "candidate"
         added.append(entry)
-    if added:
+    if added or refreshed:
         rows.extend(added)
-        write_json(mem, "learnings/learnings.json", rows, dry, touched)
+        write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
         tally["learnings_added"] = len(added)
         tally["learning_ids"] = [e["id"] for e in added]
-        render_learnings_md(mem, rows, dry, touched)
+        if added:
+            render_learnings_md(mem, rows, dry, touched)
     # Store-wide, not session-scoped: earlier declined candidates must keep
     # triggering the Step 3d.2 prompt line. Pre-3d entries lack the field
     # (never backfilled) and are invisible here by design.
     tally["bridge_candidates"] = [
-        r["id"] for r in rows if r.get("bridge_status") == "candidate"]
+        r["id"] for r in rows if isinstance(r, dict) and r.get("bridge_status") == "candidate"]
+
+
+# A member id without '/' or ':' is local (Lnn of THIS store) and must exist; a
+# qualified one ("dome-dynamics/L31", "native:<slug>/<file>:<sha8>") is evidence
+# from elsewhere and is taken as given.
+_LOCAL_MEMBER = re.compile(r"^[A-Za-z-]*\d+$")
+
+
+def _anchor_key(anchor):
+    path, frag = split_anchor(anchor)
+    return os.path.normcase(os.path.abspath(path)), frag.strip().lower()
+
+
+def validate_principles(mem, plan):
+    """Pointer shape, before the first byte (D-021 (4)): the rule's wording lives at
+    `anchor`, so an anchor that does not resolve TODAY is refused."""
+    items = plan.get("principles") or []
+    if not items:
+        return
+    live = {str(r.get("id")): r for r in load_json(mem, "learnings/learnings.json", [])
+            if isinstance(r, dict)}
+    existing = {_anchor_key(r.get("anchor")): list(r.get("derived_from") or []) for r in live.values()
+                if r.get("kind") == "principle" and not r.get("superseded_by")}
+    for it in items:
+        if not isinstance(it, dict):
+            raise PlanError("principle entry is not an object")
+        if not str(it.get("summary") or "").strip():
+            raise PlanError("principle without 'summary'")
+        anchor = str(it.get("anchor") or "").strip()
+        if not anchor:
+            raise PlanError("principle without 'anchor'")
+        if not anchor_ok(anchor):
+            raise PlanError(f"principle anchor does not resolve: {anchor}")
+        members = it.get("members")
+        if not isinstance(members, list) or not members or not all(isinstance(m, str) for m in members):
+            raise PlanError(f"principle '{anchor}' needs a non-empty list of member ids")
+        if len(members) > DERIVED_MAX:
+            raise PlanError(f"principle '{anchor}' has {len(members)} members (max {DERIVED_MAX})")
+        for m in members:
+            if _LOCAL_MEMBER.match(m):
+                if m not in live:
+                    raise PlanError(f"principle member {m} is not a live learning of this store")
+                if live[m].get("kind") == "principle":
+                    raise PlanError(f"principle member {m} is itself a pointer")
+                if live[m].get("superseded_by"):
+                    raise PlanError(f"principle member {m} is superseded - point at its successor")
+        # The merge with an existing pointer is bounded HERE, before any applier
+        # writes - not in apply_principles after the iteration log (Codex round 2).
+        key = _anchor_key(anchor)
+        merged = list(dict.fromkeys(existing.get(key, []) + members))
+        if len(merged) > DERIVED_MAX:
+            raise PlanError(f"principle '{anchor}' would hold {len(merged)} members (max {DERIVED_MAX})")
+        existing[key] = merged
+
+
+def apply_principles(mem, plan, date, dry, touched, tally):
+    """Plan section `principles` (5.4.0, D-021 (4)): one pointer row per rule.
+
+    The pointer is a learning with kind "principle": summary (the rule, <= 150
+    chars), anchor (where the wording lives), derived_from (the members, which
+    stay byte-identical), importance = max of the local members, no
+    review_after. The same anchor again merges members into the existing
+    pointer instead of adding a row. Written only after the owner's gate
+    (/agentic-os:maintain Step 5c) - wrap-up never emits this section.
+    """
+    items = plan.get("principles") or []
+    if not items:
+        return
+    rows = load_json(mem, "learnings/learnings.json", [])
+    archive = archived_rows(mem, "learnings/learnings.json")
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    pointers = {_anchor_key(r.get("anchor")): r for r in rows
+                if isinstance(r, dict) and r.get("kind") == "principle" and not r.get("superseded_by")}
+    added, changed = [], 0
+    for it in items:
+        members = list(dict.fromkeys(it["members"]))
+        summary = " ".join(str(it["summary"]).split())
+        key = _anchor_key(it["anchor"])
+        ptr = pointers.get(key)
+        if ptr is not None:
+            merged = list(dict.fromkeys(list(ptr.get("derived_from") or []) + members))
+            if len(merged) > DERIVED_MAX:
+                raise PlanError(f"pointer {ptr.get('id')} would hold {len(merged)} members (max {DERIVED_MAX})")
+            ptr["derived_from"], ptr["summary"] = merged, summary
+            ptr["text"] = f"{summary} → {it['anchor']}"
+            ptr["last_relevant"] = date
+            members = merged
+        else:
+            ptr = {"id": next_id(rows + added, "L", reserved=archive), "date": date, "kind": "principle",
+                   "text": f"{summary} → {it['anchor']}", "summary": summary,
+                   "anchor": str(it["anchor"]).strip(), "importance": 3,
+                   "tags": list(it.get("tags") or []), "layer": "long-term", "superseded_by": None,
+                   "last_relevant": date, "derived_from": members, "bridge_status": "approved"}
+            added.append(ptr)
+            pointers[key] = ptr
+        imps = [by_id[m].get("importance") for m in members if m in by_id]
+        imps = [i for i in imps if isinstance(i, int) and not isinstance(i, bool) and 1 <= i <= 5]
+        ptr["importance"] = max(imps) if imps else 3
+        if len(summary) > SUMMARY_MAX:
+            tally["warnings"].append(f"{ptr['id']}: summary {len(summary)} Zeichen > {SUMMARY_MAX}")
+        if ptr not in added:
+            changed += 1
+    rows.extend(added)
+    write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
+    render_learnings_md(mem, rows, dry, touched)
+    tally["principles_added"] = len(added)
+    tally["principles_updated"] = changed
+    tally["principle_ids"] = [str(p["id"]) for p in added]
+
+
+# Stamps maintain put on archived rows; they describe the archive, not the entry.
+ARCHIVE_STAMPS = ("archived_at", "archived_by", "archive_reason", "archived")
+
+
+def apply_restore(mem, plan, date, dry, touched, tally):
+    """Plan section `restore` (5.3.0, D-021): archived rows come back through this
+    one writer, input from scripts/restore_plan.py.
+
+    Decided here, at apply time, against the FRESH store (the plan may be days
+    old): same id + same text -> skip, so a second run changes nothing; same
+    text under another id -> skip; id taken by a different text -> next free id
+    plus `legacy:<id>`. A free archive id is KEPT, so old citations stay valid.
+    A row that fails validation is dropped and reported - never the whole run.
+    Archive files are only read (reserved ids), never written.
+    """
+    spec = plan.get("restore") or {}
+    items = spec.get("learnings") or []
+    if not items:
+        return
+    source = str(spec.get("source") or "restore")
+    rows = load_json(mem, "learnings/learnings.json", [])
+    archive = archived_rows(mem, "learnings/learnings.json")
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    norms = {norm(r.get("text")) for r in rows if isinstance(r, dict)}
+    accepted, dropped, skipped, renumbered = [], [], 0, {}
+    collided = set()  # archive ids that a DIFFERENT live entry holds today
+    for raw in items:
+        if not isinstance(raw, dict):
+            dropped.append({"id": None, "errors": ["row is not an object"]})
+            continue
+        row = {k: v for k, v in raw.items() if k not in ARCHIVE_STAMPS}
+        rid = str(row.get("id") or "")
+        text_norm = norm(row.get("text"))
+        live = by_id.get(rid)
+        if (live is not None and norm(live.get("text")) == text_norm) or text_norm in norms:
+            skipped += 1
+            continue
+        der = row.get("derived_from", [])
+        if isinstance(der, list):
+            der = list(der)
+            if not any(str(d).startswith("restored:") for d in der):
+                der.append(f"restored:{source}")
+            if live is not None:
+                der.append(f"legacy:{rid}")
+        row["derived_from"] = der
+        if live is not None:
+            collided.add(rid)
+        errs = field_errors(row) + ([] if rid else ["missing id"])
+        if errs:
+            dropped.append({"id": rid or None, "errors": errs})
+            continue
+        if live is not None or rid in {str(r["id"]) for r in accepted}:
+            new_id = next_id(rows + accepted, "L", reserved=archive)
+            renumbered[rid] = new_id
+            row["id"] = new_id
+        accepted.append(row)
+        norms.add(text_norm)
+    # superseded_by is checked against what is ACTUALLY written (Codex 5.3.0): a
+    # successor that was dropped drops its predecessor too, and a successor that
+    # was renumbered is followed - in the archive, its id meant the archived row.
+    changed = True
+    while changed:
+        changed = False
+        final = {**by_id, **{str(r["id"]): r for r in accepted}}
+        for row in list(accepted):
+            sup = row.get("superseded_by")
+            if sup and str(sup) in renumbered and not str(sup).startswith(SUPERSEDE_PREFIXES):
+                row["superseded_by"] = sup = renumbered[str(sup)]
+            if sup and str(sup) in collided and str(sup) not in renumbered:
+                # the archived successor was dropped; the live entry under that id is
+                # ANOTHER entry and must not inherit the pointer (Codex round 2)
+                errs = [f"superseded_by {sup}: the archived successor was dropped and the live "
+                        f"{sup} is a different entry"]
+            else:
+                errs = supersede_errors(row, final)
+            if errs:
+                accepted.remove(row)
+                dropped.append({"id": str(row["id"]), "errors": errs})
+                changed = True
+                break
+    added = accepted
+    tally["restored"] = len(added)
+    tally["restored_ids"] = [str(r["id"]) for r in added]
+    tally["restore_skipped_live"] = skipped
+    tally["restore_dropped"] = dropped
+    if added:
+        if not dry:
+            store_snapshot.take(mem)  # bulk mutation: byte copy of the store first
+        rows.extend(added)
+        write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
+        render_learnings_md(mem, rows, dry, touched)
+
+
+def render_importance(value) -> int:
+    """Bucket for learnings.md. Legacy rows hold None or a 0..1 float (23 rows in
+    four stores); int(None) crashed the render and int(0.7) == 0 hid the row."""
+    if isinstance(value, bool):
+        return 3
+    if isinstance(value, float) and 0 < value <= 1:
+        return max(1, min(5, int(value * 5 + 0.5)))
+    try:
+        return max(1, min(5, int(value)))
+    except (TypeError, ValueError):
+        return 3
 
 
 LEARNINGS_MD_HEADER = "*Auto-generated from learnings.json — do not edit directly.*"
@@ -634,7 +986,7 @@ def render_learnings_md(mem, rows, dry, touched):
     The header is the marker /agentic-os:maintain Step 5.2 and memory-audit check."""
     out = ["# Learnings", "", LEARNINGS_MD_HEADER, ""]
     for imp in (5, 4, 3, 2, 1):
-        bucket = [r for r in rows if int(r.get("importance", 3)) == imp and not r.get("superseded_by")]
+        bucket = [r for r in rows if render_importance(r.get("importance", 3)) == imp and not r.get("superseded_by")]
         if not bucket:
             continue
         out.append(f"## Importance {imp}")
@@ -993,22 +1345,38 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--render-learnings", action="store_true",
                     help="only regenerate learnings.md from learnings.json (no plan, no marker)")
+    ap.add_argument("--lint", action="store_true",
+                    help="report live learning rows that break the write rules (read-only)")
+    ap.add_argument("--lock-timeout", type=float, default=store_lock.TIMEOUT_SECONDS,
+                    help="seconds to wait for working/store.lock")
     args = ap.parse_args()
 
     if not os.path.isdir(args.mem):
         print(json.dumps({"ok": False, "error": f"memory dir not found: {args.mem}"}))
         return 1
 
+    if args.lint:
+        try:
+            found = lint_learnings(args.mem)
+        except PlanError as e:
+            print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+            return 2
+        print(json.dumps({"ok": True, "count": len(found), "lint": found}, ensure_ascii=False, indent=2))
+        return 0
+
     if args.render_learnings:
         # Strict read: unlike load_json (missing -> default), a render-only run must
         # never project an empty store over a real one - a missing file is an error too.
         touched: list = []
+        guard = (contextlib.nullcontext() if args.dry_run
+                 else store_lock.store_lock(args.mem, timeout=args.lock_timeout))
         try:
-            with open(os.path.join(args.mem, "learnings", "learnings.json"), encoding="utf-8-sig") as fh:
-                rows = json.load(fh)
-            if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
-                raise PlanError("learnings.json is not a JSON list of objects")
-            render_learnings_md(args.mem, rows, args.dry_run, touched)
+            with guard:  # a write like any other (Codex 5.3.0)
+                with open(os.path.join(args.mem, "learnings", "learnings.json"), encoding="utf-8-sig") as fh:
+                    rows = json.load(fh)
+                if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+                    raise PlanError("learnings.json is not a JSON list of objects")
+                render_learnings_md(args.mem, rows, args.dry_run, touched)
         except (PlanError, OSError, ValueError) as e:
             print(json.dumps({"ok": False, "error": f"render failed: {e}"}, ensure_ascii=False))
             return 2
@@ -1034,7 +1402,9 @@ def main() -> int:
         "decisions_added": 0, "decisions_superseded": 0,
         "decisions_skipped_duplicate": 0, "decision_ids": [],
         "learnings_added": 0, "learnings_skipped_duplicate": 0, "learning_ids": [],
-        "bridge_candidates": [],
+        "near_duplicates": {}, "bridge_candidates": [],
+        "restored": 0, "restored_ids": [], "restore_skipped_live": 0, "restore_dropped": [],
+        "principles_added": 0, "principles_updated": 0, "principle_ids": [],
         "candidates_new": 0, "candidates_updated": 0, "candidates_promoted": 0,
         "candidates_rejected_trust": 0, "promotion_blocked_trust": 0,
         "promotion_skipped_duplicate": 0,
@@ -1046,21 +1416,29 @@ def main() -> int:
     }
     touched: list = []
 
+    # One store lock from the first read to the last write (5.3.0): without it a
+    # wrap-up and the nightly run (or extract_patterns) lose each other's rows.
+    # A dry run only reads and takes no lock.
+    guard = (contextlib.nullcontext() if args.dry_run
+             else store_lock.store_lock(args.mem, timeout=args.lock_timeout))
     try:
-        preflight_readable(args.mem, plan)  # before the FIRST write, not per applier
-        validate_plan(args.mem, plan)
-        apply_iterations(args.mem, plan, date, args.dry_run, touched, tally)
-        apply_decisions(args.mem, plan, date, args.dry_run, touched, tally)
-        apply_learnings(args.mem, plan, date, args.dry_run, touched, tally)
-        if "user_candidates" in plan or plan.get("consolidate"):
-            # Identity growth is wrap-up Step 6's job: an iterations-only plan
-            # (/agentic-os:log) must not re-review the queue and promote to user.md.
-            apply_user_candidates(args.mem, plan, date, args.dry_run, touched, tally)
-        apply_soul_candidates(args.mem, plan, date, args.dry_run, touched, tally)
-        apply_open_tasks(args.mem, plan, date, args.dry_run, touched, tally)
-        apply_session_summary(args.mem, plan, args.dry_run, touched, tally)
-        # LAST: marker only after everything else succeeded (Step 9.5 rule 5)
-        apply_consolidation(args.mem, plan, session_id, args.dry_run, touched, tally)
+        with guard:
+            preflight_readable(args.mem, plan)  # before the FIRST write, not per applier
+            validate_plan(args.mem, plan)
+            apply_iterations(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_decisions(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_restore(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_learnings(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_principles(args.mem, plan, date, args.dry_run, touched, tally)
+            if "user_candidates" in plan or plan.get("consolidate"):
+                # Identity growth is wrap-up Step 6's job: an iterations-only plan
+                # (/agentic-os:log) must not re-review the queue and promote to user.md.
+                apply_user_candidates(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_soul_candidates(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_open_tasks(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_session_summary(args.mem, plan, args.dry_run, touched, tally)
+            # LAST: marker only after everything else succeeded (Step 9.5 rule 5)
+            apply_consolidation(args.mem, plan, session_id, args.dry_run, touched, tally)
     except (PlanError, OSError, ValueError) as e:
         # All mean the same thing to the caller: the run stopped before
         # consolidation, so the marker is absent and the dirty flags still say
@@ -1086,6 +1464,8 @@ def main() -> int:
         "date": date,
         "session_id": session_id,
         "files_written": touched,
+        # Step 3a: live learnings close to a planned one, for the model's verdict.
+        "near_duplicates": tally.pop("near_duplicates"),
         "tally": tally,
         "identity_status_line": identity_line,
     }, indent=2, ensure_ascii=False))

@@ -93,4 +93,8 @@
 
 Existing `*-archive-*` files from earlier versions stay untouched. Their ids are
 reserved: every writer continues the sequence above the archived ids, so a later
-restore cannot produce duplicate ids.
+restore cannot produce duplicate ids. Since 5.3.0 the restore exists:
+`scripts/restore_plan.py` (read-only plan and report) → owner gate →
+`apply_wrapup.py` section `restore` (learnings) and
+`extract_patterns.py --restore-archive --ids …` (protected patterns), see
+`/agentic-os:maintain` Step 5b. The archive files themselves are never modified.

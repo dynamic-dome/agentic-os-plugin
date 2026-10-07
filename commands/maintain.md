@@ -36,7 +36,17 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/review_sweep.py" .agent-memory \
   --native-memory "$(python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" --print-native-dir .)" \
   --report .agent-memory/working/review-sweep.md
 python "${CLAUDE_PLUGIN_ROOT}/scripts/extract_patterns.py" .agent-memory --refresh   # regenerate patterns.md
+python "${CLAUDE_PLUGIN_ROOT}/scripts/review_sweep.py" .agent-memory --charges        # review charges
+python "${CLAUDE_PLUGIN_ROOT}/scripts/restore_plan.py" .agent-memory \
+  --out .agent-memory/working/restore-plan.json > /dev/null; echo "restore-plan exit=$?"
 ```
+
+- `review_sweep.py --charges`: one line per charge (`due:YYYY-MM`, `ohne-termin`,
+  `restored:<store>`). Every reviewable learning sits in exactly one — rows without
+  `review_after` and restored rows included. Copy the lines into the report.
+- `restore_plan.py` (read-only): reads the archives and writes the plan to
+  `working/restore-plan.json`. Report `report.learnings.candidate` and
+  `pattern_ids`; any count > 0 → Step 5b.
 
 - `memory-thresholds.sh`: exit 0 → nothing grew past a limit. Exit 10 → each `THRESHOLD:`
   line names file, count and limit; Step 3 reports exactly those. No line is an order to
@@ -142,6 +152,66 @@ only by a genuine recall, never by this pass and never by a read.
    until then record the owner's answers in the report and change nothing by hand. A
    superseded **decision** goes through the `decisions` plan section of `apply_wrapup.py`.
 
+## Step 5b: Restore archived entries (restore, owner gate per store)
+
+Only when Step 1's restore plan has candidates or `pattern_ids`. Earlier versions moved
+entries into `*-archive-*` files the Atlas never reads (D-021 reverses that). The writers
+own every rule — this step only shows the plan and asks.
+
+1. Show the owner the report from `working/restore-plan.json`, compact: candidates;
+   `near_duplicate` (with the live twin); `id_collision`; `dangling_superseded`; `invalid`;
+   `codex_excluded`; and the patterns `protected` (with reasons) and `report_only`. Rows the
+   owner deselects → re-run `restore_plan.py --skip-ids <ids> --out …`. A dangling
+   `superseded_by` stays held back until the owner decides (clear the field or
+   `obsolete:legacy-<id>`).
+2. Ask ONE question per store: `Rückholung {n} Learnings + {m} Patterns übernehmen? [j/n]`.
+   Anything but `j` → stop, nothing changes.
+3. On `j` — dry-run first, then apply; both take the store lock, the apply takes a snapshot:
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan .agent-memory/working/restore-plan.json --dry-run
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan .agent-memory/working/restore-plan.json
+python "${CLAUDE_PLUGIN_ROOT}/scripts/extract_patterns.py" .agent-memory --restore-archive --ids "<pattern_ids, comma-separated>"
+python "${CLAUDE_PLUGIN_ROOT}/scripts/review_sweep.py" .agent-memory --charges
+```
+
+4. Verify, do not trust the exit code: `tally.restored` equals the dry-run's number,
+   `tally.restore_dropped` is listed in the report, the charge `restored:<store>` holds the
+   restored rows that are not superseded, and the archive files are byte-identical (they are
+   never written). A second apply must report `restored: 0`.
+
+No artificial `review_after` is set: restored rows reach review through the
+`restored:<store>` charge.
+
+## Step 5c: Condense — assign learnings to rules (verdichten, owner gate)
+
+(condense) D-021 (3)+(4): condensing means ASSIGNING learnings to a rule that already
+exists (CLAUDE.md, DCO `regeln/gemeinsam.md`, a convention, a wiki concept page or the
+rolling synthesis); the rule's wording stays there, the store gets a pointer that the
+MEMORY.md projection shows FIRST. Members stay unchanged — they keep the concrete detail.
+
+1. `python "${CLAUDE_PLUGIN_ROOT}/scripts/learnings_lifecycle.py" report .agent-memory` → eligible /
+   anchored / pointers into the report.
+2. `python "${CLAUDE_PLUGIN_ROOT}/scripts/learnings_lifecycle.py" propose .agent-memory` (catalog
+   from `--catalog` or `rule_catalog` in `~/.claude/agentic-os.local.json`). The scores are
+   hints, not verdicts: classify each proposal yourself as **rule** (an existing rule
+   covers it), **gap** (no rule yet) or **fact** (project-specific, stays a plain learning).
+3. Show the owner at most 10 pointer cards per round: summary (the rule, <= 150 chars),
+   anchor (`<file>#<heading>` or `#^r-<slug>`), members. Several rules under one heading
+   need an Obsidian block id at the rule's line — that is a wiki edit and part of the card.
+   A **new** rule needs >= 3 members from >= 2 stores and its own `j`; a rule derived from
+   a home-level store gets the note that the rule becomes visible to every machine reading the shared wiki.
+4. One `[j/n]` per card. Only on `j`: make the wiki edit (if any), then write the pointers:
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <plan.json>   # {"principles": [{summary, anchor, members, tags}]}
+python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" .agent-memory --project-root .
+```
+
+   The applier refuses an anchor that does not resolve, an unknown local member and a
+   pointer as member; the same anchor again merges members instead of adding a row.
+5. Gaps and facts go into the report, nothing is written for them.
+
 ## Step 6: Report
 
 ```
@@ -154,6 +224,9 @@ Memory Maintenance:
   Global decay: {n_decayed} decayed, {n_archived} archived | skipped (stillgelegt) | (no global store)
   Native stores: {verbatim **Summary:** line | native audit failed: ...}
   Review sweep: {verbatim one-liner}
+  Review charges: {one line per charge}
+  Restore: {n} learnings + {m} patterns restorable | restored {n}+{m} (owner j) | declined | none
+  Condense: {anchored}/{eligible} anchored, {n} pointers; this round {n_j} accepted, {n_gap} gaps, {n_fact} facts
   Consistency: {n_issues} issues found, {n_fixed} fixed
 ```
 

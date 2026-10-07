@@ -131,8 +131,11 @@ def snapshot(mem):
     for base, _dirs, names in os.walk(mem):
         for n in names:
             p = os.path.join(base, n)
+            rel = os.path.relpath(p, mem).replace(os.sep, "/")
+            if rel == "working/store.lock":
+                continue  # OS-lock handle file (5.3.0): infrastructure, not store data
             with open(p, "rb") as fh:
-                files[os.path.relpath(p, mem).replace(os.sep, "/")] = fh.read()
+                files[rel] = fh.read()
     return files
 
 

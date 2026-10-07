@@ -4,6 +4,66 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-08] Release v5.4.0 — Verdichtung: Zuordnung zu Regeln, Zeiger oben in MEMORY.md
+
+MINOR. Plan Phase 5 gekuerzt vorgezogen (Owner-Entscheid 2026-10-07; D-021 (3)+(4), E5, E14).
+(1) **Prinzip-Zeiger.** Plan-Sektion `principles` in `apply_wrapup.py`: eine Zeile `kind: "principle"` mit
+summary (die Regel), `anchor` (`<datei>#<ueberschrift>` oder `#^r-<slug>`, muss beim Schreiben aufloesen),
+Mitgliedern in `derived_from` (lokale IDs muessen live sein, `store/Lnn` und `native:` gelten als Beleg),
+importance = Maximum der Mitglieder, kein review_after. Derselbe Anker erneut fuehrt Mitglieder zusammen statt
+eine zweite Zeile anzulegen. Die Mitglieder bleiben byte-gleich.
+(2) **MEMORY.md-Block am Dateianfang** (E14): Claude Code laedt die ersten 200 Zeilen / 25 000 Bytes - am Ende
+wurde der Block zuerst abgeschnitten. Reihenfolge: Zeiger zuerst (mit "+n Belege", Mitglieder werden gefaltet),
+dann approved nach importance vor Datum, hoechstens 3 Codex-Tipps (vorher 10 von 20). Ein Altblock am Ende
+wandert nach oben, Handzeilen bleiben byte-gleich. Jeder Lauf prueft die Anker; ein verlorener erscheint als
+"(Anker fehlt — prüfen)". Probe vorab: in 14 echten MEMORY.md waren die Marker nie beschaedigt; Sessions
+schreiben ihre Index-Zeilen unter den Block.
+(3) **`scripts/learnings_lifecycle.py`** (rein lesend): `propose` (TF-IDF der Learnings gegen den Regelkatalog,
+Katalog aus `--catalog` oder `rule_catalog` in `~/.claude/agentic-os.local.json`) und `report`
+(eligible/anchored/pointers). Die Scores sind Hinweise; klassifiziert wird im Gate.
+(4) `/agentic-os:maintain` Step 5c "verdichten": Karten (hoechstens 10 je Runde), `[j/n]` je Karte, neue Regel
+nur bei >= 3 Mitgliedern aus >= 2 Stores.
+Codex-Verifier Runde 2 eingearbeitet: abgeloestes Mitglied abgelehnt, Mitglieder-Obergrenze beim Zusammenfuehren vor dem
+ersten Byte geprueft, Faltung nur fuer angezeigte Zeiger, Zeilenlimit auch bei langem Anker, '#' im Dateinamen,
+Altblock in der Dateimitte (Handzeilen danach byte-gleich), AGENTS.md faltet Mitglieder; restore verwirft einen
+Vorgaenger, dessen kollidierender Nachfolger verworfen wurde.
+Nicht in diesem Release: taeglicher Anker-Check im Tageslauf (die Projektion prueft bei jedem Lauf), Zeiger in
+AGENTS.md vorn, obsidian-sync Step 5 nur noch mit qualifizierten IDs, native Notizen als Belege.
+
+## [2026-10-08] Release v5.3.0 — Schreibbasis und Rueckholung der Archive
+
+MINOR. Phase 1 des Gedaechtnis-Lebenszyklus (D-021): Was frueher nach Anzahl oder Alter archiviert wurde,
+kommt ueber den einzigen Schreiber zurueck - erst nachdem drei Voraussetzungen stehen.
+(1) **Store-Lock.** `scripts/store_lock.py`: Betriebssystem-Lock auf `working/store.lock` (`msvcrt.locking` bzw.
+`fcntl.flock`; das OS gibt ihn bei Absturz frei, die Datei wird nie geloescht; Timeout 10 s = Exit 2). Die erste
+Fassung (O_EXCL-Datei, Stale-Bruch nach 30 s) hatte laut Codex-Verifier Runde 2 ein Rename/Delete-Race, in dem zwei
+Schreiber gleichzeitig eintreten konnten. Gehalten von `apply_wrapup.py`, `extract_patterns.py`, `ingest_codex_memory.py` und den
+Schreibbloecken von `wrapup_core.py` - nie ueber einen Subprozess. Gegenprobe: ohne Lock verlieren 8 parallele
+apply-Laeufe Zeilen (6 statt 11), mit Lock keine. Die Projektionen schreiben per `mkstemp` statt fester `.tmp`.
+(2) **Zeilenvalidierung beim Schreiben.** `learnings/learnings.json` ist jetzt applier-eigen; die Eigentums-
+pruefung ist unabhaengig von Gross-/Kleinschreibung (`Learnings/Learnings.json` kam vorher durch). Jede
+geschriebene Zeile: importance JSON-int 1..5 (vorher wurde `"5"` umgewandelt und `None` stuerzte nach dem
+Iterations-Log ab), tags/derived_from Listen, derived_from hoechstens 30, superseded_by mit echtem Nachfolger
+oder Beleg-Praefix (`fixed:`/`obsolete:`/`moved:`/`codex:`), keine Zyklen. Altbestand blockiert nie, `--lint`
+meldet ihn. `learnings.md` rendert None- und 0..1-Float-importance, statt abzustuerzen bzw. die Zeile zu verstecken.
+(3) **Rueckholung.** `scripts/restore_plan.py` (rein lesend) klassifiziert Archivzeilen (Kandidat, Dublette,
+Beinahe-Dublette >= 0,8, ID-Kollision, Float-importance, haengendes superseded_by, Codex-Veto, ungueltig) und
+die Pattern-Schutzklasse (ready/candidate, confidence >= 0,7, skill_candidate, von einem Learning zitiert).
+`apply_wrapup.py` Sektion `restore` entscheidet gegen den frischen Store: freie Archiv-ID bleibt (Zitate
+gueltig), belegte ID -> naechste ID + `legacy:<id>`, Fehlzeile wird verworfen und berichtet, zweiter Lauf
+aendert nichts; vorher Snapshot (`scripts/store_snapshot.py`, ausserhalb des Stores, ohne identity,
+Retention 10 + Tagesstaende 30 Tage). `extract_patterns.py --restore-archive --ids` holt Patterns mit
+unveraenderten Zahlen zurueck (D-013). Archivdateien werden nie geschrieben. Ablauf mit Owner-[j/n] je Store:
+`/agentic-os:maintain` Step 5b.
+(4) **Sichtbarkeit.** `review_sweep.py --charges` legt jede pruefbare Zeile in genau eine Charge
+(`due:YYYY-MM`, `ohne-termin`, `restored:<store>`) - Zeilen ohne review_after fielen bisher durch jede
+Pruefung. Kein kuenstliches review_after bei der Rueckholung.
+(5) **wrap-up Step 3a im Code** (Skill 4.9): Jaccard >= 0,6 ist Dublette und frischt last_relevant des
+Treffers auf; der Dry-Run liefert `near_duplicates` (0,2-0,6) fuer das Urteil `duplicate_of`. Das Modell liest
+learnings.json nicht mehr ganz (DCO: ca. 30-35k Tokens je wrap-up).
+Bewusst nicht in diesem Release: `release/release.py` (eigenes Todo) und der Snapshot vor JEDEM wrap-up -
+gesnapshottet wird vor Massenaenderungen (restore), normale wrap-ups haengen nur an.
+
 ## [2026-10-07] Release v5.2.1 — Verluste stoppen: nur melden, kein stilles Leeren, IDs ueber Archiven
 
 PATCH. Ergebnis einer Analyse des Gedaechtnis-Lebenszyklus am 2026-10-07 (Owner-Entscheid D-021).

@@ -29,9 +29,12 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from apply_wrapup import PlanError, _jaccard, archived_rows, next_id, norm, render_learnings_md  # noqa: E402
+import contextlib  # noqa: E402
+import store_lock  # noqa: E402
 
 SECTIONS = {"user preferences": "feedback", "general tips": "learning"}
 ADHOC = "[ad-hoc note]"
@@ -73,10 +76,18 @@ def load_rows(path):
 
 
 def write_atomic(path, text):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-    os.replace(tmp, path)
+    # mkstemp, not path + ".tmp" (5.3.0): two runs at once shared one temp
+    # file name and could publish each other's half-written text.
+    folder = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=folder, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def main(argv):
@@ -94,6 +105,18 @@ def main(argv):
         print(f"codex-ingest: no memory_summary.md at {summary} — skipped")
         return 0
     store = os.path.join(a.mem_dir, "learnings", "learnings.json")
+    # One store lock from reading learnings.json to writing it (5.3.0): the
+    # ingest runs from a scheduled task and must not race a wrap-up.
+    guard = contextlib.nullcontext() if a.dry_run else store_lock.store_lock(a.mem_dir)
+    try:
+        with guard:
+            return _ingest(a, summary, store)
+    except OSError as exc:  # LockTimeout included
+        print(f"codex-ingest: store busy or unwritable: {exc}", file=sys.stderr)
+        return 1
+
+
+def _ingest(a, summary, store):
     try:
         rows = load_rows(store)
         reserved = archived_rows(a.mem_dir, "learnings/learnings.json")  # archived ids are taken

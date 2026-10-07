@@ -209,6 +209,38 @@ fi
 
 echo ""
 
+# Run restore / write-basis tests (5.3.0: store lock, row validation, archive restore)
+echo ">>> Running restore tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-restore.py"; then
+    echo ">>> Restore tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Restore tests: SKIPPED (no python found)"
+else
+    echo ">>> Restore tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run condensation tests (5.4.0: principle pointers, MEMORY.md block first, lifecycle propose)
+echo ">>> Running principles tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-principles.py"; then
+    echo ">>> Principles tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Principles tests: SKIPPED (no python found)"
+else
+    echo ">>> Principles tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
 # Run measured session-cost tests (4.17.0: measurement replaces estimates)
 echo ">>> Running measure-session-cost tests..."
 PY_BIN=""

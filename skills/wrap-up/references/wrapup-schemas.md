@@ -35,7 +35,9 @@ model is stateless, so cost is the sum of context length over calls).
                          "options_considered": [ { "option": "...", "pros": [], "cons": [] } ],
                          "decision": "...", "consequences": "...",
                          "supersedes": null, "tags": [] } ],
-  "learnings":       [ { "text": "...", "summary": "...", "importance": 3, "tags": [], "derived_from": [] } ],
+  "learnings":       [ { "text": "...", "summary": "...", "importance": 3, "tags": [], "derived_from": [],
+                         "duplicate_of": null } ],
+  "restore":         { "source": "restore_plan.py", "learnings": [ "...rows from restore_plan.py..." ] },
   "user_candidates": [ { "key": "kebab-key", "observation": "...", "signal_type": "preference",
                          "confidence": 0.5, "evidence": [], "confirmed": false,
                          "status": "observed", "trust_source": "conversation" } ],
@@ -88,6 +90,23 @@ Guarantees worth relying on:
   failure is reported as JSON with exit code 2. `session_id` may be passed in
   the plan or via `--session-id` (the flag wins).
 - `--dry-run` reports the full tally without touching a file.
+- (5.3.0) `learnings/learnings.json` is applier-owned too (`learnings`; the
+  `restore` section uses the same applier). Ownership is checked case-insensitively,
+  so `Learnings/Learnings.json` is refused like the canonical path.
+- (5.3.0) Every learning the script writes is validated before the first byte:
+  `importance` a JSON int 1..5 (no `"5"`, no float, no bool), `tags` a list of
+  strings, `derived_from` a list of at most 30 strings, `duplicate_of` a live id.
+  Legacy rows are never a gate — `--lint` lists them, read-only.
+- (5.3.0, Step 3a) Jaccard >= 0.6 to a live learning is a duplicate (that entry's
+  `last_relevant` is refreshed); the top-level `near_duplicates` of the result lists
+  live entries at 0.2–0.6 for the `duplicate_of` verdict.
+- (5.3.0) `restore`: rows from `scripts/restore_plan.py`, decided against the fresh
+  store at apply time — same id + text or same text live → skipped (a second run
+  changes nothing); a free archive id is kept; an id taken by another text gets the
+  next id plus `legacy:<id>` in `derived_from`; an invalid row is dropped and listed
+  in `tally.restore_dropped`, never the whole run. A snapshot is taken first.
+- (5.3.0) A writing run holds `working/store.lock` from the first read to the last
+  write; a store locked longer than `--lock-timeout` (10 s) is exit 2, nothing written.
 
 The returned `identity_status_line` is computed from the writes that actually
 happened — use it verbatim for the mandatory Step 6.5 line instead of counting

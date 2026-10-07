@@ -7,6 +7,8 @@ the full text stays in learnings.json. One home for the rule, so the two
 projections cannot drift apart.
 """
 
+import os
+
 SUMMARY_CHARS = 150
 LINE_LIMIT = 200
 ELLIPSIS = "…"
@@ -42,7 +44,7 @@ def strip_block(text, begin_prefix, end):
     lines left behind are trimmed - that is the separator the projection itself
     inserted before the block, for LF and CRLF alike (otherwise a CRLF file would
     grow one blank line per run). Returns text unchanged if no block exists."""
-    out, inside, found = [], False, False
+    out, inside, found, after, cut = [], False, False, False, 0
     for line in text.split("\n"):
         if not inside and line.startswith(begin_prefix):
             inside, found = True, True
@@ -50,10 +52,20 @@ def strip_block(text, begin_prefix, end):
         if inside:
             if line.strip() == end:
                 inside = False
+                cut = len(out)
             continue
+        if found and line.strip():
+            after = True
         out.append(line)
     if not found:
         return text
+    if after:
+        # Block in the MIDDLE (a session appended lines below it): only the one
+        # separator line the projection put before it goes; everything else -
+        # including blank lines at the very end - keeps its bytes (Codex round 2).
+        if cut and out[cut - 1].strip() == "":
+            del out[cut - 1]
+        return "\n".join(out)
     result = "\n".join(out)
     while _ends_with_blank_line(result):
         result = result[:-2] if result.endswith("\r\n") else result[:-1]
@@ -95,3 +107,69 @@ def entry_line(e):
     summary = e.get("summary")
     text = summary if isinstance(summary, str) and summary.strip() else e.get("text")
     return bounded_line(f"- [{e.get('id')}] ({e.get('date')}{src}) ", text)
+
+
+# ---------------------------------------------------------------- pointers (5.4.0)
+# A principle pointer (kind "principle", D-021 (4)) names a rule that lives in a
+# rule file or wiki page - the wording stays there, the store only points at it.
+# `anchor` = "<path>[#<heading>|#^<block-id>]"; ~ is expanded.
+ANCHOR_LOST = " (Anker fehlt — prüfen)"
+
+
+def split_anchor(anchor):
+    """-> (path, fragment). A '#' only counts as fragment marker when what follows
+    it is no path (Windows paths and file names may contain '#')."""
+    anchor = str(anchor or "").strip()
+    if os.path.isfile(os.path.expanduser(anchor)):
+        return os.path.expanduser(anchor), ""  # a file name may itself contain '#'
+    if "#" in anchor:
+        head, frag = anchor.rsplit("#", 1)
+        if "/" not in frag and "\\" not in frag:
+            return os.path.expanduser(head), frag.strip()
+    return os.path.expanduser(anchor), ""
+
+
+def anchor_ok(anchor):
+    """True when the file exists and, if a fragment is given, the file holds it:
+    '^id' as an Obsidian block id, otherwise as a markdown heading text."""
+    path, frag = split_anchor(anchor)
+    if not path or not os.path.isfile(path):
+        return False
+    if not frag:
+        return True
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    if frag.startswith("^"):
+        return any(line.rstrip().endswith(frag) for line in text.splitlines())
+    want = frag.strip().lower()
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("#") and s.lstrip("#").strip().lower() == want:
+            return True
+    return False
+
+
+def anchor_display(anchor):
+    """Short form for the projection: file name plus fragment."""
+    path, frag = split_anchor(anchor)
+    name = os.path.basename(path) or str(anchor)
+    return f"{name}#{frag}" if frag else name
+
+
+def pointer_line(e, folded=0, ok=True):
+    """'- [id] ★ summary → file#rule (+n Belege)[ (Anker fehlt — prüfen)]'. The
+    tail is never cut - only the summary gives way to the line limit."""
+    tail = f" → {anchor_display(e.get('anchor'))}"
+    if folded:
+        tail += f" (+{folded} Beleg{'' if folded == 1 else 'e'})"
+    if not ok:
+        tail += ANCHOR_LOST
+    prefix = f"- [{e.get('id')}] ★ "
+    room = max(LINE_LIMIT - len(prefix) - len(tail), 20)
+    text = e.get("summary") or e.get("text")
+    line = prefix + shorten(text, min(SUMMARY_CHARS, room)) + tail
+    # an absurdly long anchor can still overflow: hard cap, like bounded_line
+    return line if len(line) <= LINE_LIMIT else line[:LINE_LIMIT - len(ELLIPSIS)] + ELLIPSIS

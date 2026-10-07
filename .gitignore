@@ -38,3 +38,4 @@ node_modules/
 # Local tool state (code index, pi agent)
 .codegraph/
 .pi-glla/
+.agent-memory/working/store.lock

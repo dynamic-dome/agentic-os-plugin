@@ -1323,6 +1323,33 @@ else
     fail "DEPENDENCIES.md: wrap-up matrix row or Session-Bracket Coverage section missing session-harvest/decision-scan — graph drifted from wrap-up SKILL.md"
 fi
 
+# 5.3.0 (dedup-in-code): wrap-up Step 3a must not send the model through the whole
+# learnings.json - the rule lives in apply_wrapup.py; the block must name the
+# marker, the script, near_duplicates and duplicate_of, and must not tell the
+# model to read the file (isolated block, L11).
+WU_3A="$(sed -n '/^### 3a: Dedup Check/,/^### 3a.2/p' "$PLUGIN_ROOT/skills/wrap-up/SKILL.md" 2>/dev/null)"
+if echo "$WU_3A" | grep -q "(dedup-in-code" && echo "$WU_3A" | grep -q "apply_wrapup.py"    && echo "$WU_3A" | grep -q "near_duplicates" && echo "$WU_3A" | grep -q "duplicate_of"    && ! echo "$WU_3A" | grep -qiE "^Read .?learnings/learnings\.json"; then
+    pass "wrap-up Step 3a: dedup runs in apply_wrapup.py (near_duplicates/duplicate_of), no full read of learnings.json"
+else
+    fail "wrap-up Step 3a: block still reads learnings.json or lacks the dedup-in-code contract"
+fi
+# 5.3.0: the restore path is documented where the owner runs it, and the archive
+# files stay read-only in that procedure.
+MT_5B="$(sed -n '/^## Step 5b:/,/^## Step 6:/p' "$PLUGIN_ROOT/commands/maintain.md" 2>/dev/null)"
+if echo "$MT_5B" | grep -q "restore_plan.py\|restore-plan.json" && echo "$MT_5B" | grep -q "\[j/n\]"    && echo "$MT_5B" | grep -q -- "--restore-archive" && echo "$MT_5B" | grep -q "never written"; then
+    pass "maintain Step 5b: restore runs plan -> owner [j/n] -> one writer, archives never written"
+else
+    fail "maintain Step 5b: restore procedure missing gate, writer or archive guarantee"
+fi
+
+# 5.4.0 (condense): Step 5c assigns to EXISTING rules through the one writer, gated per card.
+MT_5C="$(sed -n '/^## Step 5c:/,/^## Step 6:/p' "$PLUGIN_ROOT/commands/maintain.md" 2>/dev/null)"
+if echo "$MT_5C" | grep -q "(condense)" && echo "$MT_5C" | grep -q "learnings_lifecycle.py"    && echo "$MT_5C" | grep -q '"principles"' && echo "$MT_5C" | grep -q "\[j/n\]"    && echo "$MT_5C" | grep -q ">= 3 members from >= 2 stores"; then
+    pass "maintain Step 5c: condense = assign to rules, principles via apply_wrapup, [j/n] per card, new-rule threshold"
+else
+    fail "maintain Step 5c: condense procedure missing script, writer, gate or new-rule threshold"
+fi
+
 echo ""
 echo "=== Results: $PASSED/$TESTS passed, $ERRORS failures ==="
 [ "$ERRORS" -eq 0 ]

@@ -29,3 +29,15 @@ Erst durch Prompt-Hooks ersetzt, diese in 4.21.0 gestrichen: SessionEnd-Hooks ko
 keine Skills aufrufen, PreCompact-Output wird wegkomprimiert. Das SessionStart-Briefing
 (`session-start.sh`, `hookSpecificOutput.additionalContext`) ist der einzige Hook-Kanal,
 den das Modell sieht; es feuert auch nach `/compact` erneut.
+
+## store_lock.py / store_snapshot.py / restore_plan.py (5.3.0)
+
+- `store_lock.py`: `working/store.lock` je Store. Jeder schreibende Lauf haelt ihn vom
+  ersten Lesen bis zum letzten Schreiben, nie ueber einen Subprozess. Timeout = Exit 2.
+- `store_snapshot.py <mem> [--keep 10]`: Bytekopie von `*.json`/`*.md` ohne identity/,
+  working/, metrics/ nach `$AGENTIC_OS_SNAPSHOT_DIR` (Default `~/.agentic-os/snapshots`).
+  Laeuft automatisch vor jeder Rueckholung.
+- `restore_plan.py <mem> [--skip-ids ..] [--out plan.json]`: rein lesend; Plan + Bericht
+  fuer die Rueckholung archivierter Learnings und Patterns (Ablauf: maintain Step 5b).
+- `learnings_lifecycle.py propose|report <mem>`: rein lesend; Verdichtungs-Vorschlaege (TF-IDF gegen den
+  Regelkatalog aus `~/.claude/agentic-os.local.json` `rule_catalog`) und Verankerungsquote (maintain Step 5c).

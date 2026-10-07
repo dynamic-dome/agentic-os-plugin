@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '4.8'
+  version: '4.9'
   part-of: agentic-os
   layer: core
 ---
@@ -158,9 +158,14 @@ non-obvious, or documents a decision rationale not in the code. NO trivial facts
 
 ### 3a: Dedup Check
 
-Read `learnings/learnings.json`; normalize new text (lowercase, strip punctuation),
-tokenize, Jaccard similarity against existing entries. **>= 0.6 → duplicate**: update
-`last_relevant` on the existing entry, skip creation.
+(dedup-in-code, 5.3.0) Do NOT read `learnings/learnings.json` for this — in a large store
+that is 30k+ tokens resent on every following call. `apply_wrapup.py` owns the rule
+(token Jaccard similarity to a live entry, >= 0.6 → duplicate): the script updates that
+entry's `last_relevant` and skips creation. Run the write plan with `--dry-run` first: its
+top-level `near_duplicates` lists, per planned learning, up to 3 live entries with
+Jaccard 0.2–0.6 (id, score, text). Judge only those: same core insight → set
+`"duplicate_of": "<id>"` on the planned learning (the script then refreshes that entry
+instead of adding one); otherwise leave it as is.
 
 ### 3a.2: Cross-Session RAG-Check (Atlas)
 

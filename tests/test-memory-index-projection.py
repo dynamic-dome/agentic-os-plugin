@@ -64,7 +64,7 @@ def main():
 
     hand = "- [pi-agent-ordner](pi-agent-ordner.md) — handwritten line\n- [x](x.md) — keep me\n"
 
-    # 1. order, codex marker, block appended after handwritten lines, byte-identical outside
+    # 1. order, codex marker, block at the START (5.4.0, E14), byte-identical outside
     with tempfile.TemporaryDirectory() as tmp:
         rows = [learning("L1", "2026-08-01", "Older learning", importance=5),
                 learning("L2", "2026-08-20", "Newer learning"),
@@ -76,14 +76,16 @@ def main():
         p = run([mem, "--memory-md", md], cwd=tmp)
         check("exit 0", p.returncode == 0, p.stderr[:300])
         txt = read(md)
-        check("handwritten intact", txt.startswith(hand), txt[:120])
-        body = txt[txt.index(BEGIN):]
+        check("handwritten intact (after the block)", txt.endswith(hand), txt[-120:])
+        body = txt[txt.index(BEGIN):txt.index(END)]
         lines = [l for l in body.split("\n") if l.startswith("- [")]
-        check("feedback first, then date desc", [l[3:5] for l in lines] == ["L3", "L2", "L4", "L1"], str(lines))
+        check("importance first, then feedback, then date desc (E14)",
+              [l[3:5] for l in lines] == ["L1", "L3", "L2", "L4"], str(lines))
         check("codex marker in line", "(2026-08-10, codex) Codex tip" in txt, txt)
         check("candidate + superseded excluded", "L5" not in txt and "L6" not in txt)
         check("heading present", "## Bridge: Learnings + Feedback (learnings.json, kuratiert)" in txt)
-        check("ends with END marker", txt.rstrip().endswith(END))
+        check("block starts the file, END before the hand lines",
+              txt.startswith(BEGIN) and txt.index(END) < txt.index(hand))
         # idempotent
         before = txt
         p = run([mem, "--memory-md", md], cwd=tmp)
@@ -192,7 +194,7 @@ def main():
               str([len(l) for l in block.split("\n")]))
 
     # 8. load limit (200 lines / 25 000 bytes, same rule as native_memory_audit.py): the block
-    #    sits at the END of MEMORY.md, so it is the first thing Claude Code cuts off.
+    #    sat at the END of MEMORY.md until 5.4.0; now at the start, the hand lines are cut first.
     with tempfile.TemporaryDirectory() as tmp:
         mem, md = setup(tmp, [learning("L1", "2026-08-01", "Kurz")], memory_body="- [a](a.md) — a\n")
         p = run([mem, "--memory-md", md], cwd=tmp)
@@ -227,7 +229,7 @@ def main():
         check("CRLF file stays CRLF (no bare LF)",
               data.count(b"\n") == data.count(b"\r\n") and BEGIN.encode() in data,
               repr(data[-120:]))
-        check("handwritten CRLF part byte-identical", data.startswith(hand_crlf.encode("utf-8")))
+        check("handwritten CRLF part byte-identical", data.endswith(hand_crlf.encode("utf-8")))
         sys.path.insert(0, os.path.dirname(SCRIPT))
         import native_memory_audit as nma
         pct, _limit, _lvl = nma.load_level(len(data), nma.count_lines(data))
@@ -246,7 +248,7 @@ def main():
         run([mem, "--memory-md", md], cwd=tmp)
         with open(md, "rb") as f:
             first = f.read()
-        check("mixed line endings: handwritten part byte-identical", first.startswith(mixed), repr(first[:40]))
+        check("mixed line endings: handwritten part byte-identical", first.endswith(mixed), repr(first[-40:]))
         run([mem, "--memory-md", md], cwd=tmp)
         with open(md, "rb") as f:
             check("mixed line endings: second run byte-identical", f.read() == first)

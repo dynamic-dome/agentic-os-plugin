@@ -32,6 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import apply_wrapup as aw  # noqa: E402
+import contextlib  # noqa: E402
+import store_lock  # noqa: E402
 from preprocess_state import open_tasks  # noqa: E402
 from wrapup_parts.handoff import write_board, write_central  # noqa: E402
 from wrapup_parts.harvest import harvest  # noqa: E402
@@ -235,14 +237,19 @@ def cmd_apply_headless(args):
         if args.dry_run:
             return _emit({**empty, "marker_written": False, "files_written": [], "tally": tally}, 0)
         try:
-            aw.apply_consolidation(mem, {"consolidate": True}, session_id, False, touched, tally)
+            with store_lock.store_lock(mem):
+                aw.apply_consolidation(mem, {"consolidate": True}, session_id, False, touched, tally)
         except (aw.PlanError, OSError, ValueError) as exc:  # ValueError: decode/shape (5.2.1)
             return _emit({**empty, "ok": False, "error": f"marker: {exc}", "marker_written": False}, 2)
         return _emit({**empty, "marker_written": True, "files_written": touched, "tally": tally}, 0)
+    # The store lock covers each write block, never a subprocess call below:
+    # extract_patterns takes the same lock and would wait for its own parent.
+    guard = contextlib.nullcontext() if args.dry_run else store_lock.store_lock(mem)
     try:  # steps 1-3: store writes through the one applier; nothing judge-owned
-        aw.validate_plan(mem, plan)
-        aw.apply_iterations(mem, plan, date, args.dry_run, touched, tally)
-        aw.apply_session_summary(mem, plan, args.dry_run, touched, tally)
+        with guard:
+            aw.validate_plan(mem, plan)
+            aw.apply_iterations(mem, plan, date, args.dry_run, touched, tally)
+            aw.apply_session_summary(mem, plan, args.dry_run, touched, tally)
     except (aw.PlanError, OSError, ValueError) as exc:  # ValueError: decode/shape (5.2.1)
         return _emit({"ok": False, "mode": "headless", "error": f"store: {exc}", "files_written": touched,
                       "note": "consolidation marker NOT written - dirty state stays honest"}, 2)
@@ -284,7 +291,8 @@ def cmd_apply_headless(args):
                                          project_root) if os.path.exists(agents_md) else "skipped(no AGENTS.md)")
 
     try:  # step 9: marker LAST
-        aw.apply_consolidation(mem, plan, session_id, False, touched, tally)
+        with store_lock.store_lock(mem):
+            aw.apply_consolidation(mem, plan, session_id, False, touched, tally)
     except (aw.PlanError, OSError, ValueError) as exc:  # ValueError: decode/shape (5.2.1)
         return _emit({**result, "ok": False, "error": f"marker: {exc}", "handoff": handoff, "wiki_note": wiki_note,
                       "marker_written": False, "files_written": touched, "tally": tally}, 2)

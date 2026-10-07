@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 # Same short-form rule as the MEMORY.md block (150 chars, line <= 200).
@@ -57,9 +58,13 @@ def load_approved(mem_dir):
         print(f"bridge: learnings.json unreadable: {exc}", file=sys.stderr)
         return None
     entries = data if isinstance(data, list) else data.get("learnings", [])
+    # members of a rule pointer (kind "principle", 5.4.0) are covered by the pointer
+    folded = {m for e in entries if isinstance(e, dict) and e.get("kind") == "principle"
+              and not e.get("superseded_by") for m in (e.get("derived_from") or []) if isinstance(m, str)}
     approved = [e for e in entries if isinstance(e, dict)
                 and e.get("bridge_status") == "approved"
                 and not e.get("superseded_by")
+                and str(e.get("id")) not in folded
                 and e.get("source_agent", "claude") != "codex"]   # loop guard (hub spec E3)
     approved.sort(key=lambda e: (str(e.get("date", "")),
                                  int(e.get("importance", 0))), reverse=True)
@@ -129,10 +134,18 @@ def strip_block(text):
 
 
 def write_atomic(path, text):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-    os.replace(tmp, path)
+    # mkstemp, not path + ".tmp" (5.3.0): two runs at once shared one temp
+    # file name and could publish each other's half-written text.
+    folder = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=folder, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def main(argv):
