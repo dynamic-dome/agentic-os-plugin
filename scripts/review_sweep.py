@@ -70,7 +70,11 @@ def main(argv):
         print(f"review-sweep: learnings.json unreadable: {exc}", file=sys.stderr)
         return 1
 
+    # bridge_status is the real field (5.2.1): 'retired' is withdrawn, 'rejected' is
+    # the owner's final veto (D18) - neither is up for review. The legacy 'status'
+    # stays excluded for rows an older footer told someone to mark by hand.
     due = [r for r in rows if r.get("review_after") and not r.get("superseded_by")
+           and r.get("bridge_status") not in ("retired", "rejected")
            and r.get("status") != "retired" and str(r["review_after"]) < today.isoformat()]
     cand_cutoff = (today - dt.timedelta(days=a.candidate_days)).isoformat()
     cands = [r for r in rows if r.get("bridge_status") == "candidate" and str(r.get("date", "")) < cand_cutoff]
@@ -84,7 +88,7 @@ def main(argv):
         lines += [f"- {name} (mtime {m})" for name, m in stale]
         lines += ["", f"## (c) Bridge-Kandidaten älter als {a.candidate_days} Tage ({len(cands)})"]
         lines += [f"- [{r.get('id')}] candidate since {r.get('date')} {str(r.get('text', ''))[:120]}" for r in cands]
-        lines += ["", "Entscheidung pro Eintrag: behalten (review_after +90) · ersetzen (superseded_by) · archivieren (status: retired / _archive/). Nichts wird automatisch geändert."]
+        lines += ["", "Entscheidung pro Eintrag: behalten · ersetzen (superseded_by mit Nachfolger) · zurückziehen (bridge_status retired). Nichts wird automatisch geändert und nichts archiviert; bis es einen Schreibweg dafür gibt, werden Entscheidungen nur notiert."]
         os.makedirs(os.path.dirname(os.path.abspath(a.report)), exist_ok=True)
         tmp = a.report + ".tmp"
         with open(tmp, "w", encoding="utf-8", newline="") as f:

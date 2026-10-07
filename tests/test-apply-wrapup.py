@@ -365,15 +365,115 @@ check(line.startswith("Identity: ") and "user.md promotet" in line,
       "identity status line matches the mandatory Step 6.5 format")
 check("1 → user.md promotet" in line, "status line numbers come from the applied writes")
 
-# --- 11. corrupt JSON is quarantined, not fatal -----------------------------
+# --- 11. an unreadable store file aborts the run, it is never emptied --------
+# 5.2.1: the old quarantine contract renamed the file to .corrupt.bak
+# - even on --dry-run - and then wrote a store holding only the new rows, ids
+# restarting at L1, exit 0, no warning. A BOM alone was enough to trigger it.
 mem = make_mem()
 write(mem, "learnings/learnings.json", "{ this is not json")
+before = snapshot(mem)
 rc, out = run(mem, {"date": "2026-07-27", "learnings": [{"text": "Nach Korruption", "importance": 3}]})
-check(rc == 0, "corrupt input file does not abort the run")
-check(os.path.exists(os.path.join(mem, "learnings/learnings.json.corrupt.bak")),
-      "corrupt file quarantined as .corrupt.bak")
-check(load(mem, "learnings/learnings.json")[0]["id"] == "L1",
-      "fresh file created after quarantine")
+check(rc == 2, f"corrupt store file aborts the run with exit 2 (rc={rc})")
+check(snapshot(mem) == before, "corrupt store file: nothing renamed, nothing written")
+check(out.get("ok") is False and "learnings/learnings.json" in str(out.get("error", "")),
+      f"the error names the unreadable file ({str(out.get('error', ''))[:120]})")
+# Appliers run in sequence - the check has to happen before the FIRST write,
+# not when the learnings applier finally gets to its file.
+rc, out = run(mem, {"date": "2026-07-27",
+                    "iterations": [{"type": "fix", "title": "Vor der Korruption", "outcome": "ok"}],
+                    "learnings": [{"text": "Nach Korruption", "importance": 3}]})
+check(rc == 2 and snapshot(mem) == before,
+      "a corrupt store file stops the run before the iteration log is written")
+rc, out = run(mem, {"date": "2026-07-27", "learnings": [{"text": "Nach Korruption", "importance": 3}]},
+              "--dry-run")
+check(rc == 2 and snapshot(mem) == before, "dry-run on a corrupt store file changes nothing either")
+
+# --- 11b. a UTF-8 BOM is not corruption --------------------------------------
+BOM_ROWS = [{"id": "L1", "date": "2026-01-01", "text": "Altbestand mit BOM", "importance": 4,
+             "tags": ["x"], "layer": "short-term", "superseded_by": None, "last_relevant": "2026-01-01"}]
+mem = make_mem()
+with open(os.path.join(mem, "learnings", "learnings.json"), "wb") as fh:
+    fh.write(b"\xef\xbb\xbf" + json.dumps(BOM_ROWS, ensure_ascii=False).encode("utf-8"))
+before = snapshot(mem)
+rc, out = run(mem, {"date": "2026-07-27", "learnings": [{"text": "Neu nach BOM", "importance": 3}]},
+              "--dry-run")
+check(rc == 0 and snapshot(mem) == before, "dry-run on a BOM store leaves every byte in place")
+rc, out = run(mem, {"date": "2026-07-27", "learnings": [{"text": "Neu nach BOM", "importance": 3}]})
+rows = load(mem, "learnings/learnings.json")
+check(rc == 0 and [r["id"] for r in rows] == ["L1", "L2"]
+      and rows[0]["text"] == "Altbestand mit BOM",
+      f"BOM store keeps its rows and continues the sequence (ids={[r['id'] for r in rows]})")
+check(not os.path.exists(os.path.join(mem, "learnings/learnings.json.corrupt.bak")),
+      "BOM store is not quarantined")
+
+# --- 11c. ids in archive files are taken ------------------------------------
+# maintain moved rows to *-archive-*.json; re-issuing their ids makes two records
+# share one id once the archive is restored, and the Atlas rebuild aborts on
+# duplicate ids. All three on-disk spellings count: {stem}-archive-*.json,
+# {stem}-archive.json and the misnamed {name}-archive-*.json.
+mem = make_mem()  # live: L1
+put(mem, "learnings/learnings-archive-2026-07.json",
+    [{"id": "L2", "text": "a"}, {"id": "L5", "text": "b"}])
+put(mem, "learnings/learnings.json-archive-2026-08.json", [{"id": "L7", "text": "c"}])
+rc, out = run(mem, {"date": "2026-07-27", "learnings": [{"text": "Nach Archiv", "importance": 3}]})
+check(rc == 0 and out["tally"]["learning_ids"] == ["L8"],
+      f"new learning skips ids held by archives (got {out['tally'].get('learning_ids')})")
+put(mem, "context/decisions-archive.json", [{"id": "D-030", "title": "alt"}])
+put(mem, "context/decisions.json", [{"id": "D-002", "title": "live", "status": "active"}])
+rc, out = run(mem, {"date": "2026-07-27", "decisions": [
+    {"type": "architecture", "title": "Nach Decision-Archiv", "context": "c", "decision": "d"}]})
+check(rc == 0 and out["tally"]["decision_ids"] == ["D-031"],
+      f"new decision skips ids held by an undated archive (got {out['tally'].get('decision_ids')})")
+# The archive raises the number, it never hijacks the live id family.
+mem = make_mem()
+put(mem, "iterations/errors.json", [{"id": "err-002", "category": "x", "tags": []}])
+put(mem, "iterations/errors-archive-2026-07.json", [{"id": f"E{i}"} for i in range(1, 16)])
+rc, out = run(mem, {"date": "2026-07-27", "iterations": [{
+    "type": "fix", "title": "Familie bleibt", "outcome": "ok",
+    "errors": [{"category": "y", "tags": ["neu"], "description": "d", "root_cause": "r",
+                "solution": "s"}]}]})
+ids = [e["id"] for e in load(mem, "iterations/errors.json")]
+check(rc == 0 and ids == ["err-002", "err-003"],
+      f"an archive of another id family does not fork the live sequence (ids={ids})")
+
+# --- 11d. the preflight covers everything a plan will read (review of 5.2.1) --
+# Each case: a plan whose FIRST applier would write the iteration log, and a
+# problem that only a later applier used to discover -> exit 2, zero bytes changed.
+ITER = [{"type": "fix", "title": "Vor dem Abbruch", "outcome": "ok"}]
+cases = [
+    ("dict-wrapped learnings.json",
+     lambda m: put(m, "learnings/learnings.json", {"learnings": BOM_ROWS}),
+     {"iterations": ITER, "learnings": [{"text": "x", "importance": 3}]}),
+    ("learnings.json holding JSON null (Codex verifier 5.2.1)",
+     lambda m: write(m, "learnings/learnings.json", "null"),
+     {"iterations": ITER, "learnings": [{"text": "x", "importance": 3}]}),
+    ("decisions.json with an object at top level",
+     lambda m: put(m, "context/decisions.json", {}),
+     {"iterations": ITER, "decisions": [{"type": "architecture", "title": "t", "context": "c", "decision": "d"}]}),
+    ("unreadable dirty file on a consolidating plan",
+     lambda m: write(m, "working/dirty-other.json", "{ kaputt"),
+     {"iterations": ITER, "consolidate": True}),
+    ("unreadable learnings archive on a plan that assigns learning ids",
+     lambda m: write(m, "learnings/learnings-archive-2026-07.json", '[{"id": "L9", "text": "abgeschn'),
+     {"iterations": ITER, "learnings": [{"text": "x", "importance": 3}]}),
+    ("iteration log that is not UTF-8",
+     lambda m: open(os.path.join(m, "iterations", "iteration-log.md"), "wb").write(
+         "# Iteration Log\n\n## 2026-01-01 — fix: alt\n".encode("cp1252")),
+     {"iterations": ITER}),
+]
+for name, setup, plan in cases:
+    mem = make_mem()
+    setup(mem)
+    before = snapshot(mem)
+    rc, out = run(mem, dict(plan, date="2026-07-27"))
+    check(rc == 2 and out.get("ok") is False and snapshot(mem) == before,
+          f"preflight: {name} -> exit 2 with a JSON error, nothing written (rc={rc}, "
+          f"{str(out.get('error') or out.get('_stderr', ''))[:90]})")
+# An unreadable archive only matters where an id is assigned.
+mem = make_mem()
+write(mem, "learnings/learnings-archive-2026-07.json", '[{"id": "L9", "text": "abgeschn')
+rc, out = run(mem, {"date": "2026-07-27", "session_summary": {"what_was_done": ["nur Summary"], "statistics": {}}})
+check(rc == 0, f"a plan that assigns no learning id is not blocked by a broken learnings archive (rc={rc})")
 
 # --- 12. trust boundary also guards the full-queue re-review ----------------
 # Codex verifier finding 2026-07-27 (MAJOR): trust_source was only checked when
@@ -412,11 +512,11 @@ aw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(aw)
 try:
     aw.load_json(mem, "iterations/errors.json", None)
-    fail("quarantining a foreign-owned file must be refused")
+    fail("loading a corrupt foreign-owned file must raise")
 except aw.PlanError:
-    pass_("quarantine of a foreign-owned file is refused (routed through _p())")
+    pass_("a corrupt foreign-owned file raises PlanError")
 check(read(mem, "iterations/errors.json") == before,
-      "foreign-owned file untouched even on the quarantine path")
+      "corrupt foreign-owned file stays untouched")
 check(not os.path.exists(os.path.join(mem, "iterations/errors.json.corrupt.bak")),
       "no .corrupt.bak created for a foreign-owned file")
 
@@ -588,17 +688,16 @@ try:
     fail("generic write path must not reach an applier-owned file")
 except aw2.PlanError:
     pass_("applier-owned file is refused on the generic write path (via= required)")
-write(mem, "context/decisions.json", "{ kaputt")  # only the corrupt branch mutates
-try:
-    aw2.load_json(mem, "context/decisions.json", None)
-    fail("generic quarantine path must not reach an applier-owned file")
-except aw2.PlanError:
-    pass_("applier-owned file is refused on the generic quarantine path")
-check(read(mem, "context/decisions.json") == "{ kaputt",
-      "applier-owned file untouched on the generic quarantine path")
-check(aw2.load_json(mem, "context/decisions.json", None, via="decisions") is None
-      and os.path.exists(os.path.join(mem, "context/decisions.json.corrupt.bak")),
-      "the owning applier CAN quarantine its own corrupt file")
+write(mem, "context/decisions.json", "{ kaputt")
+for via in (None, "decisions"):
+    try:
+        aw2.load_json(mem, "context/decisions.json", None, via=via)
+        fail(f"corrupt applier-owned file must raise (via={via})")
+    except aw2.PlanError:
+        pass_(f"corrupt applier-owned file raises PlanError (via={via})")
+check(read(mem, "context/decisions.json") == "{ kaputt"
+      and not os.path.exists(os.path.join(mem, "context/decisions.json.corrupt.bak")),
+      "not even the owning applier renames or empties a corrupt file")
 
 # === Codex verifier findings on commit 1e5c504 (2026-07-27) ==================
 

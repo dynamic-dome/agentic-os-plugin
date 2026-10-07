@@ -74,21 +74,23 @@
 
 ## Archiving Thresholds
 
-> **Authoritative source:** `commands/maintain.md` Step 3.
-> Archiving runs only when `/agentic-os:maintain` is run (on demand or when
-> wrap-up detects an exceeded threshold) — it is never part of the normal
-> end-of-session flow.
+> **Authoritative source:** `scripts/memory-thresholds.sh` (limits) and
+> `commands/maintain.md` Step 3 (report). **Nothing is ever moved, archived or
+> compressed because of a count or an age** (D-021, owner decision 2026-10-07): archive files are invisible to the
+> Atlas RAG, and count-based archiving took long-term and importance>=4 learnings
+> and ready patterns out of retrieval. A threshold only reports.
 
-| File | Threshold | Action |
-|------|-----------|--------|
-| `iteration-log.md` | > 100 entries | Keep newest 100, archive rest to `iteration-log-archive-{YYYY-MM}.md` |
-| `errors.json` | > 50 entries | Keep newest 50, archive rest to `errors-archive-{YYYY-MM}.json` |
-| `learnings/learnings.json` | > 100 entries | Keep newest 100, archive rest to `learnings-archive-{YYYY-MM}.json` |
-| `code-reviews.json` | > 100 entries | Keep newest 100, archive rest to `code-reviews-archive-{YYYY-MM}.json` |
-| `test-results.json` | > 100 entries | Keep newest 100, archive rest to `test-results-archive-{YYYY-MM}.json` |
-| `patterns.json` | `last_seen` > 60 days OR `confidence` < 0.3 | Archive stale/low-confidence entries to `patterns-archive-{YYYY-MM}.json` |
-| `decisions.json` | `status: superseded` > 90 days | Archive superseded; keep all `active` regardless of age |
-| `learnings/learnings.md` | > 200 lines | Projection of `learnings.json` — archive the JSON, then `apply_wrapup.py <mem> --render-learnings`; never cut the `.md` by hand |
-| `session-summary.md` | > 30 lines | Compress to 30 lines (never drop "Open Items") |
+| File | Limit | What happens |
+|------|-------|--------------|
+| `iteration-log.md` | soft 100 entries | reported |
+| `errors.json` | soft 50 entries | reported |
+| `learnings/learnings.json` | ceiling 1000 entries | reported (catches runaway growth only) |
+| `learnings/learnings.md` | ceiling 2000 lines | reported; a projection — re-render with `apply_wrapup.py <mem> --render-learnings`, never cut by hand |
+| `context/open-tasks.json` | soft 30 done entries | reported |
+| `session-summary.md` | soft 40 lines | reported; the next wrap-up rewrites it |
+| `patterns.json` | `last_seen` > 60 days or `confidence` < 0.3 | listed in the maintain report, stays live |
+| `decisions.json` | `status: superseded` | listed, stays (every reader already filters it) |
 
-If an archive file for the current month already exists, append to it instead of overwriting.
+Existing `*-archive-*` files from earlier versions stay untouched. Their ids are
+reserved: every writer continues the sequence above the archived ids, so a later
+restore cannot produce duplicate ids.

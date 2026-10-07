@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '4.7'
+  version: '4.8'
   part-of: agentic-os
   layer: core
 ---
@@ -362,7 +362,7 @@ open tasks; Step 5's "Next Steps" is a RENDERING of it, never the reverse.
    append `{"id": "T-{next}", "title", "status": "open"|"blocked", "created", "updated",
    "source": "wrap-up", "cross_project": false}`.
 3. Items this session completed → `"status": "done", "updated": today`. Never delete —
-   /agentic-os:maintain archives.
+   finished tasks stay in the file; nothing is moved to an archive (D-021).
 4. `"cross_project": true` ONLY for items the user explicitly flagged — sole feed for
    the central handoff's `[cross-project]` lines.
 
@@ -658,7 +658,7 @@ patterns / Open questions). Template: `references/wrapup-schemas.md` §Handoff M
 ## Error Handling
 
 - `iteration-log.md` missing: create it, note "No previous iterations"
-- JSON parse error: rename to `{file}.corrupt.bak`, create fresh, warn user
+- JSON parse error: `apply_wrapup.py` stops with exit 2 BEFORE the first write and leaves the file untouched (5.2.1) — report file and error, recommend `/agentic-os:maintain` Step 2. Never rename, recreate or hand-edit the file.
 - `.agent-memory/` missing: suggest `/agentic-os:init`
 
 ## What NOT to Do

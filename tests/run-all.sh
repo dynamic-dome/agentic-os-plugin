@@ -387,6 +387,17 @@ fi
 
 echo ""
 
+# Run memory-thresholds tests (5.2.1: thresholds only report, D-021)
+echo ">>> Running memory-thresholds tests..."
+if bash "$SCRIPT_DIR/test-memory-thresholds.sh"; then
+    echo ">>> Memory-thresholds tests: ALL PASSED"
+else
+    echo ">>> Memory-thresholds tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
 # Run skill-redesign eval harness (T-35: Schicht 1 signals + gate-linkage)
 echo ">>> Running skill-redesign eval harness..."
 if bash "$SCRIPT_DIR/eval/run-eval.sh"; then

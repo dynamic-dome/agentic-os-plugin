@@ -57,7 +57,9 @@ Report age-based risks (the dimension the manual audit got wrong from old data):
 3. **JSON validity** — for each JSON store, confirm it parses. Flag any that would need
    `.corrupt.bak` recovery (but do NOT perform the recovery here).
 4. **global provenance (global-provenance-audit)** — only if `~/.claude-memory/global/`
-   exists. This is read-only reporting of the 4.A invariants — it heals nothing:
+   exists AND has no `STILLGELEGT.md` (decommissioned 2026-10-05, G-05: then print only
+   `GLOBAL: stillgelegt (G-05) — nicht geprüft`). This is read-only reporting of the 4.A
+   invariants — it heals nothing:
    - Flag global entries missing `scope` / `valid_from` / `source_projects` / `lifecycle`
      (un-migrated → name the count; heals via `migrate-global-schema-4A.sh`).
    - Count `active` global entries with `|source_projects| < 2` → "promotion-gate violation"

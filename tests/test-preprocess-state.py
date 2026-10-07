@@ -82,6 +82,20 @@ def main():
         ids = [t.get("id") for t in state["open_tasks"]]
         check("open task listed", "T1" in ids, str(ids))
         check("done task excluded", "T2" not in ids, str(ids))
+        # 5.2.1 review: apply_open_tasks closes with 'closed', real stores also carry
+        # 'cancelled' and 'deferred' - the night run listed all of them as open items.
+        tasks = [{"id": "T1", "title": "open", "status": "open"},
+                 {"id": "T2", "title": "blocked", "status": "blocked"},
+                 {"id": "T3", "title": "no status"},
+                 {"id": "T4", "title": "done", "status": "done"},
+                 {"id": "T5", "title": "closed", "status": "closed"},
+                 {"id": "T6", "title": "cancelled", "status": "cancelled"},
+                 {"id": "T7", "title": "deferred", "status": "deferred"}]
+        with open(os.path.join(mem, "context", "open-tasks.json"), "w", encoding="utf-8") as f:
+            json.dump(tasks, f)
+        state = json.loads(run([mem], cwd=tmp).stdout)
+        ids = [t.get("id") for t in state["open_tasks"]]
+        check("closed/cancelled/deferred are not open", ids == ["T1", "T2", "T3"], str(ids))
 
         # 3b. Learnings citing a pattern id that patterns.json does not hold
         os.makedirs(os.path.join(mem, "patterns"), exist_ok=True)

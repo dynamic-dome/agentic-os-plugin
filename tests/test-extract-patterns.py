@@ -283,13 +283,67 @@ check(rc == 0 and out["dry_run"] is True, "dry-run exits 0 and says so")
 check(read(mem, "patterns/patterns.json") == before, "dry-run leaves patterns.json unchanged")
 check(out["tally"]["patterns_updated"] == 1, "dry-run still reports what it would do")
 
-# --- 14. corrupt patterns.json is quarantined, not fatal --------------------
+# --- 14. an unreadable store file aborts the run, it is never emptied --------
+# 5.2.1: the old quarantine renamed patterns.json (also on --dry-run)
+# and the run continued on an empty catalog.
 mem = make_mem(errors=errors)
 write(mem, "patterns/patterns.json", "{ kaputt")
+for extra in (("--update", "--dry-run"), ("--update",)):
+    rc, out = run(mem, *extra)
+    check(rc == 2 and read(mem, "patterns/patterns.json") == "{ kaputt"
+          and not os.path.exists(os.path.join(mem, "patterns/patterns.json.corrupt.bak")),
+          f"corrupt patterns.json: exit 2, file untouched, no quarantine ({' '.join(extra)}, rc={rc})")
+check("patterns/patterns.json" in str(out.get("error", "")), "the error names the unreadable file")
+
+# --- 14b. a UTF-8 BOM is not corruption --------------------------------------
+mem = make_mem(errors=errors, patterns=existing)
+raw = open(os.path.join(mem, "patterns", "patterns.json"), "rb").read()
+with open(os.path.join(mem, "patterns", "patterns.json"), "wb") as fh:
+    fh.write(b"\xef\xbb\xbf" + raw)
 rc, out = run(mem, "--update")
-check(rc == 0, "corrupt patterns.json does not abort the run")
-check(os.path.exists(os.path.join(mem, "patterns/patterns.json.corrupt.bak")),
-      "corrupt patterns.json quarantined as .corrupt.bak")
+check(rc == 0 and [p["id"] for p in load(mem, "patterns/patterns.json")] == [p["id"] for p in existing],
+      f"BOM patterns.json keeps its catalog (rc={rc})")
+
+# --- 14c. ids in pattern archives are taken ----------------------------------
+# AI store 2026-10-07: live holds only P007, P008-P019 sit in archives - the next
+# new pattern must not be P008 again (duplicate ids abort the Atlas rebuild).
+mem = make_mem(errors=errors)
+put(mem, "patterns/patterns-archive-2026-10.json", [{"id": "P001"}, {"id": "P008"}])
+rc, props_out = run(mem, "--update")
+key = props_out["proposals"][0]["cluster_key"]
+rc, out = run(mem, "--apply", plan={"patterns": [{
+    "cluster_key": key, "description": "Nach dem Archiv", "recommendation": "r", "severity": "minor",
+}]})
+check(rc == 0 and [p["id"] for p in load(mem, "patterns/patterns.json")] == ["P009"],
+      f"new pattern skips ids held by archives (got {[p['id'] for p in load(mem, 'patterns/patterns.json')]})")
+
+# --- 14e. an iteration log in a legacy encoding ends with a JSON error --------
+# Codex verifier 5.2.1: UnicodeDecodeError escaped the handler (traceback, exit 1).
+mem = make_mem(errors=errors, patterns=existing)
+os.makedirs(os.path.join(mem, "iterations"), exist_ok=True)
+with open(os.path.join(mem, "iterations", "iteration-log.md"), "wb") as fh:
+    fh.write("# Iteration Log\n\n## 2026-01-01 — fix: alt\n".encode("cp1252"))
+before = read(mem, "patterns/patterns.json")
+rc, out = run(mem, "--update")
+check(rc == 2 and out.get("ok") is False and read(mem, "patterns/patterns.json") == before,
+      f"non-UTF-8 iteration log -> exit 2 with JSON, catalog untouched (rc={rc}, {str(out)[:120]})")
+
+# --- 14d. a broken archive only blocks a run that assigns an id ---------------
+mem = make_mem(errors=errors, patterns=existing)
+write(mem, "patterns/patterns-archive-2026-09.json", '[{"id": "P0')
+rc, out = run(mem, "--refresh")
+check(rc == 0, f"--refresh is not blocked by an unreadable archive (rc={rc})")
+mem = make_mem(errors=errors)
+write(mem, "patterns/patterns-archive-2026-09.json", '[{"id": "P0')
+rc, props_out = run(mem, "--update")
+key = props_out["proposals"][0]["cluster_key"]
+before = read(mem, "patterns/patterns.json") if os.path.exists(os.path.join(mem, "patterns", "patterns.json")) else None
+rc, out = run(mem, "--apply", plan={"patterns": [{
+    "cluster_key": key, "description": "Neu trotz Archivbruch", "recommendation": "r", "severity": "minor",
+}]})
+after = read(mem, "patterns/patterns.json") if os.path.exists(os.path.join(mem, "patterns", "patterns.json")) else None
+check(rc == 2 and "unreadable" in str(out.get("error", "")) and after == before,
+      f"--apply that needs a new id stops on an unreadable archive, nothing written (rc={rc})")
 
 # --- 15. --refresh regenerates patterns.md even with nothing to change ------
 # Found by running the script against a copy of the real store: 10 errors formed

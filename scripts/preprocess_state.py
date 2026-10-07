@@ -203,6 +203,12 @@ def validation_errors(mem):
     return errors
 
 
+# Statuses that end a task. apply_open_tasks closes with "closed", older stores use
+# "done", and real stores also carry "cancelled" and "deferred" (5.2.1 review: the
+# night run listed all of them as open items). Unknown statuses stay visible.
+CLOSED_TASK_STATUSES = frozenset({"done", "closed", "cancelled", "deferred"})
+
+
 def open_tasks(mem):
     text = read_text(os.path.join(mem, "context", "open-tasks.json"))
     if not text:
@@ -215,7 +221,7 @@ def open_tasks(mem):
     out = []
     if isinstance(tasks, list):
         for t in tasks:
-            if isinstance(t, dict) and t.get("status") != "done":
+            if isinstance(t, dict) and t.get("status") not in CLOSED_TASK_STATUSES:
                 out.append({"id": t.get("id", ""), "title": t.get("title", ""),
                             "status": t.get("status", "")})
     return out

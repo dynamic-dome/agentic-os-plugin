@@ -140,20 +140,130 @@ def _p(mem: str, rel: str, via: str | None = None) -> str:
 
 
 def load_json(mem: str, rel: str, default, via: str | None = None):
+    """Read a store file. Missing -> default. Unreadable -> PlanError, and the
+    file stays exactly as it is.
+
+    5.2.1: the former quarantine contract renamed an unreadable file
+    to .corrupt.bak - even on --dry-run - and the run then wrote a store holding
+    only the new rows, ids restarting at L1, exit 0, no warning. A UTF-8 BOM
+    (PowerShell `Set-Content -Encoding utf8`) was enough to trigger it. A BOM is
+    now simply accepted; the next write drops it. Repairing a really broken file
+    is an owner step (/agentic-os:maintain Step 2), never a side effect of a
+    wrap-up. `via` stays in the signature for call-site symmetry: reading needs
+    no ownership, and this function no longer mutates anything.
+    """
     path = os.path.join(mem, rel)
     if not os.path.exists(path):
         return default
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8-sig") as fh:
             return json.load(fh)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        # Error Handling contract: quarantine, do not crash the whole wrap-up.
-        # Route the rename through _p() so quarantining is covered by the same
-        # guard as every other mutation - otherwise this would be a second,
-        # unguarded write path into the memory dir.
-        guarded = _p(mem, rel, via)
-        os.replace(guarded, guarded + ".corrupt.bak")
-        return default
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise PlanError(f"{rel} is not valid JSON ({e}) - nothing was written; "
+                        f"repair it or run /agentic-os:maintain (Step 2)")
+
+
+# Every JSON store file an applier reads, with the top-level type the appliers
+# expect. main() checks them all BEFORE the first write: the appliers run in
+# sequence, so a problem found by a later applier would otherwise leave the
+# iterations and decisions of the same plan already written.
+STORE_JSON = {
+    "iterations/errors.json": list, "working/current-session.json": dict,
+    "context/decisions.json": list, "learnings/learnings.json": list,
+    "working/user-candidates.json": list, "identity/user-changelog.json": list,
+    "context/open-tasks.json": list,
+}
+
+
+def _check_utf8(mem: str, rel: str) -> None:
+    path = os.path.join(mem, rel)
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as fh:
+            fh.read()
+    except UnicodeDecodeError as e:
+        raise PlanError(f"{rel} is not UTF-8 ({e}) - nothing was written; repair the encoding")
+
+
+def read_dirty_file(mem: str, name: str):
+    """Strict read of one working/dirty-*.json: un-readable evidence stops the run -
+    a marker written over a corrupt dirty file would destroy the only record that
+    work was left un-consolidated (Codex review of 1e5c504)."""
+    try:
+        with open(os.path.join(mem, "working", name), encoding="utf-8-sig") as fh:
+            return json.load(fh)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise PlanError(
+            f"working/{name} is unreadable ({e}); refusing to consolidate over "
+            f"un-consolidated work - fix or remove the file and re-run") from e
+
+
+def preflight_readable(mem: str, plan: dict | None = None) -> None:
+    """Everything this plan will read must be readable before the first byte is
+    written (5.2.1 review): live stores incl. their top-level type, the archives of
+    every family that gets a new id, the text files the plan appends to, and the
+    dirty files a consolidating plan consumes. Only what the plan needs - a broken
+    learnings archive must not block a summary-only run."""
+    plan = plan or {}
+    missing = object()  # a file holding JSON null exists - it must not pass as "missing"
+    for rel, kind in STORE_JSON.items():
+        data = load_json(mem, rel, missing)
+        if data is not missing and not isinstance(data, kind):
+            raise PlanError(f"{rel} holds a JSON {type(data).__name__} at top level, expected "
+                            f"a {kind.__name__} - nothing was written; repair it or run "
+                            f"/agentic-os:maintain (Step 2)")
+    spec = plan.get("open_tasks") or {}
+    if plan.get("iterations"):
+        archived_rows(mem, "iterations/errors.json")
+        _check_utf8(mem, "iterations/iteration-log.md")
+    if plan.get("decisions"):
+        archived_rows(mem, "context/decisions.json")
+    if plan.get("learnings"):
+        archived_rows(mem, "learnings/learnings.json")
+    if spec.get("add"):
+        archived_rows(mem, "context/open-tasks.json")
+    if "user_candidates" in plan or plan.get("consolidate"):
+        _check_utf8(mem, "identity/user.md")
+    if plan.get("soul_candidates"):
+        _check_utf8(mem, "identity/soul-candidates.md")
+    if plan.get("consolidate"):
+        work = os.path.join(mem, "working")
+        if os.path.isdir(work):
+            for name in sorted(os.listdir(work)):
+                if name.startswith("dirty-") and name.endswith(".json"):
+                    read_dirty_file(mem, name)
+
+
+def archived_rows(mem: str, rel: str) -> list:
+    """Rows of the archive siblings of a store file - used ONLY to reserve ids.
+
+    maintain moved rows to `{stem}-archive-*.json` (also `{stem}-archive.json` and
+    the misnamed `{name}-archive-*.json`). Re-issuing an archived id makes two
+    records share one id as soon as the archive is restored, and the Atlas rebuild
+    aborts on duplicate ids. An unreadable archive raises: then the ids cannot be
+    guaranteed unique.
+    """
+    folder, name = os.path.split(os.path.join(mem, rel))
+    stem = os.path.splitext(name)[0]
+    rows: list = []
+    if not os.path.isdir(folder):
+        return rows
+    for fn in sorted(os.listdir(folder)):
+        if fn == name or not fn.endswith(".json"):
+            continue
+        if not (fn.startswith(stem + "-archive") or fn.startswith(name + "-archive")):
+            continue
+        try:
+            with open(os.path.join(folder, fn), encoding="utf-8-sig") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as e:
+            raise PlanError(f"archive {fn} is unreadable ({e}) - cannot reserve its ids")
+        if isinstance(data, dict):
+            data = next((v for v in data.values() if isinstance(v, list)), [])
+        if isinstance(data, list):
+            rows.extend(r for r in data if isinstance(r, dict))
+    return rows
 
 
 def write_atomic(mem: str, rel: str, text: str, dry: bool, touched: list,
@@ -180,7 +290,7 @@ def write_json(mem: str, rel: str, data, dry: bool, touched: list,
                  dry, touched, via)
 
 
-def next_id(rows, prefix_arg: str, pad: int = 0) -> str:
+def next_id(rows, prefix_arg: str, pad: int = 0, reserved=()) -> str:
     """Continue the id sequence that is ACTUALLY on disk.
 
     The arguments are only a fallback for an empty store. The real files drifted
@@ -212,6 +322,13 @@ def next_id(rows, prefix_arg: str, pad: int = 0) -> str:
         # (Codex review of 1e5c504).
         prefix = max(groups, key=lambda k: (groups[k]["count"], k == prefix_arg, groups[k]["hi"]))
         pad, hi = groups[prefix]["pad"], groups[prefix]["hi"]
+    # Reserved rows (archives) only raise the number inside the chosen family -
+    # they never vote on the family itself, so an archive full of an older id
+    # style ("E1".."E25") cannot fork the live sequence ("err-0nn").
+    for r in reserved:
+        m = pat.match(str(r.get("id", "")))
+        if m and m.group(1) == prefix:
+            hi = max(hi, int(m.group(2)))
     n = hi + 1
     return f"{prefix}{n:0{pad}d}" if pad else f"{prefix}{n}"
 
@@ -323,6 +440,7 @@ def apply_iterations(mem, plan, date, dry, touched, tally):
         log = "# Iteration Log\n"
 
     errors = load_json(mem, "iterations/errors.json", [], via="iterations")
+    err_archive = archived_rows(mem, "iterations/errors.json")
     session = load_json(mem, "working/current-session.json",
                         {"errors_this_session": [], "learnings_draft": []}, via="iterations")
     blocks, new_error_ids, wrote_errors = [], [], False
@@ -349,7 +467,7 @@ def apply_iterations(mem, plan, date, dry, touched, tally):
                 tally["errors_recurred"] += 1
             else:
                 entry = {
-                    "id": next_id(errors, "err-", pad=3),
+                    "id": next_id(errors, "err-", pad=3, reserved=err_archive),
                     "date": date,
                     "category": err.get("category", "runtime"),
                     "tags": list(err.get("tags") or []),
@@ -411,6 +529,7 @@ def apply_decisions(mem, plan, date, dry, touched, tally):
     if not items:
         return
     rows = load_json(mem, "context/decisions.json", [], via="decisions")
+    archive = archived_rows(mem, "context/decisions.json")
     by_id = {str(r.get("id")): r for r in rows}
     # Identity is (title, supersedes), not title alone. Title-only dedup
     # discarded a legitimate replacement that reused its predecessor's title and
@@ -429,7 +548,7 @@ def apply_decisions(mem, plan, date, dry, touched, tally):
             continue
         seen.add(key)
         entry = {
-            "id": next_id(rows, "D-", pad=3),
+            "id": next_id(rows, "D-", pad=3, reserved=archive),
             "date": date,
             "type": it.get("type", "architecture-decision"),
             "title": title,
@@ -456,6 +575,7 @@ def apply_decisions(mem, plan, date, dry, touched, tally):
 def apply_learnings(mem, plan, date, dry, touched, tally):
     items = plan.get("learnings") or []
     rows = load_json(mem, "learnings/learnings.json", [])
+    archive = archived_rows(mem, "learnings/learnings.json") if items else []
     seen = {norm(r.get("text")) for r in rows}
     added = []
     for it in items:
@@ -467,7 +587,7 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
             continue
         seen.add(norm(text))
         entry = {
-            "id": next_id(rows + added, "L"),
+            "id": next_id(rows + added, "L", reserved=archive),
             "date": date,
             "text": text,
             "importance": int(it.get("importance", 3)),
@@ -739,6 +859,7 @@ def apply_open_tasks(mem, plan, date, dry, touched, tally):
     if not add and not close:
         return
     rows = load_json(mem, "context/open-tasks.json", [])
+    archive = archived_rows(mem, "context/open-tasks.json") if add else []
     # Snapshot BEFORE applying closes: a plan that closes T-n and re-adds the
     # same title in one pass is contradictory - treat it as a duplicate rather
     # than silently creating a second row. Re-opening a task closed in an
@@ -759,7 +880,7 @@ def apply_open_tasks(mem, plan, date, dry, touched, tally):
             continue
         open_titles.add(norm(title))
         rows.append({
-            "id": next_id(rows, "T-", pad=3),
+            "id": next_id(rows, "T-", pad=3, reserved=archive),
             "title": title,
             "status": "open",
             "created": date,
@@ -819,18 +940,7 @@ def apply_consolidation(mem, plan, session_id, dry, touched, tally):
         for name in sorted(os.listdir(work)):
             if not (name.startswith("dirty-") and name.endswith(".json")):
                 continue
-            # Strict on purpose: the generic loader would quarantine a corrupt
-            # dirty file, return None and let the run finish with a marker -
-            # destroying the only record that work was left un-consolidated
-            # (Codex review of 1e5c504). Un-readable evidence must stop the run.
-            path = os.path.join(work, name)
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    d = json.load(fh)
-            except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                raise PlanError(
-                    f"working/{name} is unreadable ({e}); refusing to consolidate over "
-                    f"un-consolidated work - fix or remove the file and re-run") from e
+            d = read_dirty_file(mem, name)  # strict: see read_dirty_file
             if not isinstance(d, dict) or not d.get("dirty"):
                 continue
             dirty_files.append((name, d))
@@ -890,11 +1000,11 @@ def main() -> int:
         return 1
 
     if args.render_learnings:
-        # Strict read: unlike load_json (wrap-up's quarantine contract), a render-only
-        # run must never rename the source or project an empty store over a real one.
+        # Strict read: unlike load_json (missing -> default), a render-only run must
+        # never project an empty store over a real one - a missing file is an error too.
         touched: list = []
         try:
-            with open(os.path.join(args.mem, "learnings", "learnings.json"), encoding="utf-8") as fh:
+            with open(os.path.join(args.mem, "learnings", "learnings.json"), encoding="utf-8-sig") as fh:
                 rows = json.load(fh)
             if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
                 raise PlanError("learnings.json is not a JSON list of objects")
@@ -937,6 +1047,7 @@ def main() -> int:
     touched: list = []
 
     try:
+        preflight_readable(args.mem, plan)  # before the FIRST write, not per applier
         validate_plan(args.mem, plan)
         apply_iterations(args.mem, plan, date, args.dry_run, touched, tally)
         apply_decisions(args.mem, plan, date, args.dry_run, touched, tally)
@@ -950,12 +1061,14 @@ def main() -> int:
         apply_session_summary(args.mem, plan, args.dry_run, touched, tally)
         # LAST: marker only after everything else succeeded (Step 9.5 rule 5)
         apply_consolidation(args.mem, plan, session_id, args.dry_run, touched, tally)
-    except (PlanError, OSError) as e:
-        # Both classes mean the same thing to the caller: the run stopped before
+    except (PlanError, OSError, ValueError) as e:
+        # All mean the same thing to the caller: the run stopped before
         # consolidation, so the marker is absent and the dirty flags still say
         # "un-consolidated". Reported as JSON so a harness can branch on it
-        # instead of parsing a traceback.
-        kind = "plan rejected" if isinstance(e, PlanError) else "io error"
+        # instead of parsing a traceback (ValueError: a decode or shape error the
+        # preflight did not foresee).
+        kind = ("plan rejected" if isinstance(e, PlanError)
+                else "io error" if isinstance(e, OSError) else "unreadable input")
         print(json.dumps({"ok": False, "error": f"{kind}: {e}", "files_written": touched,
                           "note": "consolidation marker NOT written - dirty state stays honest"},
                          ensure_ascii=False))

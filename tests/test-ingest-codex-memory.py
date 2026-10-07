@@ -206,6 +206,23 @@ def main():
         p = run([mem, "--codex-memories", codex], cwd=tmp)
         check("invalid store exit 1", p.returncode == 1)
 
+    # 5.2.1: a BOM is not corruption, and ids held by archive files are taken.
+    with tempfile.TemporaryDirectory() as tmp:
+        existing = [{"id": "L3", "date": "2026-08-01", "text": "Old claude learning.", "importance": 3,
+                     "tags": [], "layer": "short-term", "superseded_by": None, "last_relevant": "2026-08-01"}]
+        mem, codex = setup(tmp, existing)
+        store = os.path.join(mem, "learnings", "learnings.json")
+        raw = open(store, "rb").read()
+        with open(store, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + raw)
+        with open(os.path.join(mem, "learnings", "learnings-archive-2026-07.json"), "w", encoding="utf-8") as f:
+            json.dump([{"id": "L20", "text": "archiviert"}], f)
+        p = run([mem, "--codex-memories", codex], cwd=tmp)
+        rows = json.loads(open(store, encoding="utf-8-sig").read())
+        new_ids = [r["id"] for r in rows if r.get("source_agent") == "codex"]
+        check("BOM store is ingested, not rejected", p.returncode == 0 and rows[0]["id"] == "L3", p.stderr[:200])
+        check("new codex ids skip archived ids", new_ids[:1] == ["L21"], str(new_ids))
+
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")
     return 1 if FAILURES else 0

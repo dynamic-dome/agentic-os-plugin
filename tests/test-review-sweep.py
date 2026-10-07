@@ -48,7 +48,11 @@ def main():
             {"id": "L3", "date": "2026-08-20", "text": "fresh", "review_after": "2026-11-18", "superseded_by": None},
             {"id": "L4", "date": "2026-07-01", "text": "old candidate", "bridge_status": "candidate", "superseded_by": None},
             {"id": "L5", "date": "2026-09-01", "text": "new candidate", "bridge_status": "candidate", "superseded_by": None},
-            {"id": "L6", "date": "2026-05-01", "text": "retired", "review_after": "2026-08-01", "status": "retired", "superseded_by": None},
+            {"id": "L6", "date": "2026-05-01", "text": "legacy status retired", "review_after": "2026-08-01", "status": "retired", "superseded_by": None},
+            # 5.2.1: the real field is bridge_status (review_sweep checked a 'status' nobody writes)
+            {"id": "L7", "date": "2026-05-01", "text": "bridge retired", "review_after": "2026-08-01", "bridge_status": "retired", "superseded_by": None},
+            {"id": "L8", "date": "2026-05-01", "text": "owner veto", "review_after": "2026-08-01", "bridge_status": "rejected", "superseded_by": None},
+            {"id": "L9", "date": "2026-05-01", "text": "approved and due", "review_after": "2026-08-01", "bridge_status": "approved", "superseded_by": None},
         ]
         write(os.path.join(mem, "learnings", "learnings.json"), json.dumps(rows))
         native = os.path.join(tmp, "memory")
@@ -62,9 +66,11 @@ def main():
         before = json.dumps(rows)
         p = run([mem, "--native-memory", native, "--report", report, "--today", "2026-09-08"], cwd=tmp)
         check("exit 0", p.returncode == 0, p.stderr[:300])
-        check("summary line", p.stdout.strip() == "review-sweep: due=1 native_stale=1 candidates_stale=1", p.stdout)
+        check("summary line", p.stdout.strip() == "review-sweep: due=2 native_stale=1 candidates_stale=1", p.stdout)
         rep = open(report, encoding="utf-8").read()
-        check("due lists L1 only", "[L1]" in rep and "[L2]" not in rep and "[L6]" not in rep, rep)
+        check("due lists L1 and L9 only", "[L1]" in rep and "[L9]" in rep and "[L2]" not in rep and "[L6]" not in rep, rep)
+        check("bridge_status retired/rejected are not due", "[L7]" not in rep and "[L8]" not in rep, rep)
+        check("footer names no field that does not exist", "status: retired" not in rep, rep[-300:])
         check("native lists orphan-old only", "orphan-old.md" in rep and "orphan-new.md" not in rep and "kept.md" not in rep and "gone.md" not in rep, rep)
         check("candidates lists L4 only", "[L4]" in rep and "[L5]" not in rep, rep)
         check("store untouched", open(os.path.join(mem, "learnings", "learnings.json"), encoding="utf-8").read() == before)

@@ -9,7 +9,7 @@ model: sonnet
 effort: low
 metadata:
   author: agentic-os
-  version: '3.3'
+  version: '3.4'
   part-of: agentic-os
   layer: core
 ---
@@ -199,7 +199,7 @@ Verify these core files exist:
 Missing files → warn user, suggest which skill creates them.
 
 ### JSON Validity Check
-For each JSON file loaded: if parse fails → rename to `{file}.corrupt.bak`, create fresh with default (`[]` or `{}`), warn user.
+For each JSON file loaded: if parse fails → warn the user with file and parse error and suggest `/agentic-os:maintain` (Step 2 is the only repair path). Never rename, recreate or empty the file here — the bootstrap is read-only, and a UTF-8 BOM is not corruption (read as `utf-8-sig`).
 
 ### Scaling Guards (delegated to threshold SSoT)
 Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-thresholds.sh" .agent-memory`. Exit 10 →
@@ -398,7 +398,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/cost-trace.sh" append --mem .agent-memory \
 
 - Missing `session-summary.md`: "No previous session found" — continue
 - Missing `soul.md` or `user.md`: trigger `/agentic-os:init` suggestion
-- Corrupt JSON: backup + recreate + warn
+- Corrupt JSON: warn with file and parse error, point to `/agentic-os:maintain` Step 2 — never rename, recreate or empty it (read-only)
 - Missing `.agent-memory/`: suggest `/agentic-os:init`
 
 ## What NOT to Do

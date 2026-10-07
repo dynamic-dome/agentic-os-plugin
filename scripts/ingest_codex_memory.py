@@ -31,7 +31,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from apply_wrapup import _jaccard, next_id, norm, render_learnings_md  # noqa: E402
+from apply_wrapup import PlanError, _jaccard, archived_rows, next_id, norm, render_learnings_md  # noqa: E402
 
 SECTIONS = {"user preferences": "feedback", "general tips": "learning"}
 ADHOC = "[ad-hoc note]"
@@ -67,7 +67,7 @@ def parse_summary(text):
 def load_rows(path):
     if not os.path.isfile(path):
         return []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:  # a BOM is not corruption (5.2.1)
         data = json.load(f)
     return data if isinstance(data, list) else data.get("learnings", [])
 
@@ -96,7 +96,8 @@ def main(argv):
     store = os.path.join(a.mem_dir, "learnings", "learnings.json")
     try:
         rows = load_rows(store)
-    except (OSError, ValueError) as exc:
+        reserved = archived_rows(a.mem_dir, "learnings/learnings.json")  # archived ids are taken
+    except (OSError, ValueError, PlanError) as exc:
         print(f"codex-ingest: learnings.json unreadable: {exc}", file=sys.stderr)
         return 1
     with open(summary, "r", encoding="utf-8", errors="replace") as f:
@@ -161,7 +162,7 @@ def main(argv):
             rephrased += 1
             continue
         entry = {
-            "id": next_id(rows + new, "L"), "date": today, "text": text, "importance": 2,
+            "id": next_id(rows + new, "L", reserved=reserved), "date": today, "text": text, "importance": 2,
             "tags": ["codex-native", kind] + (["ad-hoc"] if adhoc else []),
             "layer": "short-term", "superseded_by": None, "last_relevant": today,
             "derived_from": [prov],

@@ -116,6 +116,11 @@ def main(argv):
     if not os.path.isdir(a.global_dir):
         print(f"global-decay: not a directory: {a.global_dir}", file=sys.stderr)
         return 2
+    # G-05 (2026-10-05): the global layer is decommissioned - nothing reads it, so
+    # decaying it only rewrites dead files. The marker file is the switch.
+    if os.path.isfile(os.path.join(a.global_dir, "STILLGELEGT.md")):
+        print(f"global-decay: skipped (stillgelegt: {os.path.join(a.global_dir, 'STILLGELEGT.md')})")
+        return 0
 
     # Read everything first: one unreadable file must not leave the other half-applied.
     stores = []

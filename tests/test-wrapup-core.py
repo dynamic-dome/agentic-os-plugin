@@ -426,6 +426,22 @@ def test_core():
     finally:
         cleanup(env)
 
+    # 5.2.1 review: a store text file in a legacy encoding must end the night run with
+    # a JSON error (rc 2, reported per project), never with a traceback and empty stdout.
+    env = setup_core()
+    try:
+        log = os.path.join(env["mem"], "iterations", "iteration-log.md")
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        with open(log, "wb") as fh:
+            fh.write("# Iteration Log\n\n## 2026-01-01 — fix: alt\n".encode("cp1252"))
+        rc, out = run_core(env)
+        check(rc == 2 and out.get("ok") is False and "_raw" not in out,
+              f"non-UTF-8 iteration log -> exit 2 with JSON, no traceback ({rc}, {str(out)[:160]})")
+        check(not os.path.exists(os.path.join(env["mem"], "consolidation-marker.json")),
+              "non-UTF-8 iteration log: no marker")
+    finally:
+        cleanup(env)
+
     env = setup_core()
     try:
         env_inside = dict(env, central=os.path.join(env["mem"], "context"))

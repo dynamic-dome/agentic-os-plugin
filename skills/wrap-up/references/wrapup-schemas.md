@@ -78,7 +78,8 @@ Guarantees worth relying on:
   `soul.md` are refused outright. `iteration-log.md`, `errors.json`,
   `current-session.json` and `decisions.json` are reachable ONLY through their
   named applier (`iterations` / `decisions`) — the generic write path still
-  refuses them, and so does the corrupt-file quarantine route.
+  refuses them. An unreadable store file is never renamed or emptied: the run
+  stops with exit 2 before the first write (5.2.1).
 - A `supersedes` pointing at an unknown decision id rejects the WHOLE plan
   before the first byte is written, so a rejected plan never leaves a
   half-written iteration log behind.

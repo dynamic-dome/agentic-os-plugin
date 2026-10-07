@@ -103,9 +103,13 @@ BOOTSTRAP_GATES = [
         ["sync_enabled` is false"],                      # trigger: config off
         ["skip this step silently"],                     # action: skip, no error
     ]},
+    # 5.2.1: the gate flipped - the bootstrap is read-only and the old "rename to
+    # .corrupt.bak + recreate" emptied stores (a BOM sufficed). It now warns and
+    # points to the one repair path.
     {"name": "json-repair", "clauses": [
-        ["rename to"],                                   # trigger: corrupt JSON
-        [".corrupt.bak"],                                # action: backup + recreate
+        ["parse fails"],                                 # trigger: corrupt JSON
+        ["Never rename"],                                # action: no rename / recreate
+        ["Step 2 is the only repair path"],              # action: route to maintain
     ]},
     {"name": "active-warning-thresholds", "clauses": [
         ["confidence >= 0.7"],                           # trigger: pattern confidence

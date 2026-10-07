@@ -13,6 +13,12 @@ Bidirectional sync between local `.agent-memory/` and `~/.claude-memory/global/`
 **Never auto-triggered.** This is a command: it runs only when the user types
 `/agentic-os:sync-context [pull|push|sync]`; no skill or hook may call it.
 
+**Decommissioned layer (G-05, 2026-10-05) — check FIRST, before Prerequisites:** if
+`~/.claude-memory/global/STILLGELEGT.md` exists, print
+`sync-context: die globale Schicht ist stillgelegt (STILLGELEGT.md, G-05) — kein Sync, nichts geschrieben`
+and stop. Do not create, read for promotion or write anything under `~/.claude-memory/`.
+Cross-project retrieval goes through the Agent-Memory-Atlas (`memory_search_tool`).
+
 ## Prerequisites (Auto-Setup)
 
 Before any sync operation, ensure the global memory infrastructure exists.

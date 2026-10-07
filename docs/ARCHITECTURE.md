@@ -38,7 +38,7 @@ session-bootstrap (read-only)  →  WORK PHASE  →  wrap-up (Handoff + Learning
 
 ### Threshold-SSoT
 - **Datei(en):** `scripts/memory-thresholds.sh`
-- **Aufgabe:** EINZIGE Definition aller Skalierungs-/Archiv-Schwellen; exit 10 bei Ueberschreitung.
+- **Aufgabe:** EINZIGE Definition aller Skalierungs-Schwellen; exit 10 bei Ueberschreitung. Seit 5.2.1 melden die Schwellen nur — nichts wird nach Anzahl oder Alter archiviert (D-021).
 - **Abhaengigkeiten:** Konsumiert von session-bootstrap (Step 3), wrap-up (Step 9), /agentic-os:maintain (Step 1). Skill-Bodies nennen keine Zahlen.
 
 ### Salience-Ranking

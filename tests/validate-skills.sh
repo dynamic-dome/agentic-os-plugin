@@ -524,6 +524,59 @@ if [ -f "$MM_FILE" ]; then
         fail "maintain: global decay missing — must run scripts/global_decay.py (-0.1 per 90 days booked once via decay_steps_applied, floor 0.3), set lifecycle:archived past 365d, never hard-delete"
     fi
 fi
+# --- 5.2.1: maintain only reports (D-021, owner decision 2026-10-06, widened 2026-10-07) ---
+# Count-based archiving took long-term and importance>=4 learnings and ready patterns out
+# of retrieval (archive files are invisible to the Atlas). Nothing in maintain may move
+# store entries any more, and the dirty-marker GC runs as preview until the harvest ledger.
+echo ""
+echo "-- maintain: report only, never moves store entries (D-021) --"
+if [ -f "$MM_FILE" ]; then
+    if grep -qiE "keep the newest|move the rest|move to .*-archive|→ move" "$MM_FILE"; then
+        fail "maintain: still moves store entries into archive files — D-021 allows reporting only"
+    else
+        pass "maintain: no instruction moves store entries into archive files"
+    fi
+    if grep -qE "gc_dirty_markers\.py.*--apply" "$MM_FILE"; then
+        fail "maintain: dirty-marker GC still runs with --apply before the harvest ledger exists"
+    else
+        pass "maintain: dirty-marker GC runs as preview only"
+    fi
+    if grep -qE "\(no-archive\)" "$MM_FILE" && grep -qE "D-021" "$MM_FILE"; then
+        pass "maintain: no-archive rule pinned ((no-archive) marker + D-021)"
+    else
+        fail "maintain: (no-archive) marker or D-021 reference missing"
+    fi
+fi
+for f in commands/sync-context.md commands/memory-audit.md; do
+    if grep -q "STILLGELEGT.md" "$PLUGIN_ROOT/$f"; then
+        pass "$f honours the decommissioned global layer (STILLGELEGT.md)"
+    else
+        fail "$f does not check ~/.claude-memory/global/STILLGELEGT.md (G-05)"
+    fi
+done
+# The guard only helps if it runs before the auto-setup creates the global store.
+SC_GUARD=$(grep -n "STILLGELEGT.md" "$PLUGIN_ROOT/commands/sync-context.md" | head -1 | cut -d: -f1)
+SC_PREREQ=$(grep -n "^## Prerequisites" "$PLUGIN_ROOT/commands/sync-context.md" | head -1 | cut -d: -f1)
+if [ -n "$SC_GUARD" ] && [ -n "$SC_PREREQ" ] && [ "$SC_GUARD" -lt "$SC_PREREQ" ]; then
+    pass "sync-context checks STILLGELEGT.md before its auto-setup"
+else
+    fail "sync-context STILLGELEGT check (line ${SC_GUARD:-none}) must precede ## Prerequisites (line ${SC_PREREQ:-none})"
+fi
+
+# 5.2.1 review: the rule binds every ACTIVE doc that steers a model or describes the
+# flow - a rollback in wrap-up, bootstrap or references stayed green before.
+echo ""
+echo "-- active docs: no count-based archiving, no silent reset (D-021) --"
+DOC_HITS=$(grep -n -i -E "keep (the )?newest|archive rest|move the rest|backup \+ recreate|create fresh|maintain archives|rotation is|gc_dirty_markers\.py.*--apply" \
+    "$PLUGIN_ROOT"/skills/*/SKILL.md "$PLUGIN_ROOT"/skills/*/references/*.md "$PLUGIN_ROOT"/skills/DEPENDENCIES.md \
+    "$PLUGIN_ROOT"/references/*.md "$PLUGIN_ROOT"/commands/maintain.md "$PLUGIN_ROOT"/commands/status.md \
+    "$PLUGIN_ROOT"/commands/init.md "$PLUGIN_ROOT"/commands/log.md "$PLUGIN_ROOT"/commands/memory-audit.md 2>/dev/null)
+if [ -z "$DOC_HITS" ]; then
+    pass "no active doc archives by count, resets a store or deletes dirty markers"
+else
+    fail "active docs still prescribe archiving/reset: $(echo "$DOC_HITS" | head -5 | tr '\n' ' ')"
+fi
+
 # The decay formula has ONE home (global_decay.py). A second copy in the sourceable
 # helpers would let the prose path decay from the stored value again (2026-10-01 bug).
 if grep -qE "^apply_decay\(\)" "$PLUGIN_ROOT/scripts/global-schema.sh" 2>/dev/null; then

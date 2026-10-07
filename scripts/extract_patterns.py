@@ -67,6 +67,9 @@ import re
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import apply_wrapup as _aw  # noqa: E402  (archived_rows: one archive rule for all writers)
+
 # This script owns patterns/ and nothing else. Every other memory file belongs
 # to another writer (apply_wrapup.py, the skills, the bootstrap gate).
 ALLOWED_PREFIX = "patterns/"
@@ -119,16 +122,29 @@ def _p(mem: str, rel: str) -> str:
 
 
 def load_json(mem: str, rel: str, default):
+    """Missing -> default. Unreadable -> PlanError, the file stays as it is.
+
+    5.2.1: the former quarantine renamed the file - also on
+    --dry-run - and the run continued on an empty catalog. A UTF-8 BOM is
+    accepted; repair is an owner step (/agentic-os:maintain Step 2).
+    """
     path = os.path.join(mem, rel)
     if not os.path.exists(path):
         return default
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8-sig") as fh:
             return json.load(fh)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        guarded = _p(mem, rel)
-        os.replace(guarded, guarded + ".corrupt.bak")
-        return default
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise PlanError(f"{rel} is not valid JSON ({e}) - nothing was written; "
+                        f"repair it or run /agentic-os:maintain (Step 2)")
+
+
+def archived_pattern_rows(mem: str) -> list:
+    """Archived patterns - their ids are taken (see apply_wrapup.archived_rows)."""
+    try:
+        return _aw.archived_rows(mem, "patterns/patterns.json")
+    except _aw.PlanError as e:
+        raise PlanError(str(e))
 
 
 def write_atomic(mem: str, rel: str, text: str, dry: bool, touched: list) -> None:
@@ -163,7 +179,7 @@ def jaccard(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
-def next_pattern_id(rows) -> str:
+def next_pattern_id(rows, reserved=()) -> str:
     """Continue the dominant id family (patterns.json holds one 'G-pattern-005'
     alongside 'P0nn' - a single outlier must not hijack the sequence)."""
     pat = re.compile(r"^(.*?)(\d+)$")
@@ -178,18 +194,26 @@ def next_pattern_id(rows) -> str:
         g["hi"] = max(g["hi"], int(digits))
         g["pad"] = max(g["pad"], len(digits) if len(digits) > 1 else 0)
     if not groups:
-        return "P001"
-    # On a frequency tie prefer the canonical "P" family, otherwise a single
-    # foreign id ("G-900" next to one "P001") captures the sequence.
-    prefix = max(groups, key=lambda k: (groups[k]["count"], k == "P", groups[k]["hi"]))
-    pad, hi = groups[prefix]["pad"], groups[prefix]["hi"]
+        prefix, pad, hi = "P", 3, 0  # empty catalog: "P001" unless an archive holds it
+    else:
+        # On a frequency tie prefer the canonical "P" family, otherwise a single
+        # foreign id ("G-900" next to one "P001") captures the sequence.
+        prefix = max(groups, key=lambda k: (groups[k]["count"], k == "P", groups[k]["hi"]))
+        pad, hi = groups[prefix]["pad"], groups[prefix]["hi"]
+    # Archived ids only raise the number inside the live family, never vote on it.
+    if callable(reserved):
+        reserved = reserved()
+    for r in reserved:
+        m = pat.match(str(r.get("id", "")))
+        if m and m.group(1) == prefix:
+            hi = max(hi, int(m.group(2)))
     n = hi + 1
     return f"{prefix}{n:0{pad}d}" if pad else f"{prefix}{n}"
 
 
 # ------------------------------------------------------------- normalization
 
-def normalize_legacy(patterns, tally) -> None:
+def normalize_legacy(patterns, tally, reserved=()) -> None:
     """One-shape convergence (pattern-schema-canon). In place, never a parallel entry."""
     for p in patterns:
         changed = False
@@ -220,7 +244,7 @@ def normalize_legacy(patterns, tally) -> None:
             tally["patterns_normalized"] += 1
     for p in patterns:
         if p.get("id") is None:
-            p["id"] = next_pattern_id([q for q in patterns if q.get("id")])
+            p["id"] = next_pattern_id([q for q in patterns if q.get("id")], reserved)
 
 
 # ---------------------------------------------------------------- clustering
@@ -288,8 +312,8 @@ def parse_iteration_log(mem):
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-    except OSError:
-        return []
+    except FileNotFoundError:
+        return []  # no log yet; any other read error must stop the run (main: exit 2)
     iterations, current = [], None
     for line in text.splitlines():
         m = ITER_HEADER_RE.match(line)
@@ -580,7 +604,7 @@ def is_skill_candidate(p) -> bool:
             and float(p.get("confidence", 0)) >= SKILL_CANDIDATE_CONFIDENCE)
 
 
-def new_pattern(cluster, spec, patterns):
+def new_pattern(cluster, spec, patterns, reserved=()):
     description = (spec.get("description") or "").strip()
     recommendation = (spec.get("recommendation") or "").strip()
     if not description:
@@ -588,7 +612,7 @@ def new_pattern(cluster, spec, patterns):
     if not recommendation:
         raise PlanError(f"pattern for cluster {cluster['cluster_key']} without 'recommendation'")
     entry = {
-        "id": next_pattern_id(patterns),
+        "id": next_pattern_id(patterns, reserved),
         "type": spec.get("type", cluster["type"]),
         "description": description,
         "evidence": list(cluster["evidence"]),
@@ -685,6 +709,14 @@ def main() -> int:
     try:
         errors = load_json(args.mem, "iterations/errors.json", [])
         patterns = load_json(args.mem, "patterns/patterns.json", [])
+        # Archived ids are read lazily - only a run that assigns a NEW id needs them,
+        # so a broken archive cannot block --refresh or an --update without new ids.
+        _archived: list = []
+
+        def reserved():
+            if not _archived:
+                _archived.append(archived_pattern_rows(args.mem))
+            return _archived[0]
         iterations = parse_iteration_log(args.mem)
         # T-019: iterations lift the guard too - the error-only check was why
         # error-free sessions starved the pattern pipeline.
@@ -696,7 +728,7 @@ def main() -> int:
                               "unmatched_errors": [], "skill_candidates": []}, indent=2))
             return 0
 
-        normalize_legacy(patterns, tally)
+        normalize_legacy(patterns, tally, reserved)
         clusters, unmatched = cluster_errors(errors)
         clusters += cluster_iterations(iterations)
 
@@ -735,7 +767,7 @@ def main() -> int:
                     update_pattern(twin, cluster, tally)
                     matched.append(key)
                 else:
-                    patterns.append(new_pattern(cluster, spec, patterns))
+                    patterns.append(new_pattern(cluster, spec, patterns, reserved))
                     tally["patterns_added"] += 1
                 proposals = [p for p in proposals if p["cluster_key"] != key]
 
@@ -746,8 +778,9 @@ def main() -> int:
             write_json(args.mem, "patterns/patterns.json", patterns, args.dry_run, touched)
             write_atomic(args.mem, "patterns/patterns.md",
                          render_patterns_md(patterns, date), args.dry_run, touched)
-    except (PlanError, OSError) as e:
-        kind = "plan rejected" if isinstance(e, PlanError) else "io error"
+    except (PlanError, OSError, ValueError) as e:  # ValueError: decode/shape (5.2.1)
+        kind = ("plan rejected" if isinstance(e, PlanError)
+                else "io error" if isinstance(e, OSError) else "unreadable input")
         print(json.dumps({"ok": False, "error": f"{kind}: {e}", "files_written": touched},
                          ensure_ascii=False))
         return 2

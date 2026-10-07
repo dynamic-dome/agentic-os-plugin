@@ -188,6 +188,16 @@ def main():
         check(p.returncode == 1 and raw(d, "patterns.json") == before,
               f"unreadable JSON -> exit 1 and nothing written ({p.returncode})")
 
+    # 11. a decommissioned layer is never written (G-05, STILLGELEGT.md since 2026-10-05)
+    with tempfile.TemporaryDirectory() as d:
+        put(d, "learnings.json", [entry("OLD", 0.9, "2025-01-01")])
+        with open(os.path.join(d, "STILLGELEGT.md"), "w", encoding="utf-8") as f:
+            f.write("# Stillgelegt\n")
+        before = raw(d, "learnings.json")
+        p = run(d, "--apply", "--today", "2026-10-07")
+        check(p.returncode == 0 and raw(d, "learnings.json") == before and "stillgelegt" in p.stdout,
+              f"STILLGELEGT.md -> exit 0, nothing written, says so ({p.returncode}, {p.stdout.strip()[:120]})")
+
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")
     return 1 if FAILURES else 0

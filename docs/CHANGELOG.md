@@ -4,6 +4,56 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-07] Release v5.2.1 — Verluste stoppen: nur melden, kein stilles Leeren, IDs ueber Archiven
+
+PATCH. Ergebnis einer Analyse des Gedaechtnis-Lebenszyklus am 2026-10-07 (Owner-Entscheid D-021).
+(1) **Nichts wird mehr nach Anzahl oder Alter verschoben.** `/agentic-os:maintain` Step 3 hielt "die
+neuesten N" und verschob den Rest in `*-archive-*`-Dateien; Step 4 archivierte Patterns (auch `ready`) und
+superseded Decisions. Archivdateien liest der Atlas nicht - so fielen Langzeit- und importance>=4-Learnings
+aus dem Abruf. maintain meldet jetzt nur noch (Marker `(no-archive)`), `memory-thresholds.sh` formuliert jede
+Zeile als "report only", der Dirty-Marker-GC laeuft in maintain nur als Vorschau. Die Learnings-Decke
+1000/2000 aus ed6a957 (Owner-Entscheid 2026-10-06) ist Teil dieses Release - sie stand bis dahin nur lokal
+und in einem von Hand gepatchten Cache.
+(2) **Der einzige Schreiber leerte eine unlesbare Datei still.** `apply_wrapup.load_json` benannte eine
+nicht parsebare Store-Datei in `.corrupt.bak` um - auch bei `--dry-run` - und der Lauf schrieb danach eine
+`learnings.json` nur mit den neuen Zeilen, IDs ab L1, Exit 0, ohne Warnung. Ein UTF-8-BOM genuegte
+(an einer Temp-Kopie reproduziert). Jetzt: `utf-8-sig` (BOM ist keine Korruption); eine wirklich kaputte
+Datei bricht den Lauf mit Exit 2 VOR dem ersten Schreibzugriff ab (alle Store-Dateien werden vorab
+gelesen), die Datei bleibt unangetastet. Gleiches fuer `extract_patterns.py`; `ingest_codex_memory.py`
+liest BOM-tolerant. session-bootstrap und wrap-up beschreiben keine Umbenennung mehr - Reparatur nur ueber
+maintain Step 2.
+(3) **IDs in Archiven sind vergeben.** `next_id` (Learnings, Decisions, Errors, Tasks), der Codex-Ingest und
+`next_pattern_id` zaehlten nur die Live-Datei; im AI-Store waere als naechstes P008 vergeben worden, das
+archiviert schon existiert. Archive (`{stem}-archive-*.json`, `{stem}-archive.json`, falsch benannte
+`{name}-archive-*.json`) heben jetzt die Nummer innerhalb der Live-Familie an, stimmen aber nicht ueber die
+Familie ab. Voraussetzung fuer eine spaetere Rueckholung ohne doppelte IDs.
+(4) `review_sweep.py` pruefte `status` statt `bridge_status`: zurueckgezogene (retired) und vom Owner
+abgelehnte (rejected, Veto-Gedaechtnis) Eintraege standen in der Pruefliste; die Fusszeile empfahl ein Feld,
+das kein Leser kennt.
+(5) Die stillgelegte globale Schicht (`~/.claude-memory/global/STILLGELEGT.md`, G-05) wird nicht mehr
+beschrieben: `global_decay.py` endet dort mit "skipped (stillgelegt)", `sync-context` und `memory-audit`
+pruefen die Datei zuerst.
+Adversariales Review vor dem Push (9 Agenten, jeder Befund gegengeprueft), eingearbeitet: Die Vorab-Pruefung
+las nur das Parsen der Live-Stores - jetzt auch Top-Level-Typ, die Archive genau der Familien, fuer die der
+Plan IDs vergibt, die UTF-8-Lesbarkeit der Textdateien, die der Plan anhaengt, und bei `consolidate` die
+Dirty-Dateien (vorher konnte ein Lauf Iterationen schreiben und dann abbrechen). Ein kaputtes Archiv blockiert
+nur noch Laeufe, die eine ID vergeben (`extract_patterns --refresh` liest Archive gar nicht mehr). `main()` und
+der Nachtlauf (`wrapup_core`) fangen Dekodier-/Formfehler und liefern JSON statt Traceback.
+`preprocess_state.open_tasks` zaehlte `closed`, `cancelled` und `deferred` als offen - der Nachtlauf schrieb sie
+als offene Punkte in Summary, Handoff und Board (aelter als 5.2.1). session-bootstrap (Error Handling),
+wrap-up (open-tasks) und DEPENDENCIES beschrieben noch Neuanlage bzw. Archivierung; ein validate-skills-Test
+bindet jetzt die gesamte aktive Doku. maintain Step 2 repariert in place statt leer neu anzulegen.
+Codex-Verifier (4 Befunde, Filter + Quellenpruefung): bestaetigt und behoben - eine Store-Datei mit dem
+JSON-Wert `null` galt in der Vorab-Pruefung als fehlend (Folge: TypeError nach dem Iterations-Log);
+`extract_patterns` behandelte jeden Lesefehler des Iterations-Logs als leer und liess einen Dekodierfehler als
+Traceback durch (jetzt nur fehlende Datei = leer, sonst Exit 2 mit JSON). Widerlegt: "Nachtlauf liest
+Dirty-Dateien erst nach dem Schreiben" (`cmd_apply_headless` liest sie strikt vorab, Test vorhanden). Belassen:
+`review_after` wird am Tag NACH dem Datum faellig (Feldname "after", Verhalten aelter als 5.2.1).
+Tests: neu `test-memory-thresholds.sh`; apply_wrapup 150, extract_patterns 88, wrapup_core 83, preprocess_state,
+ingest, review_sweep, global_decay und validate-skills (108) erweitert.
+
+---
+
 ## [2026-10-01] Release v5.2.0 — AGENTS.md-Kurzfassungen, summary-Feld, Zeilenenden erhalten
 
 MINOR (neues optionales Store-Feld `summary`). Drei Folgepunkte aus 5.1.5.

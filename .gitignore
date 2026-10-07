@@ -34,3 +34,7 @@ node_modules/
 
 # User-local Claude Code settings (permissions, history)
 .claude/settings.local.json
+
+# Local tool state (code index, pi agent)
+.codegraph/
+.pi-glla/

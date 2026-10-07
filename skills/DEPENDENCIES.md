@@ -36,7 +36,7 @@ WORK PHASE (user-driven, no auto-triggers on code changes)
   ├── /agentic-os:log (command, mid-session, on request)
   │     └── writes via scripts/apply_wrapup.py (`iterations` plan section — never by hand):
   │           iteration-log.md, errors.json, working/current-session.json
-  │           (append-only; rotation is /agentic-os:maintain's job, thresholds in memory-thresholds.sh)
+  │           (append-only; never rotated — memory-thresholds.sh only reports growth, D-021)
   │
   ├── context-keeper (on architecture/stack decisions)
   │     ├── reads: docs/PROJECT.md+ARCHITECTURE.md+CAPABILITIES.md (SoT, Step 1.5),
@@ -106,7 +106,7 @@ SESSION END (manual: /agentic-os:wrap-up — no hook can trigger it; a skipped
 
 | Command | Script core | Writes |
 |---|---|---|
-| /agentic-os:maintain | memory-thresholds.sh, gc_dirty_markers.py, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh, apply_wrapup.py --render-learnings, global_decay.py | archives/*, repaired JSON, compacted session-summary.md, re-rendered learnings.md, working/ scratch cleanup, global decayed confidence (booked once: decay_steps_applied + decay_anchor) + lifecycle:archived (never hard-delete) |
+| /agentic-os:maintain | memory-thresholds.sh, gc_dirty_markers.py, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh, apply_wrapup.py --render-learnings, global_decay.py | report only (no archive, no compaction — D-021); repaired JSON (owner-confirmed, Step 2), re-rendered learnings.md, owner-confirmed working/ scratch cleanup (*.py, *.tmp); global decay skipped while STILLGELEGT.md exists |
 | /agentic-os:log | apply_wrapup.py (`iterations` section) | iteration-log.md, errors.json, working/current-session.json |
 | /agentic-os:sync-context | global-schema.sh (is_denied, compute_scope, passes_promotion_gate), mem-schema.sh (MEM_GLOBAL_DENY_TAGS) | local + ~/.claude-memory/global/{patterns,learnings,projects}.json with provenance schema; privacy-filter before gate; pull serves lifecycle:active only |
 
