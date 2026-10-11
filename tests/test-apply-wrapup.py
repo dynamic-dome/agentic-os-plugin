@@ -356,6 +356,32 @@ marker = load(mem, "consolidation-marker.json")
 check(d["dirty"] is False and d["consolidated_by"] == "headless" and d["last_consolidated_by"] == "headless",
       "headless consolidation stamps 'headless', not 'wrap-up'")
 check(marker.get("mode") == "headless", "marker names the headless mode")
+check("harvest" not in d, "headless consolidation never closes the harvest")
+
+# --- 7c. a judged wrap-up closes ONLY its own session (D-024) ----------------
+# Another session's dirty file is consolidated (its git work is harvested) but its
+# conversation was never judged - it stays pending until an E7 rule closes it.
+_hs_spec = _ilu.spec_from_file_location("harvest_state_t", os.path.join(os.path.dirname(SCRIPT), "harvest_state.py"))
+_hs = _ilu.module_from_spec(_hs_spec)
+_hs_spec.loader.exec_module(_hs)
+mem = make_mem()
+put(mem, "working/dirty-sess-B.json", {
+    "session_id": "sess-B", "agent": "main", "dirty": True,
+    "started": "2026-07-26T10:00:00", "updated": "2026-07-26T11:00:00",
+    "touched_files": ["c.py"], "write_count": 1, "consolidated_at": None, "consolidated_by": None,
+})
+rc, out = run(mem, {"date": "2026-07-27", "consolidate": True})
+own, other = load(mem, "working/dirty-sess-A.json"), load(mem, "working/dirty-sess-B.json")
+check(rc == 0 and (own.get("harvest") or {}).get("closed_by") == "wrap-up"
+      and own["harvest"].get("run") == "wrap-up" and _hs.marker_state(own) == "closed",
+      "own session: judged wrap-up closes the harvest (snapshot valid)")
+check(other["dirty"] is False and "harvest" not in other and _hs.marker_state(other) == "pending",
+      "foreign session: consolidated, but the harvest stays pending")
+mem = make_mem()
+_aw.apply_consolidation(mem, {"consolidate": True}, "sess-A", False, [],
+                        {"iterations_logged": 0, "learnings_added": 0}, by="headless")
+check("harvest" not in load(mem, "working/dirty-sess-A.json"),
+      "headless never closes, even when handed the session's real id")
 mem = make_mem()
 try:
     _aw.apply_consolidation(mem, {"consolidate": True}, "x", False, [],

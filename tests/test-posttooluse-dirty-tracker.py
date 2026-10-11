@@ -259,6 +259,30 @@ def main():
     ft7 = state7.get("foreign_touched") or {}
     check("S2 foreign write after own work keeps dirty:true", state7.get("dirty") is True
           and state7.get("write_count") == 1 and sum(len(v) for v in ft7.values()) == 2, str(state7)[:300])
+    run_hook(payload, env_project=proj)  # the same foreign file once more: a path list cannot count it
+    state7 = json.load(open(f7, encoding="utf-8"))
+    check("S2b foreign edits are counted, not only distinct paths (trivial rule, D-024)",
+          state7.get("foreign_write_count") == 3 and sum(len(v) for v in (state7.get("foreign_touched") or {}).values()) == 2,
+          str(state7)[:300])
+    # S2b2: one apply_patch over two foreign files is two edits, not one store
+    patch = (f"*** Begin Patch\n*** Update File: {os.path.join(other, 'src', 'p1.py')}\n@@\n-a\n+b\n"
+             f"*** Update File: {os.path.join(other, 'src', 'p2.py')}\n@@\n-a\n+b\n*** End Patch\n")
+    run_hook(dict(base, session_id=sid7, tool_name="apply_patch", tool_input={"command": patch}), env_project=proj)
+    state7 = json.load(open(f7, encoding="utf-8"))
+    check("S2b2 a multi-file patch counts every foreign file", state7.get("foreign_write_count") == 5,
+          str(state7.get("foreign_write_count")))
+    # S2c: a marker from an older tracker has foreign paths but no count - starting at 0 would
+    # undercount and let the trivial rule close a busy session, so it never gets a count
+    f7c = os.path.join(proj, ".agent-memory", "working", "dirty-legacy-foreign.json")
+    with open(f7c, "w", encoding="utf-8") as fh:
+        json.dump({"session_id": "legacy-foreign", "dirty": False,
+                   "foreign_touched": {other: [os.path.join(other, "src", "old.py")]}}, fh)
+    run_hook(dict(base, session_id="legacy-foreign", tool_input={"file_path": os.path.join(other, "src", "x.py")}),
+             env_project=proj)
+    state7c = json.load(open(f7c, encoding="utf-8"))
+    check("S2c legacy foreign record gets no (undercounting) foreign_write_count",
+          "foreign_write_count" not in state7c and sum(len(v) for v in state7c["foreign_touched"].values()) == 2,
+          str(state7c)[:300])
 
     # S3: two hooks of ONE session at the same time (own + foreign): own work must never be lost
     lost = []

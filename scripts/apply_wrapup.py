@@ -125,6 +125,7 @@ from projection_text import SUMMARY_CHARS as SUMMARY_MAX  # noqa: E402
 from projection_text import anchor_ok, split_anchor  # noqa: E402
 import store_lock  # noqa: E402
 import store_snapshot  # noqa: E402
+import harvest_state  # noqa: E402
 
 
 class PlanError(Exception):
@@ -1342,6 +1343,10 @@ def apply_consolidation(mem, plan, session_id, dry, touched, tally, by="wrap-up"
         d["last_consolidated_at"] = now
         d["last_consolidated_by"] = by
         d["writes_since_consolidation"] = 0
+        # D-024: a judged wrap-up harvests its OWN conversation only; the other dirty
+        # sessions it consolidates stay pending until an E7 rule closes them.
+        if by == "wrap-up" and session_id and d.get("session_id") == session_id:
+            d["harvest"] = harvest_state.make_closure(d, "wrap-up", "wrap-up", now)
         write_json(mem, f"working/{name}", d, dry, touched)
     tally["dirty_files_consolidated"] = len(dirty_files)
     tally["touched_files_seen"] = seen_files

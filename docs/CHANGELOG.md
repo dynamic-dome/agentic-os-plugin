@@ -4,6 +4,71 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-11] Release v5.6.0 — Lebenszyklus Phase 2, Teil 2: Ernte-Zustand im dirty-Marker (A+, D-024)
+
+MINOR (neue Store-Felder `harvest`, `stale_reported`, `foreign_write_count`; neue Datei
+`metrics/harvest-closures.jsonl`; neue Schalter `--quiet-hours`, `--native-root`, `--lock-timeout`; geaendertes
+Verhalten von Nachtlauf und GC). Scheiben 5-7 plus zwei Codex-Verifier-Runden (Punkte 6-7). Skill-Metadaten:
+wrap-up 4.11. Scheibe 8 (Backfill, Tageslauf-Allowlist, `session-start.sh`) folgt.
+
+Owner-Entscheid 2026-10-11 (D-024): statt eines eigenen `harvest-ledger.jsonl` liegt der Ernte-Zustand mit
+Snapshot im dirty-Marker; Design und Gegenlesung: `~/AI/analysis-artifacts/agentic-os-lebenszyklus-2026-10-07/
+06-design-scheibe5.md`, Plan-Nachtrag in `03-plan-endfassung.md` Phase 2.
+(1) **Scheibe 5: `scripts/harvest_state.py`.** `marker_state` (dirty / pending / closed), `last_activity`
+(neuester von `updated` und `foreign_updated`, mtime nur als Rueckfall), `is_quiet` (`session_end` beweist das
+Ende nur bei `ended_at >= letzte Aktivitaet` und ohne spaeter geschriebenes Transkript, sonst 12 h Ruhe),
+`close_reason` (die vier E7-Regeln `wrapup_im_transkript`, `native_note`, `trivial`, `transcript_fehlt` mit ihren
+Sicherungen aus D-023), `gather_facts` (nur ein echter Aufruf zaehlt: Slash-Command in einer User-Nachricht oder
+das Skill-Tool, nie Text in einem Tool-Ergebnis) und `close_marker` (unter dem Store-Lock, verweigert einen
+seit dem Lesen geaenderten Snapshot, idempotent). Eine Schliessung gilt nur, solange `harvest.snap`
+(`write_count`, `updated`, `foreign_updated`) zum Marker passt - jede neue Arbeit oeffnet die Session von
+selbst, auch unter aelteren Tracker-Kopien. `TAIL_WRITES_MAX` hat nur noch diese eine Definition.
+(2) **Eigene Session statt aller.** `apply_consolidation(by="wrap-up")` schliesst nur den Marker der eigenen
+`--session-id` (`closed_by: "wrap-up"`); mitkonsolidierte fremde Sessions bleiben `pending`, headless schliesst nie.
+(3) **Tracker zaehlt Fremd-Edits** (`foreign_write_count`, je Datei, auch bei `apply_patch` ueber mehrere
+Dateien). Ein Marker aelterer Tracker mit Fremd-Pfaden, aber ohne Zaehler, bekommt nie einen - er wuerde
+zu niedrig zaehlen und `trivial` faelschlich schliessen.
+(4) **Scheibe 6: Nachtlauf.** Aktivitaet kommt aus `updated`/`foreign_updated` statt aus der Datei-mtime
+(`nightly_consolidate.newest_real_dirty`, `wrapup_core` Aktiv-Pruefung) - ein Ernte- oder Stale-Stempel macht
+einen alten Marker nicht mehr "jung". `wrapup_core` verschiebt auf Store-Ebene (`deferred(store not quiet)`),
+solange eine dirty Session nicht nachweislich beendet ist (`session_end` nach der letzten Aktivitaet oder 12 h
+Ruhe, `--quiet-hours`); `--min-age-minutes` bleibt als Untergrenze. Die Ausgabe nennt die geernteten sids
+(`sessions`). Nach dem Konsolidieren laeuft `harvest_pass` ueber jeden gefundenen Store: `close_pass` schliesst
+ruhige Marker nach den E7-Regeln (`closed_by`, `run: nightly`) und stempelt Marker aelter als `--max-age-days`
+einmal als stale (`stale_reported` mit Snapshot - neue Arbeit loescht den Stempel). Bericht: `harvest`
+(je Store closed/stale/unreadable) und `harvest_totals`. Neu: `--native-root` (Standard `~/.claude/projects`,
+der originSessionId-Index wird einmal je Lauf gebaut). Wirksam erst mit dem naechsten Release (der Nachtlauf
+startet die installierte Cache-Version).
+(5) **Scheibe 7: GC loescht nur Geschlossenes.** `gc_dirty_markers.py` hat eine Regel: entfernt wird nur ein
+Marker mit gueltiger Schliessung (`harvest_state.marker_state == "closed"`), mtime-Schutz 30 min bleibt. Die
+alten Regeln "konsolidiert" und "spaeterer wrap-up" sind weg - sie loeschten die letzte Spur ungeernteter
+Sessions. Vor jedem Loeschen eine Beleg-Zeile in `metrics/harvest-closures.jsonl` (sid, closed_by, closed_at,
+run, edits, transcript_path, transcript_sha256, removed_at; nur Auswertung, nie Entscheidungsgrundlage); ohne
+Beleg kein Loeschen. Der Store-Lock gilt je Marker und nur fuer Neu-Lesen, Snapshot-Vergleich, Beleg und
+Loeschen - der Hash wird vorher gerechnet, weil der Tracker nur 2 s auf den Lock wartet. Neu: `--lock-timeout`;
+die Zusammenfassung nennt `kept:` nach Zustand. Kollisionstest (zwei Sessions, eine jung: Nachtlauf, dann GC)
+in `test-wrapup-core.py`. Altbestand mit `consolidated_by: wrap-up` ohne Schliessung bleibt bis zum Backfill.
+(6) **Codex-Verifier 2026-10-11** (`07-codex-verifier-bericht.json`, FAIL, 4 major + 2 minor, alle an der
+Quelle bestaetigt und behoben): (H1) eine noch dirty Session in einem verschobenen Store wurde geschlossen und
+damit nach dem GC samt nie konsolidierter Edits geloescht - jetzt schliesst nur `closable` (nicht dirty oder
+Tail eines beurteilten wrap-up; `is_tail` hat eine Definition in `harvest_state.py`), alles andere wird erst
+konsolidiert; (H2) der GC benennt den Marker unter dem Lock erst um und prueft die umbenannten Bytes, bevor er
+Beleg und Loeschung schreibt - ein ungelockter Tracker-Write (nach 2 s Lock-Timeout) zwischen Neu-Lesen und
+Loeschen landet so in der umbenannten Datei, faellt durch die Pruefung und wird zurueckgelegt; (H3)
+`foreign_write_count` gehoert zum Snapshot (Zeitstempel haben Sekundenaufloesung); (H4) ein Slash-Aufruf zaehlt
+nur, wenn die Nachricht mit den Command-Tags beginnt, ein in Prosa zitiertes Tag nicht; (H5) der Kollisionstest
+prueft jetzt den Ablauf ueber zwei Naechte; (H6) Doku zur mtime praezisiert.
+(7) **Codex-Verifier Runde 2** (`08-codex-verifier-runde2-bericht.json`, FAIL, 5 major + 1 minor; Schluss nach
+Runde 2 laut Review-Policy): behoben - `is_tail` verlangt einen erfassten `writes_since_consolidation` (kein
+Standardwert 0, gleiche Regel wie `session-start.sh`), `closable` schliesst einen dirty Tail nur mit explizitem
+`last_consolidated_by: "wrap-up"`; scheitert das Loeschen der geprueften Tomb-Datei (Windows: offenes Handle),
+legt der GC sie zurueck statt sie als `.gc-*` liegen zu lassen; ein Slash-Aufruf zaehlt nur nach exaktem Muster
+(Command-Tags am Nachrichtenanfang, beide Reihenfolgen). Als Restrisiko dokumentiert (DCO-Todo): ein ungelockter
+Tracker-Write (nach 2 s Lock-Timeout) im Millisekundenfenster von `close_marker`/`_restore` und Alt-Marker ohne
+Fremd-Zaehler - beide setzen eine seit mind. 12 h ruhige Session voraus, die genau in diesem Moment weiterschreibt;
+Schaden hoechstens ein einzelner Write-Eintrag.
+Noch offen: Backfill, Tageslauf-Allowlist und `session-start.sh` (Scheibe 8), `session_end.py` atomar (extern).
+
 ## [2026-10-11] Release v5.5.0 — Lebenszyklus Phase 2, Teil 1: Ernte-Signal ohne Ledger
 
 MINOR (neue Store-Felder `mode`, `foreign_touched`, `transcript_path`, `cwd`, `foreign_updated`; neuer Schalter

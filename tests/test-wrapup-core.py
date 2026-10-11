@@ -253,10 +253,23 @@ def test_wikinote():
 
 
 CORE = os.path.join(ROOT, "scripts", "wrapup_core.py")
-HOURS_AGO = 3 * 3600
+HOURS_AGO = 13 * 3600  # past the 12 h quiet rule (harvest_state.QUIET_HOURS)
+
+
+def stamp(seconds):
+    return __import__("datetime").datetime.fromtimestamp(
+        __import__("time").time() - seconds).astimezone().isoformat(timespec="seconds")
 
 
 def age(path, seconds):
+    """Age a dirty file: its `updated` field (the activity signal since Scheibe 6) AND its mtime."""
+    try:
+        d = json.loads(read(path))
+        if isinstance(d, dict):
+            d["updated"] = stamp(seconds)
+            put(path, json.dumps(d))
+    except ValueError:
+        pass  # a deliberately broken fixture keeps its bytes
     t = __import__("time").time() - seconds
     os.utime(path, (t, t))
 
@@ -436,6 +449,49 @@ def test_core():
     finally:
         cleanup(env)
 
+    # Scheibe 6: a session counts as ended only with session_end (after its last activity) or 12 h quiet
+    def dpath(env, sid="s1"):
+        return os.path.join(env["mem"], "working", f"dirty-{sid}.json")
+
+    env = setup_core()
+    try:
+        age(dpath(env), 3 * 3600)
+        rc, out = run_core(env)
+        check(rc == 0 and out.get("status") == "deferred(store not quiet)"
+              and json.loads(read(dpath(env))).get("dirty") is True
+              and not os.path.exists(os.path.join(env["mem"], "consolidation-marker.json")),
+              f"3 h quiet, no session_end -> deferred, nothing written {out.get('status')}")
+        d = json.loads(read(dpath(env)))
+        d["session_end"] = {"reason": "other", "ended_at": stamp(3 * 3600 - 60)}
+        put(dpath(env), json.dumps(d))
+        t = __import__("time").time() - 3 * 3600
+        os.utime(dpath(env), (t, t))
+        rc, out = run_core(env)
+        check(rc == 0 and out.get("status") == "consolidated" and out.get("sessions") == ["s1"],
+              f"session_end after the last write proves the end -> consolidated, sid reported "
+              f"{out.get('status')} {out.get('sessions')}")
+    finally:
+        cleanup(env)
+
+    env = setup_core()
+    try:
+        put(dpath(env, "s2"), json.dumps({"session_id": "s2", "dirty": True, "started": "2000-01-01T00:00:00+00:00",
+                                         "touched_files": [], "write_count": 1}))
+        age(dpath(env, "s2"), 3 * 3600)
+        rc, out = run_core(env)
+        check(out.get("status") == "deferred(store not quiet)" and json.loads(read(dpath(env))).get("dirty") is True,
+              f"store level: one session not yet quiet defers the quiet one too {out.get('status')}")
+    finally:
+        cleanup(env)
+
+    env = setup_core()
+    try:
+        os.utime(dpath(env), None)  # fresh mtime (e.g. a stale stamp), but `updated` is 13 h old
+        rc, out = run_core(env)
+        check(out.get("status") == "consolidated", f"activity comes from `updated`, not the file mtime {out.get('status')}")
+    finally:
+        cleanup(env)
+
     env = setup_core()
     try:
         rc, out = run_core(env, "--dry-run")
@@ -517,7 +573,8 @@ def project_at(root, rel, seconds_old, tail=False, project_id=None):
 
 def run_nightly(root, central, home, report, *extra):
     cmd = [sys.executable, NIGHTLY, "--root", root, "--central-dir", central, "--home", home, "--report", report,
-           "--deny", os.path.join(root, "deny"), "--kill-switch", os.path.join(root, "OFF"), *extra]
+           "--deny", os.path.join(root, "deny"), "--kill-switch", os.path.join(root, "OFF"),
+           "--native-root", os.path.join(root, "native"), *extra]
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=600)
     try:
         return p.returncode, json.loads(p.stdout)
@@ -533,12 +590,12 @@ def test_nightly():
     os.makedirs(os.path.join(central, ".agent-memory"))
     report = os.path.join(central, "metrics", "nightly.jsonl")
     try:
-        project_at(root, "projF", 4 * 3600)
-        project_at(root, "sub/projA", 3 * 3600)
+        project_at(root, "projF", 14 * 3600)
+        project_at(root, "sub/projA", 13 * 3600)
         project_at(root, "projB", 20 * 86400)
-        project_at(root, "projC", 3 * 3600, tail=True)
-        project_at(root, "node_modules/projD", 3 * 3600)
-        project_at(root, "deny/projE", 3 * 3600)
+        project_at(root, "projC", 13 * 3600, tail=True)
+        project_at(root, "node_modules/projD", 13 * 3600)
+        project_at(root, "deny/projE", 13 * 3600)
 
         put(os.path.join(root, "OFF"), "off")
         rc, out = run_nightly(root, central, home, report)
@@ -556,10 +613,118 @@ def test_nightly():
         hand = read(os.path.join(central, ".agent-memory", "session-summary.md"))
         check(hand.split("---")[0].count("*Projekt: projA*") == 1, "most recently active project ends on top of the handoff")
         check(out.get("skipped", {}).get("stale", 0) == 1, f"stale project counted, not processed {out.get('skipped')}")
+        check(all(p.get("sessions") == ["s1"] for p in out.get("projects", [])), "each harvested sid is in the report")
+        ht = out.get("harvest_totals") or {}
+        stale_roots = [os.path.basename(e["project_root"]) for e in out.get("harvest", []) if e.get("stale")]
+        check(ht.get("stale") == 1 and stale_roots == ["projB"],
+              f"harvest pass reports the 20-day marker as stale {ht} {stale_roots}")
         lines = [ln for ln in read(report).splitlines() if ln.strip()]
         check(len(lines) == 3 and json.loads(lines[-1]).get("status") == "done", f"one report line per run ({len(lines)})")
         rc, out = run_nightly(root, central, home, report)
         check(not out.get("projects"), "second night: nothing left to consolidate")
+        check((out.get("harvest_totals") or {}).get("stale") == 0, "second night: stale is reported only once")
+    finally:
+        for d in (root, central, home):
+            shutil.rmtree(d, ignore_errors=True)
+
+    # Scheibe 6: the harvest pass closes a session whose own transcript holds a real wrap-up
+    root = tempfile.mkdtemp(prefix="wrapupcore-root-")
+    central = tempfile.mkdtemp(prefix="wrapupcore-central-")
+    home = tempfile.mkdtemp(prefix="wrapupcore-home-")
+    os.makedirs(os.path.join(central, ".agent-memory"))
+    report = os.path.join(central, "metrics", "nightly.jsonl")
+    try:
+        proj = project_at(root, "projG", 14 * 3600)
+        dpath = os.path.join(proj, ".agent-memory", "working", "dirty-s1.json")
+        tr = os.path.join(root, "s1.jsonl")
+        records = (
+            {"type": "user", "message": {"role": "user", "content": "<command-name>/agentic-os:wrap-up</command-name>"}},
+            {"type": "assistant", "message": {"role": "assistant",
+                                              "content": [{"type": "tool_use", "name": "Edit", "input": {}}]}},
+        )
+        put(tr, "".join(json.dumps(r) + "\n" for r in records))
+        t = __import__("time").time() - 14 * 3600
+        os.utime(tr, (t, t))
+        d = json.loads(read(dpath))
+        d["transcript_path"] = tr
+        put(dpath, json.dumps(d))
+        age(dpath, 14 * 3600)
+        old_proj = project_at(root, "projH", 20 * 86400)
+        os.utime(os.path.join(old_proj, ".agent-memory", "working", "dirty-s1.json"), None)  # fresh mtime only
+        rc, out = run_nightly(root, central, home, report, "--dry-run")
+        closed = [c for e in out.get("harvest", []) for c in e.get("closed", [])]
+        check(closed == [] and "harvest" not in json.loads(read(dpath)),
+              f"dry-run consolidates nothing, so the still-dirty session is not closable yet; nothing written {closed}")
+        rc, out = run_nightly(root, central, home, report)
+        d = json.loads(read(dpath))
+        check([p.get("status") for p in out.get("projects", [])] == ["consolidated"]
+              and (d.get("harvest") or {}).get("closed_by") == "wrapup_im_transkript" and d.get("dirty") is False,
+              f"consolidated headless, then closed by the wrap-up in its transcript {d.get('harvest')}")
+        check((out.get("harvest_totals") or {}).get("closed") == 1, f"closure counted {out.get('harvest_totals')}")
+        check(out.get("skipped", {}).get("stale") == 1,
+              f"candidate choice reads `updated`: a 20-day marker with a fresh mtime is stale {out.get('skipped')}")
+    finally:
+        for d in (root, central, home):
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def test_collision():
+    """Red-team collision test (plan Phase 2, design A+): two sessions in one store, one still
+    young. Night run, then GC --apply: every session keeps its marker OR has an evidence line."""
+    print("=== collision: night run + GC --apply (Scheibe 7) ===")
+    root = tempfile.mkdtemp(prefix="wrapupcore-root-")
+    central = tempfile.mkdtemp(prefix="wrapupcore-central-")
+    home = tempfile.mkdtemp(prefix="wrapupcore-home-")
+    os.makedirs(os.path.join(central, ".agent-memory"))
+    report = os.path.join(central, "metrics", "nightly.jsonl")
+    try:
+        proj = project_at(root, "projK", 14 * 3600)
+        mem = os.path.join(proj, ".agent-memory")
+        work = os.path.join(mem, "working")
+        tr = os.path.join(root, "s1.jsonl")
+        put(tr, json.dumps({"type": "user", "message": {"role": "user",
+                                                        "content": "<command-name>/agentic-os:wrap-up</command-name>"}}) + "\n")
+        t = __import__("time").time() - 14 * 3600
+        os.utime(tr, (t, t))
+        d1 = json.loads(read(os.path.join(work, "dirty-s1.json")))
+        d1["transcript_path"] = tr
+        put(os.path.join(work, "dirty-s1.json"), json.dumps(d1))
+        age(os.path.join(work, "dirty-s1.json"), 14 * 3600)
+        put(os.path.join(work, "dirty-s2.json"), json.dumps({"session_id": "s2", "agent": "claude", "dirty": True,
+                                                            "started": "2000-01-01T00:00:00+00:00",
+                                                            "touched_files": ["z.txt"], "write_count": 4}))
+        age(os.path.join(work, "dirty-s2.json"), 3 * 3600)
+        rc, out = run_nightly(root, central, home, report)
+        check([p.get("status") for p in out.get("projects", [])] == ["deferred(store not quiet)"],
+              f"store with a young session is deferred {[p.get('status') for p in out.get('projects', [])]}")
+        gc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "gc_dirty_markers.py"), mem, "--apply"],
+                            capture_output=True, text=True, encoding="utf-8")
+        ev_path = os.path.join(mem, "metrics", "harvest-closures.jsonl")
+        evidence = {json.loads(ln)["sid"] for ln in read(ev_path).splitlines() if ln.strip()}
+        for sid in ("s1", "s2"):
+            check(os.path.exists(os.path.join(work, f"dirty-{sid}.json")) or sid in evidence,
+                  f"{sid}: marker kept or evidence written (gc: {gc.stdout.strip()[-120:]})")
+        s1 = json.loads(read(os.path.join(work, "dirty-s1.json")))
+        check(not evidence and s1.get("dirty") is True and "harvest" not in s1,
+              "deferred store: the quiet dirty session is NOT closed - its work was never consolidated (H1)")
+        check(not os.path.exists(os.path.join(mem, "consolidation-marker.json")), "deferred store: no consolidation marker")
+        # the next night: both sessions quiet -> consolidated together, then s1 closes by its wrap-up
+        age(os.path.join(work, "dirty-s2.json"), 13 * 3600)
+        rc, out = run_nightly(root, central, home, report)
+        check([p.get("status") for p in out.get("projects", [])] == ["consolidated"]
+              and sorted(out["projects"][0].get("sessions") or []) == ["s1", "s2"],
+              f"next night: the whole store is consolidated {[p.get('status') for p in out.get('projects', [])]}")
+        t = __import__("time").time() - 3600  # next daily run, outside the 30-min window
+        for sid in ("s1", "s2"):
+            os.utime(os.path.join(work, f"dirty-{sid}.json"), (t, t))
+        subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "gc_dirty_markers.py"), mem, "--apply"],
+                       capture_output=True, text=True, encoding="utf-8")
+        evidence = {json.loads(ln)["sid"] for ln in read(ev_path).splitlines() if ln.strip()}
+        for sid in ("s1", "s2"):
+            check(os.path.exists(os.path.join(work, f"dirty-{sid}.json")) or sid in evidence,
+                  f"after GC: {sid} marker kept or evidence written")
+        check(evidence == {"s1"} and json.loads(read(os.path.join(work, "dirty-s2.json"))).get("dirty") is False,
+              f"s1 (wrap-up in transcript) went with evidence, s2 stays pending {sorted(evidence)}")
     finally:
         for d in (root, central, home):
             shutil.rmtree(d, ignore_errors=True)
@@ -574,6 +739,7 @@ def main():
     test_wikinote()
     test_core()
     test_nightly()
+    test_collision()
     print(f"\n{PASSED}/{TESTS} passed, {ERRORS} failed")
     return 1 if ERRORS else 0
 

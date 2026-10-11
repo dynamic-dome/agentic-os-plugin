@@ -51,12 +51,12 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/restore_plan.py" .agent-memory \
 - `memory-thresholds.sh`: exit 0 → nothing grew past a limit. Exit 10 → each `THRESHOLD:`
   line names file, count and limit; Step 3 reports exactly those. No line is an order to
   move anything.
-- `gc_dirty_markers.py` runs as **preview only** (no apply flag): a headless-consolidated
-  marker is still the last trace of a session whose knowledge was never harvested, and
-  the harvest ledger that would keep that trace does not exist yet. Carry the "would
-  remove" count into the report. Never hand-pick or delete these files. The GC itself now
-  keeps markers stamped `consolidated_by: "headless"` (rule 1b); the preview stays because
-  night runs before that fix stamped `"wrap-up"` and cannot be told apart.
+- `gc_dirty_markers.py` runs as **preview only** (no apply flag): deleting is the daily
+  run's job. Since D-024 the GC removes only markers whose harvest state is closed (with a
+  matching snapshot) and writes an evidence line to `metrics/harvest-closures.jsonl` first;
+  every pending session (headless, foreign wrap-up, foreign-only, legacy stamp) stays.
+  Carry the "would remove" count and the `kept:` breakdown into the report. Never
+  hand-pick or delete these files.
 - `native_memory_audit.py`: exit 0 → copy its `**Summary:**` line verbatim into the
   report. Exit 2 (usage/path) or 1 (crash) → one line "native audit failed: …" and
   continue. This is a REPORTER: it never rotates, deletes or edits native stores;

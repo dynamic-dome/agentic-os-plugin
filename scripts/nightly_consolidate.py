@@ -10,6 +10,9 @@ Finds every project with un-wrapped work (`.agent-memory/working/dirty-*.json`, 
 wrap-up's own tail writes), newest dirty file younger than --max-age-days, and runs
 `wrapup_core.py apply --headless` for each - oldest activity first, so the most recently active
 project ends on top of the central handoff (cap 5). One JSONL report line per run.
+After the consolidation, a harvest pass over EVERY discovered store closes the quiet markers an
+E7 rule covers and reports markers older than --max-age-days as stale, once (harvest_state.py,
+D-024); the closures and stale sids land in the report line (`harvest`, `harvest_totals`).
 Kill switch: if the --kill-switch file exists nothing runs (report line `killed`).
 Older dirty sessions stay untouched (they keep showing as RECOVERY; bulk-consolidating months-old
 work would flood the handoff and the wiki).
@@ -25,6 +28,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import harvest_state as hs  # noqa: E402
 from wrapup_core import _is_tail  # noqa: E402
 
 SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "__pycache__", "AppData", "_archived", "worktrees",
@@ -76,7 +80,11 @@ def discover(roots, max_depth, deny):
 
 
 def newest_real_dirty(mem):
-    """mtime of the newest dirty file holding real (non-tail) work, or None. Unreadable -> treated as work."""
+    """Last activity of the newest dirty file holding real (non-tail) work, or None.
+
+    Activity comes from the marker fields (`updated`, `foreign_updated`); the file mtime only
+    when neither is recorded - a harvest or stale stamp rewrites old markers. Unreadable ->
+    treated as work, dated by its mtime."""
     work = os.path.join(mem, "working")
     newest = None
     try:
@@ -88,15 +96,44 @@ def newest_real_dirty(mem):
             continue
         path = os.path.join(work, name)
         try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        activity = mtime
+        try:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
             if not (isinstance(data, dict) and data.get("dirty")) or _is_tail(data):
                 continue
+            activity = hs.last_activity(data, mtime)
         except (OSError, ValueError, UnicodeDecodeError):
             pass  # the core refuses unreadable evidence with exit 2 - surface that, do not hide it
-        mtime = os.path.getmtime(path)
-        newest = mtime if newest is None or mtime > newest else newest
+        newest = activity if newest is None or activity > newest else newest
     return newest
+
+
+def harvest_pass(result, projects, args, now):
+    """Close quiet markers by the E7 rules and stamp stale ones, store by store (after the
+    consolidation, so a session harvested headless tonight can close tonight)."""
+    native_sids = hs.native_session_ids(args.native_root)
+    totals = {"closed": 0, "stale": 0, "open": 0, "unreadable": 0, "failed": 0}
+    entries = []
+    for proj in projects:
+        mem = os.path.join(proj, ".agent-memory")
+        try:
+            res = hs.close_pass(mem, run="nightly", now=now, native_sids=native_sids,
+                                stale_days=args.max_age_days, dry=args.dry_run)
+        except Exception as exc:  # one broken store must not end the night for the others
+            totals["failed"] += 1
+            entries.append({"project_root": proj, "error": type(exc).__name__})
+            continue
+        for key in ("closed", "stale", "unreadable"):
+            totals[key] += len(res[key])
+        totals["open"] += res["open"]
+        if res["closed"] or res["stale"] or res["unreadable"]:
+            entries.append({"project_root": proj, **{k: res[k] for k in ("closed", "stale", "unreadable") if res[k]}})
+    result["harvest"] = entries
+    result["harvest_totals"] = totals
 
 
 def main(argv=None):
@@ -109,6 +146,8 @@ def main(argv=None):
     ap.add_argument("--max-depth", type=int, default=4)
     ap.add_argument("--max-age-days", type=float, default=14)
     ap.add_argument("--min-age-minutes", type=int, default=120)
+    ap.add_argument("--quiet-hours", type=float, default=hs.QUIET_HOURS)
+    ap.add_argument("--native-root", default=None, help="native memory root (default ~/.claude/projects)")
     ap.add_argument("--central-dir", default=os.path.join(HOME, "AI"))
     ap.add_argument("--home", default=HOME)
     ap.add_argument("--deny", action="append", default=None)
@@ -129,7 +168,8 @@ def main(argv=None):
     else:
         now = _dt.datetime.now().timestamp()
         candidates = []
-        for proj in discover(roots, args.max_depth, deny):
+        projects = discover(roots, args.max_depth, deny)
+        for proj in projects:
             newest = newest_real_dirty(os.path.join(proj, ".agent-memory"))
             if newest is None:
                 result["skipped"]["clean"] += 1
@@ -140,7 +180,8 @@ def main(argv=None):
         for _, proj in sorted(candidates):
             cmd = [sys.executable, os.path.join(HERE, "wrapup_core.py"), "apply", "--headless",
                    "--mem", os.path.join(proj, ".agent-memory"), "--central-dir", args.central_dir,
-                   "--home", args.home, "--min-age-minutes", str(args.min_age_minutes)]
+                   "--home", args.home, "--min-age-minutes", str(args.min_age_minutes),
+                   "--quiet-hours", str(args.quiet_hours)]
             if args.dry_run:
                 cmd.append("--dry-run")
             entry = {"project_root": proj}
@@ -149,13 +190,14 @@ def main(argv=None):
                                    timeout=args.timeout, stdin=subprocess.DEVNULL)
                 out = json.loads(p.stdout) if p.stdout.strip() else {}
                 entry.update({"rc": p.returncode, "status": out.get("status") or out.get("error", "no output"),
-                              "iterations": out.get("iterations"), "handoff": out.get("handoff"),
-                              "wiki_note": out.get("wiki_note")})
+                              "iterations": out.get("iterations"), "sessions": out.get("sessions"),
+                              "handoff": out.get("handoff"), "wiki_note": out.get("wiki_note")})
             except subprocess.TimeoutExpired:
                 entry.update({"rc": None, "status": f"failed(timeout {args.timeout}s)"})
             except (OSError, ValueError) as exc:
                 entry.update({"rc": None, "status": f"failed({type(exc).__name__})"})
             result["projects"].append(entry)
+        harvest_pass(result, projects, args, now)
         result["status"] = "done"
 
     try:

@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '4.10'
+  version: '4.11'
   part-of: agentic-os
   layer: core
 ---
@@ -605,9 +605,11 @@ if the script is unavailable.
 Marker schema: `references/wrapup-schemas.md` §Consolidation marker.
 
 3. For EVERY dirty file consumed: set `dirty: false`, `consolidated_at: {ISO timestamp}`,
-   `consolidated_by: "wrap-up"`. Do NOT delete the files here — `/agentic-os:maintain`
-   garbage-collects them later via `scripts/gc_dirty_markers.py` (consolidated markers +
-   markers superseded by a later wrap-up; mtime <30min is protected).
+   `consolidated_by: "wrap-up"`; only this session's own file also gets the harvest closure
+   (`harvest.closed_by: "wrap-up"`, D-024 - `apply_wrapup.py` does both). Do NOT delete the
+   files here — the daily run deletes CLOSED markers via `scripts/gc_dirty_markers.py`
+   (harvest state with a matching snapshot, evidence line first; mtime <30min is protected);
+   other sessions' files stay pending until a harvest rule closes them.
 4. **Self-healing rule (parallel sessions):** if a consumed dirty file belonged to a
    session that is still running in parallel, its next Write/Edit simply re-sets
    `dirty: true` via the hook — consolidating it here is harmless. Never try to guess
@@ -684,6 +686,6 @@ patterns / Open questions). Template: `references/wrapup-schemas.md` §Handoff M
 - Do NOT write session-summary.md longer than 30 lines
 - Do NOT commit without user confirmation
 - Do NOT log trivial "learnings"; do NOT prune skill_candidate patterns
-- Do NOT delete `working/dirty-*.json` (Step 9.5 flips flags; /agentic-os:maintain
-  GCs them via gc_dirty_markers.py) and do NOT write the consolidation marker when the
+- Do NOT delete `working/dirty-*.json` (Step 9.5 flips flags; the daily run GCs closed
+  markers via gc_dirty_markers.py) and do NOT write the consolidation marker when the
   wrap-up was incomplete

@@ -23,7 +23,8 @@ Contract (must never break):
   foreign_touched[<store root>] without making either store dirty; scratch
   under the temp dir and paths outside every store are ignored. When in
   doubt a path stays own work: noise in the own store, never a lost session.
-  transcript_path and cwd from the payload are kept for the harvest ledger.
+  transcript_path and cwd from the payload are kept for the harvest rules
+  (harvest_state.py); foreign_write_count counts edits for the rule "trivial".
 - One update at a time per store (the store lock, shared with apply_wrapup):
   two hooks of one session must never lose each other's dirty flag. After
   LOCK_TIMEOUT_S the hook writes unlocked - tracking beats a lost write.
@@ -179,12 +180,17 @@ def _update(state_path, data, raw_sid, kept, foreign) -> None:
             state = {}  # corrupt file -> rebuild from scratch
 
     now = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-    for key in ("transcript_path", "cwd"):  # ledger basis; a payload without them keeps the old value
+    for key in ("transcript_path", "cwd"):  # harvest-rule basis; a payload without them keeps the old value
         value = data.get(key)
         if isinstance(value, str) and value:
             state[key] = value
     if foreign:
         record = state.get("foreign_touched")
+        # Edits, not paths: the harvest rule "trivial" needs the count. A record from an
+        # older tracker has no count; starting it at 0 would undercount, so it stays absent.
+        if "foreign_write_count" in state or not record:
+            state["foreign_write_count"] = _safe_count(state.get("foreign_write_count")) + sum(
+                len(p) for p in foreign.values())
         if not isinstance(record, dict):
             record = {}
         for store, paths in foreign.items():

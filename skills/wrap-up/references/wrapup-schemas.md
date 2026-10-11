@@ -190,6 +190,12 @@ names who consolidated: `"wrap-up"` for this skill, `"headless"` for the night r
 not harvested). `apply_wrapup.apply_consolidation(by=...)` writes both; any other
 value is a plan error.
 
+Harvest state (D-024): with `by="wrap-up"` the dirty file of THIS run's `--session-id`
+additionally gets `harvest: {closed_by: "wrap-up", closed_at, run: "wrap-up", snap:
+{write_count, updated, foreign_updated}}` and is then deletable by the daily GC. Every
+other consumed file stays pending until a rule in `scripts/harvest_state.py` closes it;
+headless never closes. A closure counts only while `snap` matches the file.
+
 ## Local session-summary.md (Step 5)
 
 Overwrite `.agent-memory/session-summary.md` (English headers; **max 30 lines**;

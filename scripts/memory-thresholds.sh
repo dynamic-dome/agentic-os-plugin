@@ -68,7 +68,7 @@ if [ -d "$MEM/working" ]; then
   # deletion live in scripts/gc_dirty_markers.py — a count of dirty:false alone would
   # miss the superseded dirty:true markers).
   n_dirty=$(find "$MEM/working" -maxdepth 1 -name 'dirty-*.json' 2>/dev/null | wc -l | tr -d ' ')
-  [ "$n_dirty" -gt 10 ] && note "working/ has $n_dirty dirty-marker(s) — preview with scripts/gc_dirty_markers.py; removal waits for the harvest ledger"
+  [ "$n_dirty" -gt 10 ] && note "working/ has $n_dirty dirty-marker(s) — preview with scripts/gc_dirty_markers.py; only closed markers are removed (daily run, D-024)"
 fi
 
 [ "$EXCEEDED" -eq 1 ] && exit 10

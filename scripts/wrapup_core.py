@@ -32,6 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import apply_wrapup as aw  # noqa: E402
+import harvest_state as hs  # noqa: E402
+from harvest_state import TAIL_WRITES_MAX  # noqa: E402
 import contextlib  # noqa: E402
 import store_lock  # noqa: E402
 from preprocess_state import open_tasks  # noqa: E402
@@ -44,7 +46,7 @@ IDENTITY_LINE = "Identity: headless — kein Harvest"
 # last_consolidated_at and at most this many writes since is wrap-up's own tail, not lost work.
 # Never after a headless stamp: the night run is a plain subprocess the tracker never sees, so
 # every write after it is real session work.
-TAIL_WRITES_MAX = 5
+# TAIL_WRITES_MAX lives in harvest_state.py (one definition for core, night run and harvest rules).
 HEADLESS_WARNING = ("Headless konsolidiert (Nachtlauf, ohne Judge): Learnings, Decisions und Identity "
                     "wurden nicht geerntet.")
 
@@ -75,13 +77,9 @@ def _dirty_sessions(mem):
 
 
 def _is_tail(data):
-    """True when the dirty file only holds wrap-up's own writes after its marker (session-start.sh rule)."""
-    if not data.get("last_consolidated_at") or data.get("last_consolidated_by") == "headless":
-        return False
-    try:
-        return int(data.get("writes_since_consolidation", 0)) <= TAIL_WRITES_MAX
-    except (TypeError, ValueError):
-        return False
+    """True when the dirty file only holds wrap-up's own writes after its marker (session-start.sh rule).
+    One definition: harvest_state.is_tail (the harvest rules need the same answer)."""
+    return hs.is_tail(data)
 
 
 def _parse(ts):
@@ -201,10 +199,18 @@ def cmd_apply_headless(args):
     real = [(p, d) for p, d in dirty if not _is_tail(d)]
     if not real:
         return _emit({**base, "status": "skipped(nothing to consolidate)", "marker_written": False}, 0)
-    newest = max(os.path.getmtime(p) for p, _ in dirty)  # any fresh write, tail or not, means "maybe running"
-    if time.time() - newest < args.min_age_minutes * 60:
+    now_ts = time.time()
+    # Activity from the marker fields, the mtime only as fallback: a harvest or stale stamp
+    # rewrites old markers and must never make them look active. Tail or not: "maybe running".
+    newest = max(hs.last_activity(d, os.path.getmtime(p)) for p, d in dirty)
+    if now_ts - newest < args.min_age_minutes * 60:
         return _emit({**base, "status": "skipped(active session)", "marker_written": False}, 0)
+    if not all(hs.is_quiet(d, now_ts, hs.transcript_mtime(d), args.quiet_hours) for _, d in dirty):
+        # Store level, all or nothing: apply_consolidation resets every dirty file and sets
+        # last_wrapup, so one session that has not provably ended defers the whole store.
+        return _emit({**base, "status": "deferred(store not quiet)", "marker_written": False}, 0)
     dirty = real
+    sessions = [str(d.get("session_id") or os.path.basename(p)) for p, d in dirty]
 
     cfg = _config(mem)
     project = str(cfg.get("project_id") or os.path.basename(project_root))
@@ -234,6 +240,7 @@ def cmd_apply_headless(args):
         # Work happened elsewhere (other repos) or left no trace: close the RECOVERY loop (marker +
         # dirty reset) but never replace a richer summary / handoff block with an empty one.
         empty = {**base, "status": "consolidated(empty)", "project": project, "date": date, "iterations": 0,
+                 "sessions": sessions,
                  "handoff": {"central": "skipped(empty harvest)", "board": "skipped(empty harvest)"},
                  "wiki_note": "skipped(empty harvest)", "projections": {}, "reports": {}}
         if args.dry_run:
@@ -258,7 +265,7 @@ def cmd_apply_headless(args):
                       "note": "consolidation marker NOT written - dirty state stays honest"}, 2)
 
     result = {**base, "status": "consolidated", "project": project, "date": date, "harvest_used": True,
-              "iterations": len(iterations)}
+              "iterations": len(iterations), "sessions": sessions}
     if args.dry_run:
         result.update({"handoff": {"central": "dry-run", "board": "dry-run"}, "wiki_note": "dry-run",
                        "projections": {}, "reports": {}, "marker_written": False,
@@ -322,6 +329,8 @@ def main(argv=None):
     a.add_argument("--home", default=os.path.expanduser("~"), help="home for the native MEMORY.md projection")
     a.add_argument("--wiki-root", default=None, help="default: config.json wiki_root")
     a.add_argument("--min-age-minutes", type=int, default=120)
+    a.add_argument("--quiet-hours", type=float, default=hs.QUIET_HOURS,
+                   help="a session without session_end counts as ended after this long without activity")
     a.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     if not args.headless:

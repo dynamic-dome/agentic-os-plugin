@@ -527,7 +527,7 @@ fi
 # --- 5.2.1: maintain only reports (D-021, owner decision 2026-10-06, widened 2026-10-07) ---
 # Count-based archiving took long-term and importance>=4 learnings and ready patterns out
 # of retrieval (archive files are invisible to the Atlas). Nothing in maintain may move
-# store entries any more, and the dirty-marker GC runs as preview until the harvest ledger.
+# store entries any more, and the dirty-marker GC runs as preview (the daily run deletes closed markers).
 echo ""
 echo "-- maintain: report only, never moves store entries (D-021) --"
 if [ -f "$MM_FILE" ]; then
@@ -537,7 +537,7 @@ if [ -f "$MM_FILE" ]; then
         pass "maintain: no instruction moves store entries into archive files"
     fi
     if grep -qE "gc_dirty_markers\.py.*--apply" "$MM_FILE"; then
-        fail "maintain: dirty-marker GC still runs with --apply before the harvest ledger exists"
+        fail "maintain: dirty-marker GC runs with --apply - deleting is the daily run's job (D-024)"
     else
         pass "maintain: dirty-marker GC runs as preview only"
     fi

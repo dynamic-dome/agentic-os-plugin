@@ -88,6 +88,22 @@ fi
 
 echo ""
 
+# Run harvest-state tests (Lebenszyklus Phase 2 Teil 2, D-024: harvest state in the dirty marker)
+echo ">>> Running harvest-state tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-harvest-state.py"; then
+    echo ">>> Harvest-state tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Harvest-state tests: SKIPPED (no python found)"
+else
+    echo ">>> Harvest-state tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
 # Run native-memory audit tests (T-36: read-only store audit)
 echo ">>> Running native-memory audit tests..."
 PY_BIN=""
