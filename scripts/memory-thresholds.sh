@@ -46,7 +46,7 @@ fi
 # session-summary.md: max 30 lines (handoff-mode append may exceed briefly)
 if [ -f "$MEM/session-summary.md" ]; then
   n=$(wc -l < "$MEM/session-summary.md" | tr -d ' ')
-  [ "$n" -gt 40 ] && note "session-summary.md has $n lines (soft limit 40; the next wrap-up rewrites it)"
+  [ "$n" -gt 40 ] && note "session-summary.md has $n lines (soft limit 40; the next wrap-up rewrites it - in the AI workspace it is the central handoff, capped at 5 blocks by wrap-up Step 7.6a)"
 fi
 
 # learnings.md: max 2000 lines (projection of learnings.json, one line per entry; see ceiling above)

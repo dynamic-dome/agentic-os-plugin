@@ -7,7 +7,7 @@ trigger and result-contract stay in the body, which points here and loads this f
 only at the write step it names.
 
 Design: `memskillredesign.md` / `memevalharness.md` (membrain). The wrap-up gate
-inventory (`gate_linkage.py`, 27 gates) and `validate-skills.sh` anchors stay in the
+inventory (`gate_linkage.py`, 28 gates) and `validate-skills.sh` anchors stay in the
 body, never here.
 
 ## Write plan (batch writer)
@@ -176,6 +176,7 @@ history preserves older markers):
 ```json
 {
   "last_wrapup": "{ISO timestamp}",
+  "mode": "wrap-up",
   "consolidated_sessions": ["{session_id}", "..."],
   "iterations_logged": 0,
   "learnings_added": 0,
@@ -183,10 +184,21 @@ history preserves older markers):
 }
 ```
 
+`mode` (and `consolidated_by` / `last_consolidated_by` on every consumed dirty file)
+names who consolidated: `"wrap-up"` for this skill, `"headless"` for the night run
+(`wrapup_core.py apply --headless`, no judge — learnings, decisions and identity were
+not harvested). `apply_wrapup.apply_consolidation(by=...)` writes both; any other
+value is a plan error.
+
 ## Local session-summary.md (Step 5)
 
 Overwrite `.agent-memory/session-summary.md` (English headers; **max 30 lines**;
 delta-update — rewrite only changed sections):
+
+Exception (DCO #9433): when the store's summary IS the central handoff
+(`<central-dir>/.agent-memory/session-summary.md`, default `~/AI` — the AI workspace),
+`apply_wrapup.py` does not overwrite it and reports a warning instead; the block
+reaches that file only through the prepend path (Step 7.6a / `write_central`).
 
 ```markdown
 # Last Session

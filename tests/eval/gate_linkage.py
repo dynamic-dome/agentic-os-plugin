@@ -58,6 +58,7 @@ BOOTSTRAP_GATES = [
     {"name": "recovery-tail-downgrade", "clauses": [
         ["writes_since_consolidation <= 5"],             # trigger: few tail writes
         ["120 minutes"],                                 # trigger: near consolidation (DCO-9209, widened from 15 min)
+        ["`last_consolidated_by` is not"],               # trigger: never after a headless stamp (5.5.0)
         ["downgrade"],                                   # action: one-line note
     ]},
     {"name": "soul-candidate-gate", "clauses": [
@@ -209,6 +210,11 @@ WRAPUP_GATES = [
     {"name": "wiki-sync-visible", "clauses": [
         ["(wiki-sync-visible)"],                         # marker
         ["Wiki-Sync:"],                                  # action: always-report line
+    ]},
+    {"name": "central-summary", "clauses": [
+        ["(central-summary)"],                           # marker
+        ["AI workspace"],                                # trigger: summary IS the handoff
+        ["from this run's write plan"],                  # action: not from the file
     ]},
     {"name": "handoff-guard", "clauses": [
         ["handoff_write_guard.py"],                      # trigger: read-modify-write

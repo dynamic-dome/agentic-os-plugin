@@ -338,6 +338,89 @@ check(marker["touched_files_seen"] == 2, "marker counts touched files from the d
 check(marker["iterations_logged"] == 3, "marker carries iterations_logged from the plan")
 d = load(mem, "working/dirty-sess-A.json")
 check(d["dirty"] is False and d["consolidated_by"] == "wrap-up", "dirty flag flipped, file kept")
+check(d["last_consolidated_by"] == "wrap-up" and marker.get("mode") == "wrap-up",
+      "interactive run: dirty file and marker name the wrap-up mode")
+
+# --- 7b. headless consolidation says so (Lebenszyklus Phase 2, slice 1) -----
+# The night run used to stamp "wrap-up" although no wrap-up ran; GC and readers
+# could not tell a judged session from a mechanically harvested one.
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location("apply_wrapup_by", SCRIPT)
+_aw = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_aw)
+mem = make_mem()
+_aw.apply_consolidation(mem, {"consolidate": True}, "headless-2026-10-11", False, [],
+                        {"iterations_logged": 0, "learnings_added": 0}, by="headless")
+d = load(mem, "working/dirty-sess-A.json")
+marker = load(mem, "consolidation-marker.json")
+check(d["dirty"] is False and d["consolidated_by"] == "headless" and d["last_consolidated_by"] == "headless",
+      "headless consolidation stamps 'headless', not 'wrap-up'")
+check(marker.get("mode") == "headless", "marker names the headless mode")
+mem = make_mem()
+try:
+    _aw.apply_consolidation(mem, {"consolidate": True}, "x", False, [],
+                            {"iterations_logged": 0, "learnings_added": 0}, by="nightly")
+    fail("unknown consolidation mode must raise")
+except _aw.PlanError:
+    pass_("unknown consolidation mode is a PlanError")
+check(not os.path.exists(os.path.join(mem, "consolidation-marker.json"))
+      and load(mem, "working/dirty-sess-A.json")["dirty"] is True,
+      "unknown mode: nothing written before the refusal")
+
+# --- 7c. AI workspace: the local summary IS the central handoff (DCO #9433) ---
+# Overwriting it dropped the other projects' handoff blocks (2026-09-24). The
+# central block arrives via Step 7.6a / write_central (prepend + demote) instead.
+HANDOFF = ("# Letzte Session\n\n*Datum: 2026-10-10 15:30*\n*Projekt: projB*\n\n- fremder Block B\n\n---\n\n"
+           "# Vorherige Session (2026-10-09 projC, erhalten)\n\n*Projekt: projC*\n\n- fremder Block C\n")
+SUMMARY_PLAN = {"date": "2026-10-11", "session_summary": {"what_was_done": ["x"], "statistics": {}}}
+central = tempfile.mkdtemp(prefix="wrapup-central-")
+mem = os.path.join(central, ".agent-memory")
+shutil.copytree(make_mem(), mem)
+write(mem, "session-summary.md", HANDOFF)
+rc, out = run(mem, SUMMARY_PLAN, "--central-dir", central)
+check(rc == 0 and read(mem, "session-summary.md") == HANDOFF,
+      "store == central: the central handoff stays byte-identical")
+check(any("central handoff" in w for w in out.get("tally", {}).get("warnings", [])),
+      "store == central: the skipped summary is reported, never silent")
+mem = make_mem()
+write(mem, "session-summary.md", HANDOFF)
+rc, out = run(mem, SUMMARY_PLAN, "--central-dir", tempfile.mkdtemp(prefix="wrapup-central-"))
+check(rc == 0 and read(mem, "session-summary.md").startswith("# Last Session"),
+      "control: an ordinary store still gets its local summary")
+# the comparison is a path test (case, '..', slash mix), never a string or prefix test
+central = tempfile.mkdtemp(prefix="wrapup-central-")
+mem = os.path.join(central, ".agent-memory")
+shutil.copytree(make_mem(), mem)
+write(mem, "session-summary.md", HANDOFF)
+variant = os.path.join(central, "x", "..").replace("\\", "/")
+if os.name == "nt":
+    variant = variant.upper()
+rc, out = run(mem, SUMMARY_PLAN, "--central-dir", variant)
+check(rc == 0 and read(mem, "session-summary.md") == HANDOFF,
+      "store == central written differently (case, '..', '/'): still protected")
+nested = os.path.join(central, "projX", ".agent-memory")  # a project store BELOW the central dir
+shutil.copytree(make_mem(), nested)
+write(nested, "session-summary.md", HANDOFF)
+rc, out = run(nested, SUMMARY_PLAN, "--central-dir", central)
+check(rc == 0 and read(nested, "session-summary.md").startswith("# Last Session"),
+      "control: a store below the central dir is not the central handoff")
+# the default (~/AI, no --central-dir) is what the skill uses; prove it on a fake home
+fake_home = tempfile.mkdtemp(prefix="wrapup-home-")
+mem = os.path.join(fake_home, "AI", ".agent-memory")
+shutil.copytree(make_mem(), mem)
+write(mem, "session-summary.md", HANDOFF)
+env = dict(os.environ, USERPROFILE=fake_home, HOME=fake_home)
+proc = subprocess.run([sys.executable, SCRIPT, mem, "--session-id", "sess-A"], input=json.dumps(SUMMARY_PLAN),
+                      capture_output=True, text=True, encoding="utf-8", env=env)
+check(proc.returncode == 0 and read(mem, "session-summary.md") == HANDOFF,
+      "default central dir (~/AI) protects the central handoff without --central-dir")
+other = os.path.join(fake_home, "proj", ".agent-memory")  # central summary exists, this store is another one
+shutil.copytree(make_mem(), other)
+write(other, "session-summary.md", HANDOFF)
+proc = subprocess.run([sys.executable, SCRIPT, other, "--session-id", "sess-A"], input=json.dumps(SUMMARY_PLAN),
+                      capture_output=True, text=True, encoding="utf-8", env=env)
+check(proc.returncode == 0 and read(other, "session-summary.md").startswith("# Last Session"),
+      "control: an existing central handoff does not stop other stores from writing")
 
 # --- 8. failure => no marker, honest dirty state ----------------------------
 mem = make_mem()

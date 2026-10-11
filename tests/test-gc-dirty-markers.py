@@ -3,8 +3,10 @@
 
 Rule under test (precedence):
   1. mtime within 30 min  -> KEEP (running/parallel session, never touch)
+  1b. consolidated_by == "headless" -> KEEP (trace until the harvest ledger closes it)
+  1c. dirty==false, never consolidated, foreign_touched -> KEEP (foreign-only trace)
   2. consolidated (dirty==false OR consolidated_at set) -> GC
-  3. updated <= marker.last_wrapup (a later wrap-up ran) -> GC
+  3. updated < marker.last_wrapup (a later wrap-up ran; never for a headless marker) -> GC
   4. otherwise (un-consolidated, no later wrap-up) -> KEEP
 
 Run: python tests/test-gc-dirty-markers.py   (exit 0 = pass, 1 = fail)
@@ -29,7 +31,7 @@ def _check(cond, msg):
         FAILURES.append(msg)
 
 
-def _write_dirty(working, sid, *, dirty, updated, consolidated_at=None, mtime_age_s=None):
+def _write_dirty(working, sid, *, dirty, updated, consolidated_at=None, mtime_age_s=None, extra=None):
     path = os.path.join(working, f"dirty-{sid}.json")
     obj = {
         "session_id": sid,
@@ -40,6 +42,7 @@ def _write_dirty(working, sid, *, dirty, updated, consolidated_at=None, mtime_ag
         "write_count": 1,
         "consolidated_at": consolidated_at,
     }
+    obj.update(extra or {})
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f)
     if mtime_age_s is not None:
@@ -153,6 +156,57 @@ def main():
         r = _run(mem5, apply=True)
         _check(os.path.exists(os.path.join(w5, "dirty-equal.json")),
                "#8 updated == last_wrapup -> KEEP (strict <, parity with bootstrap)")
+
+    # #9 Lebenszyklus Phase 2 (slice 3): the night run harvests without a judge. Its
+    # markers are the only trace of that session until the harvest ledger closes it,
+    # and a headless consolidation-marker is no "later wrap-up" for rule 3.
+    with tempfile.TemporaryDirectory() as tmp6:
+        mem6 = os.path.join(tmp6, ".agent-memory")
+        w6 = os.path.join(mem6, "working")
+        os.makedirs(w6)
+        with open(os.path.join(mem6, "consolidation-marker.json"), "w", encoding="utf-8") as f:
+            json.dump({"last_wrapup": "2026-10-10T09:25:00+02:00", "mode": "headless"}, f)
+        DAY3 = 86400
+        _write_dirty(w6, "headless", dirty=False, updated="2026-10-09T23:00:00+02:00",
+                     consolidated_at="2026-10-10T09:25:00+02:00", mtime_age_s=2 * DAY3,
+                     extra={"consolidated_by": "headless", "last_consolidated_by": "headless"})
+        _write_dirty(w6, "judged", dirty=False, updated="2026-10-09T23:00:00+02:00",
+                     consolidated_at="2026-10-10T09:25:00+02:00", mtime_age_s=2 * DAY3,
+                     extra={"consolidated_by": "wrap-up", "last_consolidated_by": "wrap-up"})
+        _write_dirty(w6, "beforeheadless", dirty=True, updated="2026-10-09T20:00:00+02:00",
+                     mtime_age_s=2 * DAY3)
+        r = _run(mem6)
+        _check("headless" not in r.stdout.replace("beforeheadless", "")
+               and "beforeheadless" not in r.stdout and "judged" in r.stdout,
+               f"#9 dry-run lists only the wrap-up-consolidated marker ({r.stdout.strip()[:200]})")
+        r = _run(mem6, apply=True)
+        _check(os.path.exists(os.path.join(w6, "dirty-headless.json")),
+               "#9 headless-consolidated marker is KEPT (trace until the ledger closes it)")
+        _check(not os.path.exists(os.path.join(w6, "dirty-judged.json")),
+               "#9 control: a wrap-up-consolidated marker is still GC'd")
+        _check(os.path.exists(os.path.join(w6, "dirty-beforeheadless.json")),
+               "#9 rule 3 ignores a headless consolidation-marker (no wrap-up ran)")
+
+    # #10 slice 4: a session that only wrote into OTHER stores leaves dirty:false plus
+    # foreign_touched in its own store - the only trace of that work until the ledger.
+    with tempfile.TemporaryDirectory() as tmp7:
+        mem7 = os.path.join(tmp7, ".agent-memory")
+        w7 = os.path.join(mem7, "working")
+        os.makedirs(w7)
+        _write_dirty(w7, "foreignonly", dirty=False, updated=None, mtime_age_s=2 * 86400,
+                     extra={"foreign_touched": {"C:/x/other": ["C:/x/other/a.py"]}})
+        _write_dirty(w7, "foreignjudged", dirty=False, updated="2026-10-09T23:00:00+02:00",
+                     consolidated_at="2026-10-10T09:25:00+02:00", mtime_age_s=2 * 86400,
+                     extra={"consolidated_by": "wrap-up", "foreign_touched": {"C:/x/other": ["C:/x/other/a.py"]}})
+        _run(mem7, apply=True)
+        _check(os.path.exists(os.path.join(w7, "dirty-foreignonly.json")),
+               "#10 foreign-only trace (never consolidated) is KEPT")
+        _check(not os.path.exists(os.path.join(w7, "dirty-foreignjudged.json")),
+               "#10 control: a wrap-up-consolidated marker with foreign paths is still GC'd")
+        _write_dirty(w7, "plainfalse", dirty=False, updated=None, mtime_age_s=2 * 86400)
+        _run(mem7, apply=True)
+        _check(not os.path.exists(os.path.join(w7, "dirty-plainfalse.json")),
+               "#10 control: dirty:false without foreign paths is still GC'd")
 
     if FAILURES:
         print(f"\n{len(FAILURES)} FAILURE(S)")

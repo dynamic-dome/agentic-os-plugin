@@ -66,6 +66,15 @@ printf '# Agent Identity\n\n- Language: de\n' > "$MEM/identity/soul.md"
 # Un-consolidated session: dirty flag older than 30 minutes -> RECOVERY line.
 printf '{"session_id": "deadbeef-1", "dirty": true, "write_count": 3, "touched_files": ["a.py"]}\n' > "$MEM/working/dirty-deadbeef-1.json"
 touch -d '-2 hours' "$MEM/working/dirty-deadbeef-1.json"
+# Not counted: clean, too young, wrap-up's own tail writes (<=5 after the marker).
+printf '{"session_id": "deadbeef-2", "dirty": false, "write_count": 9}\n' > "$MEM/working/dirty-deadbeef-2.json"
+touch -d '-2 hours' "$MEM/working/dirty-deadbeef-2.json"
+printf '{"session_id": "deadbeef-3", "dirty": true, "write_count": 1}\n' > "$MEM/working/dirty-deadbeef-3.json"
+printf '{"session_id": "deadbeef-4", "dirty": true, "last_consolidated_at": "2026-09-01T10:00:00", "writes_since_consolidation": 2}\n' > "$MEM/working/dirty-deadbeef-4.json"
+touch -d '-2 hours' "$MEM/working/dirty-deadbeef-4.json"
+# Counted: the same few writes after a HEADLESS stamp are real work (night run has no tail).
+printf '{"session_id": "deadbeef-5", "dirty": true, "last_consolidated_at": "2026-09-01T10:00:00", "last_consolidated_by": "headless", "writes_since_consolidation": 2}\n' > "$MEM/working/dirty-deadbeef-5.json"
+touch -d '-2 hours' "$MEM/working/dirty-deadbeef-5.json"
 # Root-level open-tasks drift (canonical location is context/).
 echo '[]' > "$MEM/open-tasks.json"
 
@@ -95,6 +104,7 @@ echo "$CTX" | grep -q "T-005" && fail "next steps: cap of 3 not applied (T-005 s
 echo "$CTX" | grep -q "STALE-FROM-SUMMARY" && fail "next steps: still sourced from session-summary.md regex" || pass "next steps: SSoT is open-tasks.json, not the summary"
 echo "$CTX" | grep -q "4 open" && pass "next steps: total open/blocked count shown" || fail "next steps: total count missing"
 echo "$CTX" | grep -q "RECOVERY" && pass "recovery: stale dirty file flagged" || fail "recovery: RECOVERY line missing"
+echo "$CTX" | grep -q "RECOVERY: 2 unkonsolidierte" && pass "recovery: counts only stale dirty work (clean, young, tail writes skipped; headless has no tail)" || fail "recovery: wrong count: $(echo "$CTX" | grep -o 'RECOVERY: [0-9]*')"
 echo "$CTX" | grep -qi "root drift" && pass "drift: root open-tasks.json flagged" || fail "drift: root open-tasks.json not flagged"
 echo "$CTX" | grep -q "First open task — Ümlaut" && ! echo "$CTX" | grep -q "Ã" && pass "utf8: non-ASCII survives (no cp1252 mojibake)" || fail "utf8: mojibake in briefing: $(echo "$CTX" | grep -o '.\{0,20\}Ã.\{0,20\}' | head -1)"
 echo "$CTX" | grep -q "/agentic-os:wrap-up" && pass "hint: slash-path for wrap-up (model frontmatter applies only there)" || fail "hint: /agentic-os:wrap-up missing"

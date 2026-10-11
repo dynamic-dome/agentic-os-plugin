@@ -9,7 +9,7 @@ model: sonnet
 effort: low
 metadata:
   author: agentic-os
-  version: '3.4'
+  version: '3.5'
   part-of: agentic-os
   layer: core
 ---
@@ -227,9 +227,11 @@ wrap-up). Sources: `working/dirty-*.json` (PostToolUse dirty-tracker hook) and
    `last_consolidated_at` (widened from 15 min — DCO-9209: a Session 2026-09-09
    wrapped-up run false-flagged at an 83-min gap between marker 13:32:39 and the
    wiki-note/commit tail-write at 14:55, commit 9946ace) AND the `session_id`
-   appears in the marker's `consolidated_sessions`, downgrade to a one-line note: the session WAS wrapped
+   appears in the marker's `consolidated_sessions` AND `last_consolidated_by` is not
+   `"headless"`, downgrade to a one-line note: the session WAS wrapped
    up; the flag was re-set by the wrap-up's own post-marker writes (native memory,
-   handoff files). The note MUST still name the count and the tail-written files
+   handoff files). A headless stamp (night run, a plain subprocess no hook sees) has
+   no tail — every write after it is real work. The note MUST still name the count and the tail-written files
    (`{n} Writes nach Konsolidierung, z.B. {file}`) — downgraded, never silent.
    More writes, or a larger gap between consolidation and last write (= real work
    after wrap-up, possibly crashed), → keep the full RECOVERY block.

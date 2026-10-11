@@ -25,7 +25,7 @@ so the expensive LLM layer (Schicht 2) is optional.
 | `make_fixtures.py` | Generates the 5 fixture stores (run on purpose after content drift; keeps the fast-path hash correct-by-construction). |
 | `fixtures/<scenario>/` | Committed `.agent-memory` stores that really trigger a gate. |
 | `eval_signals.py` | Stages each fixture to a temp dir, backdates crash markers, runs the REAL scripts, asserts the gate-triggering signals. |
-| `gate_linkage.py` | For each known gate of every covered skill (`session-bootstrap`: 16 gates, `wrap-up`: 27 gates): asserts the body carries BOTH a trigger and an action token (CNF, every conjunct mandatory). The core anti-silent-loss check. No-arg checks ALL covered skills; a body-path arg checks that one candidate SKILL.md (skill resolved from the parent dir). |
+| `gate_linkage.py` | For each known gate of every covered skill (`session-bootstrap`: 16 gates, `wrap-up`: 28 gates): asserts the body carries BOTH a trigger and an action token (CNF, every conjunct mandatory). The core anti-silent-loss check. No-arg checks ALL covered skills; a body-path arg checks that one candidate SKILL.md (skill resolved from the parent dir). |
 | `retrieval_golden.json` | 22 typical questions → expected **leading** source, allowed supporting sources, the typical wrong pick, and why. Makes the authority matrix testable instead of merely canonical (membrain T-42). |
 | `retrieval_golden.py` | Validates that set: completeness, unknown/dead sources, leading≠supporting, wrong-pick≠expected, required question types — and anchors every `kind: store` source in `skills/DEPENDENCIES.md`, so a store rename turns CI red. `--selftest` proves each rule has teeth. |
 | `run-eval.sh` | CI entry point: runs the above + the staleness notice. |
@@ -48,7 +48,7 @@ so the expensive LLM layer (Schicht 2) is optional.
 Fixture stores currently seeded for `session-bootstrap` only; `wrap-up` shares the
 same deterministic scripts (`preprocess_state.py --session-id`, `memory-thresholds.sh`,
 `gc_dirty_markers.py`), so its script-signals are covered by the existing fixtures.
-`wrap-up`'s body is guarded by its own 27-gate `gate_linkage` inventory. Dedicated
+`wrap-up`'s body is guarded by its own 28-gate `gate_linkage` inventory. Dedicated
 `wrap-up` write-effect fixtures get added if/when a wrap-up cut needs Schicht-2 capture.
 
 ## Usage

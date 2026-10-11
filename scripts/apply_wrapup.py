@@ -1245,9 +1245,28 @@ def apply_open_tasks(mem, plan, date, dry, touched, tally):
     write_json(mem, "context/open-tasks.json", rows, dry, touched)
 
 
-def apply_session_summary(mem, plan, dry, touched, tally):
+DEFAULT_CENTRAL_DIR = os.path.join(os.path.expanduser("~"), "AI")
+
+
+def is_central_store(mem, central_dir):
+    """True when this store's session-summary.md IS the central handoff (the AI workspace)."""
+    try:
+        own = os.path.normcase(os.path.realpath(os.path.join(mem, "session-summary.md")))
+        central = os.path.normcase(os.path.realpath(os.path.join(central_dir, ".agent-memory", "session-summary.md")))
+    except (OSError, ValueError):
+        return False
+    return own == central
+
+
+def apply_session_summary(mem, plan, dry, touched, tally, central_dir=DEFAULT_CENTRAL_DIR):
     s = plan.get("session_summary")
     if not s:
+        return
+    if is_central_store(mem, central_dir):
+        # DCO #9433: overwriting here dropped every other project's handoff block
+        # (2026-09-24). The block arrives via the prepend path (Step 7.6a / write_central).
+        tally["warnings"].append("session-summary.md not written: this store's summary is the central handoff "
+                                 "(prepend via Step 7.6a / write_central instead)")
         return
     st = s.get("statistics") or {}
     now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1282,8 +1301,19 @@ def apply_session_summary(mem, plan, dry, touched, tally):
     tally["session_summary_lines"] = n
 
 
-def apply_consolidation(mem, plan, session_id, dry, touched, tally):
-    """Step 9.5 - runs LAST and only when everything above succeeded."""
+CONSOLIDATION_MODES = ("wrap-up", "headless")
+
+
+def apply_consolidation(mem, plan, session_id, dry, touched, tally, by="wrap-up"):
+    """Step 9.5 - runs LAST and only when everything above succeeded.
+
+    `by` names who consolidated: "wrap-up" (the skill, with judge) or "headless"
+    (wrapup_core's night run, no judge). Stamping "wrap-up" for both made a
+    mechanically harvested session indistinguishable from a judged one
+    (Lebenszyklus Phase 2).
+    """
+    if by not in CONSOLIDATION_MODES:
+        raise PlanError(f"unknown consolidation mode {by!r} (allowed: {', '.join(CONSOLIDATION_MODES)})")
     if not plan.get("consolidate"):
         return
     work = os.path.join(mem, "working")
@@ -1308,9 +1338,9 @@ def apply_consolidation(mem, plan, session_id, dry, touched, tally):
     for name, d in dirty_files:
         d["dirty"] = False
         d["consolidated_at"] = now
-        d["consolidated_by"] = "wrap-up"
+        d["consolidated_by"] = by
         d["last_consolidated_at"] = now
-        d["last_consolidated_by"] = "wrap-up"
+        d["last_consolidated_by"] = by
         d["writes_since_consolidation"] = 0
         write_json(mem, f"working/{name}", d, dry, touched)
     tally["dirty_files_consolidated"] = len(dirty_files)
@@ -1318,6 +1348,7 @@ def apply_consolidation(mem, plan, session_id, dry, touched, tally):
 
     write_json(mem, "consolidation-marker.json", {
         "last_wrapup": now,
+        "mode": by,
         "consolidated_sessions": sessions or ([session_id] if session_id else []),
         # Measured first, plan-declared only as a fallback for runs whose
         # iterations were logged elsewhere (see verify-subagent-tallies).
@@ -1349,6 +1380,9 @@ def main() -> int:
                     help="report live learning rows that break the write rules (read-only)")
     ap.add_argument("--lock-timeout", type=float, default=store_lock.TIMEOUT_SECONDS,
                     help="seconds to wait for working/store.lock")
+    ap.add_argument("--central-dir", default=DEFAULT_CENTRAL_DIR,
+                    help="central handoff dir; a store whose summary IS <dir>/.agent-memory/session-summary.md "
+                         "never overwrites it (DCO #9433)")
     args = ap.parse_args()
 
     if not os.path.isdir(args.mem):
@@ -1436,7 +1470,7 @@ def main() -> int:
                 apply_user_candidates(args.mem, plan, date, args.dry_run, touched, tally)
             apply_soul_candidates(args.mem, plan, date, args.dry_run, touched, tally)
             apply_open_tasks(args.mem, plan, date, args.dry_run, touched, tally)
-            apply_session_summary(args.mem, plan, args.dry_run, touched, tally)
+            apply_session_summary(args.mem, plan, args.dry_run, touched, tally, args.central_dir)
             # LAST: marker only after everything else succeeded (Step 9.5 rule 5)
             apply_consolidation(args.mem, plan, session_id, args.dry_run, touched, tally)
     except (PlanError, OSError, ValueError) as e:

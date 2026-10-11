@@ -87,7 +87,7 @@
 | `learnings/learnings.json` | ceiling 1000 entries | reported (catches runaway growth only) |
 | `learnings/learnings.md` | ceiling 2000 lines | reported; a projection — re-render with `apply_wrapup.py <mem> --render-learnings`, never cut by hand |
 | `context/open-tasks.json` | soft 30 done entries | reported |
-| `session-summary.md` | soft 40 lines | reported; the next wrap-up rewrites it |
+| `session-summary.md` | soft 40 lines | reported; the next wrap-up rewrites it (AI workspace: central handoff, 5-block cap via Step 7.6a) |
 | `patterns.json` | `last_seen` > 60 days or `confidence` < 0.3 | listed in the maintain report, stays live |
 | `decisions.json` | `status: superseded` | listed, stays (every reader already filters it) |
 

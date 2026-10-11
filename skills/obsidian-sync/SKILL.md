@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '1.5'
+  version: '1.6'
   part-of: agentic-os
   layer: core
 ---
@@ -34,7 +34,8 @@ Sync session results from .agent-memory/ (RAM) into ~/wiki/ (Brain).
 
 - `.agent-memory/config.json` must exist with `wiki_root` and `sync_enabled: true`
 - The wiki at `wiki_root` must have a valid `CLAUDE.md` file
-- `.agent-memory/session-summary.md` should have current session data
+- `.agent-memory/session-summary.md` should have current session data (not in the AI
+  workspace, where it is the central handoff — see Step 2)
 
 ## Step 0: Pre-Run Commit (backup light)
 
@@ -57,7 +58,10 @@ Validate wiki connection:
 ## Step 2: Gather Session Data
 
 Read from .agent-memory/:
-1. `session-summary.md` — current session summary
+1. `session-summary.md` — current session summary. Exception: in the AI workspace
+   (`~/AI`) this file is the central handoff, and its top block belongs to whichever
+   project wrote last — take the summary from the caller's write plan
+   (`session_summary`, wrap-up Step 7.4) or, when run standalone, from the conversation.
 2. `iterations/iteration-log.md` — today's iterations (filter by today's date)
 3. `learnings/learnings.json` OR `learnings/learnings.md` — new learnings from this session (check .json first, fall back to .md; parse .md as bullet list if no .json exists)
 4. `patterns/patterns.json` OR `patterns/patterns.md` — patterns with updated confidence (check .json first, fall back to .md)

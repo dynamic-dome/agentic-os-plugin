@@ -294,11 +294,12 @@ fi
 # parallel session running RIGHT NOW, never flag those. while-read (not an
 # unquoted for-loop): the FULL path includes $MEMORY_DIR, which may contain
 # spaces even though the dirty-<sid>.json filename itself never does.
+# ONE grep -l over all old markers instead of a grep per file: DCO keeps ~140
+# markers, the per-file loop cost 3.5 s of the 15 s hook budget (2026-10-11).
 DIRTY_COUNT=0
 if [ -d "$MEMORY_DIR/working" ]; then
   while IFS= read -r df; do
     [ -n "$df" ] || continue
-    grep -q '"dirty": true' "$df" 2>/dev/null || continue
     # Tail-write downgrade: writes_since_consolidation exists only after a
     # consolidation (hook preserves the fact on re-dirty). <=5 writes since
     # = wrap-up's own post-marker writes, not a crashed session. Guard: only
@@ -306,12 +307,15 @@ if [ -d "$MEMORY_DIR/working" ]; then
     # a lone counter in a hand-edited/corrupt state must not swallow recovery.
     # The model-side bootstrap (recovery-detect rule 4b) re-checks with full
     # JSON semantics + marker membership and still surfaces a one-line note.
-    if grep -q '"last_consolidated_at": "' "$df" 2>/dev/null; then
+    # Never after a headless stamp: the night run writes outside any hooked
+    # session, so every write after it is real work (same rule as wrapup_core).
+    if grep -q '"last_consolidated_at": "' "$df" 2>/dev/null \
+       && ! grep -q '"last_consolidated_by": "headless"' "$df" 2>/dev/null; then
       WSC=$(sed -n 's/.*"writes_since_consolidation": *\([0-9][0-9]*\).*/\1/p' "$df" 2>/dev/null | head -1)
       if [ -n "$WSC" ] && [ "$WSC" -le 5 ]; then continue; fi
     fi
     DIRTY_COUNT=$((DIRTY_COUNT + 1))
-  done < <(find "$MEMORY_DIR/working" -name 'dirty-*.json' -mmin +30 2>/dev/null)
+  done < <(find "$MEMORY_DIR/working" -name 'dirty-*.json' -mmin +30 -exec grep -l '"dirty": true' {} + 2>/dev/null)
 fi
 if [ "$DIRTY_COUNT" -gt 0 ]; then
   RECOVERY_LINE="RECOVERY: ${DIRTY_COUNT} unkonsolidierte Session(s) erkannt — wrap-up ausfuehren (Step 1.5 harvestet aus touched_files + git)"

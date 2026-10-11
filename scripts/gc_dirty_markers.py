@@ -9,9 +9,14 @@ working/ — but they are disk cruft and noise for recovery-detection).
 
 A marker is GC-eligible when, in precedence order:
   1. mtime within 30 min                       -> KEEP (running/parallel session)
+  1b. consolidated_by == "headless" (night run, no judge) -> KEEP: the marker is the
+     session's only trace until the harvest ledger closes it (Lebenszyklus Phase 2)
+  1c. dirty==false, never consolidated, foreign_touched set -> KEEP: the session only
+     wrote into OTHER stores; this record is its only trace until the ledger
   2. consolidated (dirty==false OR consolidated_at set) -> REMOVE
   3. updated < consolidation-marker.last_wrapup (a later wrap-up ran, so the work is
      consolidated in git/native memory)         -> REMOVE
+     A marker whose mode is "headless" disables rule 3: no wrap-up ran.
   4. otherwise (un-consolidated, no later wrap-up) -> KEEP (real recovery candidate)
 
 Rule 3 uses strict `<` to match session-bootstrap's Recovery-Detection, which keeps
@@ -60,8 +65,8 @@ def _last_wrapup(mem):
             obj = json.load(f)
     except (OSError, ValueError):
         return None
-    if not isinstance(obj, dict):
-        return None
+    if not isinstance(obj, dict) or obj.get("mode") == "headless":
+        return None  # a headless run is no "later wrap-up" (rule 3)
     return _parse_dt(obj.get("last_wrapup"))
 
 
@@ -81,6 +86,12 @@ def _eligible(path, marker_wrapup, now):
         return False, "unparseable"  # never delete what we cannot read
     if not isinstance(obj, dict):
         return False, "not-an-object"  # corrupt shape -> never delete
+    # (1b) harvested headless: keep the trace until the harvest ledger closes it
+    if obj.get("consolidated_by") == "headless":
+        return False, "headless-harvested (keep until the ledger closes it)"
+    # (1c) foreign-only session: the tracker records it without making this store dirty
+    if obj.get("dirty") is False and not obj.get("consolidated_at") and obj.get("foreign_touched"):
+        return False, "foreign-only trace (keep until the ledger closes it)"
     # (2) cleanly consolidated
     if obj.get("dirty") is False or obj.get("consolidated_at"):
         return True, "consolidated"

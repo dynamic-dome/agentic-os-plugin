@@ -42,6 +42,8 @@ from wrapup_parts.wikinote import write_session_note  # noqa: E402
 IDENTITY_LINE = "Identity: headless — kein Harvest"
 # Same downgrade rule as the RECOVERY line in session-start.sh: a dirty file that carries
 # last_consolidated_at and at most this many writes since is wrap-up's own tail, not lost work.
+# Never after a headless stamp: the night run is a plain subprocess the tracker never sees, so
+# every write after it is real session work.
 TAIL_WRITES_MAX = 5
 HEADLESS_WARNING = ("Headless konsolidiert (Nachtlauf, ohne Judge): Learnings, Decisions und Identity "
                     "wurden nicht geerntet.")
@@ -74,7 +76,7 @@ def _dirty_sessions(mem):
 
 def _is_tail(data):
     """True when the dirty file only holds wrap-up's own writes after its marker (session-start.sh rule)."""
-    if not data.get("last_consolidated_at"):
+    if not data.get("last_consolidated_at") or data.get("last_consolidated_by") == "headless":
         return False
     try:
         return int(data.get("writes_since_consolidation", 0)) <= TAIL_WRITES_MAX
@@ -238,7 +240,8 @@ def cmd_apply_headless(args):
             return _emit({**empty, "marker_written": False, "files_written": [], "tally": tally}, 0)
         try:
             with store_lock.store_lock(mem):
-                aw.apply_consolidation(mem, {"consolidate": True}, session_id, False, touched, tally)
+                aw.apply_consolidation(mem, {"consolidate": True}, session_id, False, touched, tally,
+                                       by="headless")
         except (aw.PlanError, OSError, ValueError) as exc:  # ValueError: decode/shape (5.2.1)
             return _emit({**empty, "ok": False, "error": f"marker: {exc}", "marker_written": False}, 2)
         return _emit({**empty, "marker_written": True, "files_written": touched, "tally": tally}, 0)
@@ -249,7 +252,7 @@ def cmd_apply_headless(args):
         with guard:
             aw.validate_plan(mem, plan)
             aw.apply_iterations(mem, plan, date, args.dry_run, touched, tally)
-            aw.apply_session_summary(mem, plan, args.dry_run, touched, tally)
+            aw.apply_session_summary(mem, plan, args.dry_run, touched, tally, args.central_dir)
     except (aw.PlanError, OSError, ValueError) as exc:  # ValueError: decode/shape (5.2.1)
         return _emit({"ok": False, "mode": "headless", "error": f"store: {exc}", "files_written": touched,
                       "note": "consolidation marker NOT written - dirty state stays honest"}, 2)
@@ -292,10 +295,12 @@ def cmd_apply_headless(args):
 
     try:  # step 9: marker LAST
         with store_lock.store_lock(mem):
-            aw.apply_consolidation(mem, plan, session_id, False, touched, tally)
+            aw.apply_consolidation(mem, plan, session_id, False, touched, tally, by="headless")
     except (aw.PlanError, OSError, ValueError) as exc:  # ValueError: decode/shape (5.2.1)
         return _emit({**result, "ok": False, "error": f"marker: {exc}", "handoff": handoff, "wiki_note": wiki_note,
                       "marker_written": False, "files_written": touched, "tally": tally}, 2)
+    if reports["patterns"] != "ok":  # DCO #9696: fail-soft, but never reported as a clean run
+        result["status"] = "consolidated(patterns failed)"
     reports["state_hash"] = _run_script([os.path.join(HERE, "preprocess_state.py"), mem, "--write-hash"], project_root)
     result.update({"handoff": handoff, "wiki_note": wiki_note, "projections": projections, "reports": reports,
                    "marker_written": True, "files_written": touched, "tally": tally})

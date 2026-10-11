@@ -14,12 +14,15 @@ SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts
 FAILURES = []
 
 
-def run_hook(payload, env_project=None, script=None):
+def run_hook(payload, env_project=None, script=None, extra_env=None, raw_utf8=False):
     env = os.environ.copy()
     env.pop("CLAUDE_PROJECT_DIR", None)
     if env_project:
         env["CLAUDE_PROJECT_DIR"] = env_project
-    data = payload if isinstance(payload, str) else json.dumps(payload)
+    for key in ("PYTHONIOENCODING", "PYTHONUTF8"):  # worst case: the console code page decides
+        env.pop(key, None)
+    env.update(extra_env or {})
+    data = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=not raw_utf8)
     return subprocess.run(
         [sys.executable, script or SCRIPT],
         input=data.encode("utf-8"),
@@ -208,12 +211,181 @@ def main():
     state4 = json.load(open(f4, encoding="utf-8"))
     check("P2 apply_patch memory skip", state4.get("write_count") == 1)
 
+    # --- Lebenszyklus Phase 2, slice 4: data basis for the harvest ledger + DCO #9693 ---
+    # Q: transcript_path and cwd come from the payload; a later payload without them keeps them
+    sid5 = "ledger-basis"
+    f5 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sid5}.json")
+    payload = dict(base, session_id=sid5, transcript_path="C:/t/ledger-basis.jsonl")
+    run_hook(payload, env_project=proj)
+    payload = dict(base, session_id=sid5)
+    payload.pop("cwd")
+    run_hook(payload, env_project=proj)
+    state5 = json.load(open(f5, encoding="utf-8"))
+    check("Q transcript_path + cwd kept", state5.get("transcript_path") == "C:/t/ledger-basis.jsonl"
+          and state5.get("cwd") == proj and state5.get("write_count") == 2, str(state5)[:300])
+    payload = dict(base, session_id="bad-transcript", transcript_path=123)
+    run_hook(payload, env_project=proj)
+    state6 = json.load(open(os.path.join(proj, ".agent-memory", "working", "dirty-bad-transcript.json"),
+                            encoding="utf-8"))
+    check("Q2 non-string transcript_path omitted", "transcript_path" not in state6, str(state6)[:200])
+
+    # R: a write into ANOTHER store goes to foreign_touched; neither store becomes dirty
+    other = os.path.join(root, "other")
+    os.makedirs(os.path.join(other, ".agent-memory"))
+    sid7 = "foreign-only"
+    f7 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sid7}.json")
+    payload = dict(base, session_id=sid7, transcript_path="C:/t/foreign-only.jsonl",
+                   tool_input={"file_path": os.path.join(other, "src", "x.py")})
+    p = run_hook(payload, env_project=proj)
+    state7 = json.load(open(f7, encoding="utf-8")) if os.path.isfile(f7) else {}
+    ft = state7.get("foreign_touched") or {}
+    keys = [os.path.normcase(os.path.realpath(k)) for k in ft]
+    check("R foreign write recorded, own store not dirty", p.returncode == 0 and state7.get("dirty") is False
+          and keys == [os.path.normcase(os.path.realpath(other))] and not state7.get("touched_files"),
+          str(state7)[:300])
+    check("R2 foreign store untouched", not os.path.isdir(os.path.join(other, ".agent-memory", "working")))
+    check("R3 foreign-only session keeps transcript_path", state7.get("transcript_path") == "C:/t/foreign-only.jsonl")
+
+    # S: own work afterwards makes the own store dirty and keeps the foreign record
+    payload = dict(base, session_id=sid7)
+    run_hook(payload, env_project=proj)
+    state7 = json.load(open(f7, encoding="utf-8"))
+    check("S own work after foreign", state7.get("dirty") is True and state7.get("write_count") == 1
+          and len(state7.get("touched_files", [])) == 1 and len(state7.get("foreign_touched") or {}) == 1,
+          str(state7)[:300])
+    payload = dict(base, session_id=sid7, tool_input={"file_path": os.path.join(other, "src", "y.py")})
+    run_hook(payload, env_project=proj)
+    state7 = json.load(open(f7, encoding="utf-8"))
+    ft7 = state7.get("foreign_touched") or {}
+    check("S2 foreign write after own work keeps dirty:true", state7.get("dirty") is True
+          and state7.get("write_count") == 1 and sum(len(v) for v in ft7.values()) == 2, str(state7)[:300])
+
+    # S3: two hooks of ONE session at the same time (own + foreign): own work must never be lost
+    lost = []
+    for i in range(12):
+        sid_r = f"race-{i}"
+        procs = []
+        for fp in (os.path.join(proj, "src", f"own{i}.py"), os.path.join(other, "src", f"f{i}.py")):
+            env = os.environ.copy()
+            env["CLAUDE_PROJECT_DIR"] = proj
+            pl = json.dumps(dict(base, session_id=sid_r, tool_input={"file_path": fp})).encode("utf-8")
+            pr = subprocess.Popen([sys.executable, SCRIPT], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, env=env)
+            procs.append((pr, pl))
+        for pr, pl in procs:  # feed both before waiting on either: the hooks really overlap
+            pr.stdin.write(pl)
+            pr.stdin.close()
+        for pr, _ in procs:
+            pr.wait(timeout=30)
+        fr = os.path.join(proj, ".agent-memory", "working", f"dirty-{sid_r}.json")
+        try:
+            st = json.load(open(fr, encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            lost.append(f"{i}: unreadable {exc}")
+            continue
+        if not (st.get("dirty") is True and st.get("foreign_touched")):
+            lost.append(f"{i}: dirty={st.get('dirty')} foreign={bool(st.get('foreign_touched'))}")
+    check("S3 parallel own+foreign hooks lose nothing (12 rounds)", not lost, "; ".join(lost)[:300])
+
+    # T: scratch under the temp dir is never work, even where HOME's store is an ancestor of it
+    fake_tmp = os.path.join(root, "faketemp")
+    os.makedirs(fake_tmp)
+    # an ancestor store above the temp dir (like HOME's on a real machine): without the
+    # temp rule the scratch file would count as that store's foreign work
+    os.makedirs(os.path.join(root, ".agent-memory"))
+    env_tmp = {"TMPDIR": fake_tmp, "TEMP": fake_tmp, "TMP": fake_tmp}
+    proj3 = os.path.join(os.path.dirname(fake_tmp), "proj3")  # sibling, NOT under the (fake) temp dir
+    os.makedirs(os.path.join(proj3, ".agent-memory"))
+    sid8 = "temp-scratch"
+    f8 = os.path.join(proj3, ".agent-memory", "working", f"dirty-{sid8}.json")
+    payload = dict(base, session_id=sid8, cwd=proj3, tool_input={"file_path": os.path.join(fake_tmp, "helper.py")})
+    p = run_hook(payload, env_project=proj3, extra_env=env_tmp)
+    check("T temp scratch ignored", p.returncode == 0 and not os.path.isfile(f8),
+          open(f8, encoding="utf-8").read()[:300] if os.path.isfile(f8) else "")
+    look_alike = os.path.join(root, "faketemp2")  # string prefix of the temp dir, not inside it
+    os.makedirs(look_alike)
+    payload = dict(base, session_id=sid8, cwd=proj3, tool_input={"file_path": os.path.join(look_alike, "x.py")})
+    run_hook(payload, env_project=proj3, extra_env=env_tmp)
+    state8 = json.load(open(f8, encoding="utf-8")) if os.path.isfile(f8) else {}
+    keys8 = [os.path.normcase(os.path.realpath(k)) for k in (state8.get("foreign_touched") or {})]
+    check("T2 temp rule is a path test, not a string prefix", keys8 == [os.path.normcase(os.path.realpath(root))],
+          str(state8)[:300])
+
+    # U: a path on another drive is ignored on its own (commonpath ValueError) - the own
+    # path in the same patch is still recorded; the outer fail-soft catch would drop both
+    if os.name == "nt":
+        drive = "Z:" if not os.path.abspath(proj3).upper().startswith("Z:") else "Y:"
+        patch3 = f"*** Begin Patch\n*** Update File: {drive}/nowhere/x.py\n+a\n*** Update File: src/ok.py\n+b\n*** End Patch"
+        payload = {"session_id": "drive-change", "cwd": proj3, "tool_name": "apply_patch", "tool_input": {"command": patch3}}
+        p = run_hook(payload, env_project=proj3, extra_env=env_tmp)  # project outside temp: the drive check runs
+        f9 = os.path.join(proj3, ".agent-memory", "working", "dirty-drive-change.json")
+        state9 = json.load(open(f9, encoding="utf-8")) if os.path.isfile(f9) else {}
+        check("U drive change skips only that path", p.returncode == 0 and p.stderr == b""
+              and state9.get("touched_files") == ["src/ok.py"] and not state9.get("foreign_touched"), str(state9)[:300])
+
+    # V: inside the project, a deeper store without its own repository (stray/auto-init stub,
+    # e.g. AI/dual-bridge/scripts) never takes the project's work; one with .git is a real project
+    stray = os.path.join(proj, "stray")
+    os.makedirs(os.path.join(stray, ".agent-memory"))
+    nested_repo = os.path.join(proj, "repo2")
+    os.makedirs(os.path.join(nested_repo, ".agent-memory"))
+    os.makedirs(os.path.join(nested_repo, ".git"))
+    sid10 = "nested-stores"
+    f10 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sid10}.json")
+    run_hook(dict(base, session_id=sid10, tool_input={"file_path": os.path.join(stray, "a.py")}), env_project=proj)
+    run_hook(dict(base, session_id=sid10, tool_input={"file_path": os.path.join(nested_repo, "b.py")}), env_project=proj)
+    state10 = json.load(open(f10, encoding="utf-8")) if os.path.isfile(f10) else {}
+    keys10 = [os.path.normcase(os.path.realpath(k)) for k in (state10.get("foreign_touched") or {})]
+    check("V stray store inside the project stays own work", state10.get("dirty") is True
+          and state10.get("touched_files") == [os.path.join(stray, "a.py")], str(state10)[:300])
+    check("V2 nested repository with its own store is foreign",
+          keys10 == [os.path.normcase(os.path.realpath(nested_repo))], str(state10)[:300])
+
+    # W: raw UTF-8 payload with an umlaut in the project path (Claude Code does not ASCII-escape)
+    uproj = os.path.join(root, "\u00dcbung_\u00e4\u00f6\u00fc")
+    os.makedirs(os.path.join(uproj, ".agent-memory"))
+    target = os.path.join(uproj, "src", "\u00e4.py")
+    p = run_hook(dict(base, session_id="umlaut", cwd=uproj, tool_input={"file_path": target}),
+                 env_project=uproj, raw_utf8=True)
+    fw = os.path.join(uproj, ".agent-memory", "working", "dirty-umlaut.json")
+    statew = json.load(open(fw, encoding="utf-8")) if os.path.isfile(fw) else {}
+    check("W UTF-8 payload: umlaut path is own work", p.returncode == 0 and statew.get("dirty") is True
+          and statew.get("touched_files") == [target] and not statew.get("foreign_touched"), str(statew)[:300])
+
+    # X: at most 20 foreign stores, the least recently written one is dropped first
+    caps = os.path.join(root, "caps")
+    for n in range(21):
+        os.makedirs(os.path.join(caps, f"s{n}", ".agent-memory"))
+    sid11 = "caps"
+    f11 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sid11}.json")
+    for n in [*range(20), 0, 20]:
+        run_hook(dict(base, session_id=sid11, tool_input={"file_path": os.path.join(caps, f"s{n}", "x.py")}),
+                 env_project=proj)
+    state11 = json.load(open(f11, encoding="utf-8"))
+    names11 = {os.path.basename(os.path.normpath(k)) for k in state11.get("foreign_touched", {})}
+    check("X foreign stores capped at 20, least recent dropped", len(names11) == 20 and "s0" in names11
+          and "s20" in names11 and "s1" not in names11, str(sorted(names11))[:300])
+
+    # Y: another writer holds the store lock past LOCK_TIMEOUT_S -> the hook still records (unlocked), exit 0
+    sys.path.insert(0, os.path.dirname(SCRIPT))
+    import store_lock
+    import time
+    sid12 = "lock-held"
+    f12 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sid12}.json")
+    with store_lock.store_lock(os.path.join(proj, ".agent-memory")):
+        t0 = time.time()
+        p = run_hook(dict(base, session_id=sid12), env_project=proj)
+        waited = time.time() - t0
+    state12 = json.load(open(f12, encoding="utf-8")) if os.path.isfile(f12) else {}
+    check("Y lock held by another writer: hook waits, then records unlocked", p.returncode == 0
+          and state12.get("dirty") is True and waited >= 1.5, f"rc={p.returncode} waited={waited:.1f}s {state12}"[:300])
+
     shutil.rmtree(root, ignore_errors=True)
     print()
     if FAILURES:
         print(f"DIRTY-TRACKER TESTS FAILED: {len(FAILURES)} -> {FAILURES}")
         sys.exit(1)
-    print("ALL DIRTY-TRACKER TESTS PASSED (20 tests)")
+    print("ALL DIRTY-TRACKER TESTS PASSED")
 
 
 if __name__ == "__main__":

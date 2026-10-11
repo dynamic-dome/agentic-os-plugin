@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '4.9'
+  version: '4.10'
   part-of: agentic-os
   layer: core
 ---
@@ -453,7 +453,8 @@ learnings were extracted: offer sync via the `notebooklm` user-skill. Otherwise 
 
 Emit the plan collected across Steps 3–7 and apply it in ONE call — BEFORE the wiki
 sync (7.5), the central handoff (7.6) and the commit offer (8): all three read the
-freshly written learnings, decisions and session-summary from disk (L44). Leave
+freshly written learnings, decisions and session-summary from disk (L44) — except the
+summary in the AI workspace (central-summary, 7.5). Leave
 `consolidate` OUT of this plan — the marker is Step 9.5's own call, so the wiki note
 and handoff files never land after the marker as tail writes.
 
@@ -471,7 +472,9 @@ Read the returned JSON:
 - `identity_status_line` — emit verbatim as the mandatory Step 6.5 line.
 - `files_written` — spot-check one or two if anything looks off.
 - `warnings` — surface them; they are contract violations (e.g. summary over
-  30 lines), not noise.
+  30 lines), not noise. One is expected: in the AI workspace the store's summary
+  IS the central handoff, so `session-summary.md not written: … central handoff`
+  just means the block arrives in 7.6a (DCO #9433).
 
 Exit code 2 means the plan was rejected and **nothing was consolidated**: the
 marker is absent and the dirty flags stay set on purpose. Fix the plan and
@@ -497,6 +500,11 @@ ONE status line in every case:
 - `Wiki-Sync: übersprungen — Session nicht substanziell`
 - Failure: `Wiki-Sync fehlgeschlagen: {reason}. Session data is safe in .agent-memory/.`
   (warn and continue — never block wrap-up).
+
+**AI workspace (central-summary):** there `session-summary.md` is the central handoff
+and still starts with the PREVIOUS session's block until 7.6a prepends this one — so
+obsidian-sync takes the session summary from this run's write plan
+(`session_summary`), not from the file.
 
 ## Step 7.6: Central Cross-Project Handoff (SESSION-WORKFLOW)
 

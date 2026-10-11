@@ -322,6 +322,9 @@ def test_core():
         check(marker.get("consolidated_sessions") == ["s1"], f"marker names the session {marker}")
         dirty = json.loads(read(os.path.join(mem, "working", "dirty-s1.json")))
         check(dirty.get("dirty") is False, "dirty flag reset")
+        check(dirty.get("consolidated_by") == "headless" and dirty.get("last_consolidated_by") == "headless"
+              and marker.get("mode") == "headless",
+              f"headless run is stamped 'headless', never 'wrap-up' {dirty.get('consolidated_by')} {marker.get('mode')}")
         check(all(read(os.path.join(mem, *rel.split("/"))) == text for rel, text in env["judge_only"].items()),
               "learnings/decisions/user.md untouched (no judge, no identity promotion)")
         check(out.get("identity_status_line") == "Identity: headless — kein Harvest", "identity status line headless")
@@ -349,6 +352,20 @@ def test_core():
         age(dpath, HOURS_AGO)
         rc, out = run_core(env)
         check(out.get("status") == "consolidated", f"more than 5 writes after wrap-up -> real new work {out.get('status')}")
+    finally:
+        cleanup(env)
+
+    env = setup_core()
+    try:  # ...but a headless stamp has no tail: the night run is invisible to the tracker, so 3 writes are real work
+        dpath = os.path.join(env["mem"], "working", "dirty-s1.json")
+        d = json.loads(read(dpath))
+        d.update({"last_consolidated_at": "2026-09-24T08:20:00+02:00", "last_consolidated_by": "headless",
+                  "writes_since_consolidation": 3})
+        put(dpath, json.dumps(d))
+        age(dpath, HOURS_AGO)
+        rc, out = run_core(env)
+        check(rc == 0 and out.get("status") == "consolidated",
+              f"writes after a headless stamp are never treated as tail {out.get('status')}")
     finally:
         cleanup(env)
 
@@ -382,6 +399,32 @@ def test_core():
               "empty: central handoff untouched")
         check(json.loads(read(dpath)).get("dirty") is False and out.get("marker_written") is True,
               "empty: dirty reset + marker (RECOVERY closed)")
+        check(json.loads(read(dpath)).get("consolidated_by") == "headless",
+              "empty: the closed session is stamped 'headless' as well")
+    finally:
+        cleanup(env)
+
+    env = setup_core()
+    try:  # DCO #9433: in the AI workspace the store's summary IS the central handoff
+        handoff = block("projB", "2026-10-10 15:30") + "\n---\n\n" + block("projC", "2026-10-09 11:00")
+        put(os.path.join(env["mem"], "session-summary.md"), handoff)
+        rc, out = run_core(dict(env, central=env["proj"]))  # central/.agent-memory == mem
+        hand = read(os.path.join(env["mem"], "session-summary.md"))
+        check(rc == 0 and "work in projB" in hand and "work in projC" in hand,
+              f"store == central: foreign handoff blocks survive {out.get('status')} {out.get('handoff')}")
+        check(hand.startswith("# Letzte Session") and "*Projekt: projA*" in hand.split("\n---\n")[0],
+              "store == central: own block prepended via write_central")
+    finally:
+        cleanup(env)
+
+    env = setup_core()
+    try:  # DCO #9696: a failed pattern update must not be reported as a clean "consolidated"
+        put(os.path.join(env["mem"], "patterns", "patterns.json"), "{not json")
+        rc, out = run_core(env)
+        check(rc == 0 and out.get("status") == "consolidated(patterns failed)"
+              and str(out.get("reports", {}).get("patterns", "")).startswith("failed("),
+              f"pattern update failure shows in the status {out.get('status')} {out.get('reports')}")
+        check(out.get("marker_written") is True, "pattern update failure stays fail-soft: marker written")
     finally:
         cleanup(env)
 

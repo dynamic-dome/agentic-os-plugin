@@ -4,6 +4,67 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-11] Release v5.5.0 — Lebenszyklus Phase 2, Teil 1: Ernte-Signal ohne Ledger
+
+MINOR (neue Store-Felder `mode`, `foreign_touched`, `transcript_path`, `cwd`, `foreign_updated`; neuer Schalter
+`--central-dir`). Enthaelt auch `59c4ff2` (review_sweep: Escape-Warnung). Release-Pruefung 2026-10-11: 6 Agenten,
+0 Blocker, 12 bestaetigte Befunde eingearbeitet (Punkte 8-9), DCO #9705 zurueckgestellt.
+Plan `03-plan-endfassung.md` Phase 2 (T-038), Einstiegspruefung 2026-10-10 (`05-einstieg-phase2.md`): erst die
+Schritte, die keinen Owner-Entscheid brauchten (E7/E20 waren offen, seit D-023 entschieden); das Ledger folgt.
+(1) **Ehrlicher Stempel.** Der Nachtlauf stempelte konsolidierte Sessions mit `consolidated_by: "wrap-up"`,
+obwohl kein wrap-up lief (07.-10.10. belegt); GC und Leser konnten eine beurteilte Session nicht von einer
+mechanisch geernteten unterscheiden. `apply_consolidation(by=...)` schreibt jetzt `"wrap-up"` oder `"headless"`
+in die dirty-Datei (`consolidated_by`, `last_consolidated_by`) und als `mode` in den Marker; jeder andere Wert
+ist ein PlanError vor dem ersten Byte. `wrapup_core.py` ruft beide Stellen (Normal- und Leer-Ernte) mit
+`by="headless"`.
+(2) **DCO #9696.** Scheitert `extract_patterns --update` im Nachtlauf, lautet der Status
+`consolidated(patterns failed)` statt `consolidated` (bleibt fail-soft, Marker wird geschrieben).
+(3) **DCO #9433.** Im AI-Workspace ist die lokale `session-summary.md` zugleich die zentrale Uebergabe; das
+Ueberschreiben durch `apply_session_summary` hat am 24.09. die Bloecke anderer Projekte geloescht. Jetzt erkennt
+`is_central_store` (realpath + normcase gegen `<central-dir>/.agent-memory/session-summary.md`, Standard `~/AI`)
+den Fall, laesst die Datei unberuehrt und meldet eine Warnung; der eigene Block kommt nur per Prepend (Step 7.6a,
+`write_central`). Neu: `apply_wrapup.py --central-dir`. Der alte Guard in `wrapup_core.py` (`_inside(central,
+mem)`) prueft die andere Richtung und griff hier nie.
+(4) **GC schont headless geerntete Marker.** `gc_dirty_markers.py` Regel 1b behaelt Marker mit
+`consolidated_by: "headless"` (sie sind bis zum Ernte-Ledger die einzige Spur einer Session ohne Judge), und ein
+Konsolidierungsmarker mit `mode: "headless"` loest Regel 3 ("spaeterer wrap-up") nicht mehr aus. Der Tageslauf
+ruft den GC weiter mit `--apply` (DCO #9697); ab diesem Release loescht er dabei keine headless-Spuren mehr.
+Altmarker, die vor dem Fix als "wrap-up" gestempelt wurden, sind nicht unterscheidbar. Ihre SID steht nur dann
+im iteration-log ("Harvested headless from working/dirty-<sid>.json"), wenn die Ernte ungecommittete Arbeit
+fand; war alles committet, steht dort nur "Harvested headless from git log" ohne SID.
+(5) **Dirty-Tracker: nur eigene Arbeit macht den Store dirty (DCO #9693) und Datenbasis fuer das Ledger.** Innerhalb
+des Projekts ist alles eigene Arbeit, ausser ein tieferer Store ist ein eigenes Repository (`.git`; ein Stray-
+oder Auto-Init-Store wie `AI/dual-bridge/scripts` zaehlt nicht als fremd); ausserhalb entscheidet der tiefste
+Vorfahr mit `.agent-memory` (realpath + normcase). Ein Pfad in einem ANDEREN Store landet in
+`foreign_touched[<store-root>]` (je Store hoechstens 200 Pfade, hoechstens 20 Stores; bei mehr faellt der am
+laengsten nicht beschriebene weg), ohne einen der beiden Stores dirty zu machen; Hilfsskripte unter `%TEMP%`
+und Pfade ausserhalb jedes Stores zaehlen nicht (Beleg 10.10.: in HOME lagen ca. 40 von 52 geernteten Pfaden
+unter Temp). Liegt das Projekt selbst unter Temp (Test-
+Fixtures), gilt die Temp-Regel nicht. Ein anderes Laufwerk verwirft nur diesen Pfad. Neu im Marker:
+`transcript_path` und `cwd` aus dem Hook-Payload (bleiben bei spaeteren Payloads ohne Feld erhalten) und
+`foreign_updated`. Eine Session, die nur in fremden Stores schrieb, hinterlaesst `dirty: false` mit
+`foreign_touched`; der GC behaelt diese Spur bis zum Ledger (Regel 1c). Nach Review (Scheibe 4b): der Hook
+liest stdin als UTF-8 (Claude Code escapet Umlaute im Pfad nicht), haelt fuer sein Read-Modify-Write den
+Store-Lock hoechstens 2 s und schreibt danach ohne Lock (Erfassen geht vor), Tmp-Datei je Prozess.
+(6) **AI-Workspace in wrap-up 7.4/7.5 und obsidian-sync.** Folge aus (3): Dort beginnt `session-summary.md` bis
+Step 7.6a noch mit dem Block der vorigen Session. obsidian-sync nimmt die Zusammenfassung deshalb aus dem Plan
+(`session_summary`), nicht aus der Datei; die Warnung "central handoff" in 7.4 ist erwartet. Neues Gate
+`central-summary` in `tests/eval/gate_linkage.py`.
+(7) **RECOVERY-Zaehlung in `session-start.sh` mit einem `grep -l`** statt einem grep je dirty-Datei: im DCO
+(138 Marker) 3,5 s -> 0,13 s vom 15-s-Budget des Hooks, gleiche Zaehlung in DCO, HOME und Plugin. Der
+Briefing-Test prueft jetzt die genaue Zahl (sauber, zu jung und Nachschreibungen zaehlen nicht); ohne den
+`dirty`-Filter wird er rot.
+(8) **Kein Nachschreib-Rabatt nach einem headless-Stempel** (Release-Pruefung 2026-10-11). Die Tail-Regel
+(hoechstens 5 Writes nach dem Marker = Nachschreibungen des wrap-up, keine verlorene Arbeit) galt auch nach
+dem Nachtlauf. Der ist aber ein Subprozess, den kein Hook sieht; jede spaetere Schreibung ist echte Arbeit.
+Bis zu 5 Writes einer am Morgen fortgesetzten Session blieben so fuer RECOVERY und Nachtlauf unsichtbar. Jetzt
+greift die Regel nur, wenn `last_consolidated_by` nicht `"headless"` ist: `wrapup_core._is_tail` (auch vom
+Nachtlauf genutzt), `session-start.sh` und session-bootstrap Regel 4b (Gate-Klausel). Je ein Test, alle drei
+Stellen per Mutation geprueft.
+(9) Kleinere Nachzuege: Test fuer den Lock-Timeout-Fallback des Trackers (ohne Fallback rot); Schwellen-
+Meldung `session-summary.md` nennt die Ausnahme AI-Workspace (zentrale Uebergabe, 5 Bloecke per 7.6a),
+ebenso maintain und `references/memory-structure.md`; Gate-Zahl wrap-up 27 -> 28; Tracker-Docstring.
+
 ## [2026-10-08] Release v5.4.0 — Verdichtung: Zuordnung zu Regeln, Zeiger oben in MEMORY.md
 
 MINOR. Plan Phase 5 gekuerzt vorgezogen (Owner-Entscheid 2026-10-07; D-021 (3)+(4), E5, E14).

@@ -54,7 +54,9 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/restore_plan.py" .agent-memory \
 - `gc_dirty_markers.py` runs as **preview only** (no apply flag): a headless-consolidated
   marker is still the last trace of a session whose knowledge was never harvested, and
   the harvest ledger that would keep that trace does not exist yet. Carry the "would
-  remove" count into the report. Never hand-pick or delete these files.
+  remove" count into the report. Never hand-pick or delete these files. The GC itself now
+  keeps markers stamped `consolidated_by: "headless"` (rule 1b); the preview stays because
+  night runs before that fix stamped `"wrap-up"` and cannot be told apart.
 - `native_memory_audit.py`: exit 0 → copy its `**Summary:**` line verbatim into the
   report. Exit 2 (usage/path) or 1 (crash) → one line "native audit failed: …" and
   continue. This is a REPORTER: it never rotates, deletes or edits native stores;
@@ -85,7 +87,8 @@ again. Count repairs for the report.
 (no-archive) Every flagged store file is **reported, never cut**: name file, count and
 limit in the report. Nothing goes into an archive file, nothing is compressed — the store
 grows on purpose until the condensation path (rules + pointers) carries the load. The next
-wrap-up rewrites `session-summary.md` on its own.
+wrap-up rewrites `session-summary.md` on its own (in the AI workspace it is the central
+handoff: never rewritten, capped at 5 blocks by wrap-up Step 7.6a).
 
 `learnings/learnings.md` is a projection of `learnings.json`. When it is flagged or its
 header is missing, re-render it:

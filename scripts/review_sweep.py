@@ -67,7 +67,7 @@ def reviewable(r):
 
 
 def store_label(mem_dir):
-    root = os.path.dirname(os.path.abspath(mem_dir).rstrip("\/"))
+    root = os.path.dirname(os.path.abspath(mem_dir).rstrip("\\/"))
     return os.path.basename(root) or "store"
 
 
