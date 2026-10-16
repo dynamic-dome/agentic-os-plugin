@@ -109,6 +109,43 @@ echo "$CTX" | grep -qi "root drift" && pass "drift: root open-tasks.json flagged
 echo "$CTX" | grep -q "First open task — Ümlaut" && ! echo "$CTX" | grep -q "Ã" && pass "utf8: non-ASCII survives (no cp1252 mojibake)" || fail "utf8: mojibake in briefing: $(echo "$CTX" | grep -o '.\{0,20\}Ã.\{0,20\}' | head -1)"
 echo "$CTX" | grep -q "/agentic-os:wrap-up" && pass "hint: slash-path for wrap-up (model frontmatter applies only there)" || fail "hint: /agentic-os:wrap-up missing"
 
+# DCO #9711: blocked first, then newest updated (else created) - the oldest task must not lead.
+# DCO #8966: a marker younger than 30 min counts once it has provably ended (harvest_state.is_quiet).
+MEM2="$TMP/proj2/.agent-memory"
+mkdir -p "$MEM2/context" "$MEM2/working"
+cat > "$MEM2/context/open-tasks.json" <<'EOF'
+[
+  {"id": "T-OLD", "title": "oldest", "status": "open", "updated": "2026-07-06"},
+  {"id": "T-NEW", "title": "newest", "status": "open", "created": "2026-10-01", "updated": "2026-10-11"},
+  {"id": "T-MID", "title": "middle", "status": "open", "created": "2026-09-01"},
+  {"id": "T-BLK", "title": "blocked", "status": "blocked", "updated": "2026-08-01"}
+]
+EOF
+iso() { python -c "import datetime,sys; print((datetime.datetime.now().astimezone() - datetime.timedelta(minutes=int(sys.argv[1]))).isoformat(timespec='seconds'))" "$1"; }
+W2="$MEM2/working"
+TR="$TMP/resumed.jsonl"; echo '{}' > "$TR"
+TRW=$(cygpath -m "$TR" 2>/dev/null || printf '%s' "$TR")  # a marker holds a native path
+# counted: ended after its last activity
+printf '{"session_id": "e1", "dirty": true, "updated": "%s", "session_end": {"ended_at": "%s"}}\n' "$(iso 10)" "$(iso 5)" > "$W2/dirty-e1.json"
+# counted: fresh mtime (a stale stamp rewrote it) but 13 h without activity
+printf '{"session_id": "e2", "dirty": true, "updated": "%s"}\n' "$(iso 780)" > "$W2/dirty-e2.json"
+# not counted: wrote again after an earlier session_end (running)
+printf '{"session_id": "e3", "dirty": true, "updated": "%s", "session_end": {"ended_at": "%s"}}\n' "$(iso 1)" "$(iso 10)" > "$W2/dirty-e3.json"
+# not counted: resumed - its transcript was written 20 min after the end
+printf '{"session_id": "e4", "dirty": true, "updated": "%s", "session_end": {"ended_at": "%s"}, "transcript_path": "%s"}\n' "$(iso 25)" "$(iso 20)" "$TRW" > "$W2/dirty-e4.json"
+# not counted: ended, but only a judged wrap-up's tail writes
+printf '{"session_id": "e5", "dirty": true, "updated": "%s", "session_end": {"ended_at": "%s"}, "last_consolidated_at": "%s", "last_consolidated_by": "wrap-up", "writes_since_consolidation": 2}\n' "$(iso 10)" "$(iso 5)" "$(iso 15)" > "$W2/dirty-e5.json"
+# not counted: young, no end, recent activity (a parallel session)
+printf '{"session_id": "e6", "dirty": true, "updated": "%s"}\n' "$(iso 2)" > "$W2/dirty-e6.json"
+mkdir -p "$TMP/proj2" && cd "$TMP/proj2"
+CTX2=$(echo '{"session_id":"t2"}' | CLAUDE_PROJECT_DIR="$TMP/proj2" bash "$DIR/scripts/session-start.sh" 2>/dev/null | PYTHONIOENCODING=utf-8 python -c "import sys,json; print(json.loads(sys.stdin.read())['hookSpecificOutput']['additionalContext'])" 2>/dev/null)
+echo "$CTX2" | grep -q "Next steps: 4 open — T-BLK \[blocked\]: blocked; T-NEW: newest; T-MID: middle" \
+  && pass "next steps: blocked first, then newest updated/created (oldest not leading)" \
+  || fail "next steps order: $(echo "$CTX2" | grep -o 'Next steps: [^|]*')"
+echo "$CTX2" | grep -q "RECOVERY: 2 unkonsolidierte" \
+  && pass "recovery: young markers count once ended (session_end / 12 h quiet); running, resumed, tail, parallel do not" \
+  || fail "recovery young: $(echo "$CTX2" | grep -o 'RECOVERY: [0-9]*' || echo 'no RECOVERY line')"
+
 # Fresh init path still works and still uses the same contract.
 mkdir -p "$TMP/fresh" && cd "$TMP/fresh"
 OUT2=$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP/fresh" bash "$DIR/scripts/session-start.sh" 2>/dev/null)

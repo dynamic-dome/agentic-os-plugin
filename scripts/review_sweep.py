@@ -58,12 +58,19 @@ def native_stale(native, stale_days, today):
     return out
 
 
+# bridge_note written by apply_wrapup.apply_bridge_decisions for a delegated verdict.
+_AGENT_VERDICT = re.compile(r"^\d{4}-\d{2}-\d{2} agent: ")
+
+
 def reviewable(r):
     # bridge_status is the real field (5.2.1): 'retired' is withdrawn, 'rejected' is
-    # the owner's final veto (D18) - neither is up for review. The legacy 'status'
+    # the owner's final veto (D18) - neither is up for review. Since 5.7.0 the agent
+    # rejects too, but only out of the projections (Step 3d): that row stays a live
+    # learning and is reviewed like any other (Codex F2). The legacy 'status'
     # stays excluded for rows an older footer told someone to mark by hand.
-    return (not r.get("superseded_by") and r.get("bridge_status") not in ("retired", "rejected")
-            and r.get("status") != "retired")
+    if r.get("superseded_by") or r.get("status") == "retired" or r.get("bridge_status") == "retired":
+        return False
+    return r.get("bridge_status") != "rejected" or bool(_AGENT_VERDICT.match(str(r.get("bridge_note") or "")))
 
 
 def store_label(mem_dir):

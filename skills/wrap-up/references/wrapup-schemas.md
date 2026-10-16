@@ -13,7 +13,8 @@ body, never here.
 ## Write plan (batch writer)
 
 `scripts/apply_wrapup.py` applies every mutation below in ONE pass. Emit this
-object once, pipe it into the script, read the returned tally — do not write
+object once, pipe it into the script, read the returned tally (exception:
+`bridge_decisions` travels in its own call after it, see below) — do not write
 these files with individual Write/Edit calls (that is what made wrap-up cost
 28 API calls per run, each resending the full session context — the
 model is stateless, so cost is the sum of context length over calls).
@@ -38,6 +39,7 @@ model is stateless, so cost is the sum of context length over calls).
   "learnings":       [ { "text": "...", "summary": "...", "importance": 3, "tags": [], "derived_from": [],
                          "duplicate_of": null } ],
   "restore":         { "source": "restore_plan.py", "learnings": [ "...rows from restore_plan.py..." ] },
+  "bridge_decisions": [ { "id": "L26", "status": "approved", "note": "...", "by": "agent" } ],
   "user_candidates": [ { "key": "kebab-key", "observation": "...", "signal_type": "preference",
                          "confidence": 0.5, "evidence": [], "confirmed": false,
                          "status": "observed", "trust_source": "conversation" } ],
@@ -65,7 +67,7 @@ the `signal_type: mood` block, the promotion rule (`confirmed` OR `inferred`
 AND `occurrences >= 2` AND `confidence >= 0.6`), changelog-before-edit
 ordering, `learnings.md` regeneration, the bridge-candidate derivation
 (`importance >= 4` → `bridge_status: "candidate"`, Step 3d.1 — a plan-supplied
-`bridge_status` is dropped; `approved` exists only via the Step 3d.3 gate),
+`bridge_status` is dropped; a verdict exists only via `bridge_decisions`, Step 3d.4),
 the consolidation marker and the dirty
 flags. Supply judgment only: what is a learning, what is an identity signal,
 how important, which section.
@@ -110,10 +112,21 @@ Guarantees worth relying on:
 
 The returned `identity_status_line` is computed from the writes that actually
 happened — use it verbatim for the mandatory Step 6.5 line instead of counting
-by hand. Likewise `tally.bridge_candidates` lists ALL store-wide
-`bridge_status: "candidate"` ids (this session's and earlier declined ones) —
-build the Step 3d.2 `BRIDGE CANDIDATES:` prompt from it instead of re-reading
-`learnings.json`.
+by hand. Likewise `tally.bridge_candidates` lists ALL open store-wide
+`bridge_status: "candidate"` ids (this session's and earlier undecided ones, superseded
+rows excluded) — Step 3d.2 decides from it instead of re-reading `learnings.json`.
+
+`bridge_decisions` (Step 3d.4, 5.7.0) is applied in its own call after the main plan,
+because the ids of this session's learnings exist only then. Per entry: `id` (a live
+learning whose `bridge_status` is `candidate`, `approved` or `rejected`; not superseded,
+not a `kind: principle` pointer), `status` `approved`|`rejected`, `note` (required, the
+reason) and optional `by` `agent` (default) | `owner`. The script sets `bridge_status`
+and `bridge_note` = `<date> <by>: <note>`; one bad entry rejects the whole plan before
+the first byte. Same verdict, decider and reason again change nothing, also on a later
+day (the decision date is kept). The result carries
+`tally.bridge_approved`/`bridge_rejected` (ids), `tally.bridge_status_changed`
+(projections needed when > 0), the recomputed `tally.bridge_candidates` and a
+top-level `bridge_status_line` for the Step 3d.5 report.
 
 ## Learning entry (Step 3b)
 

@@ -104,6 +104,19 @@ fi
 
 echo ""
 
+# Run harvest-backfill tests (Phase 2 Scheibe 8, D-024: one-time closure of pre-5.6.0 markers)
+echo ">>> Running harvest-backfill tests..."
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-harvest-backfill.py"; then
+    echo ">>> Harvest-backfill tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Harvest-backfill tests: SKIPPED (no python found)"
+else
+    echo ">>> Harvest-backfill tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
 # Run native-memory audit tests (T-36: read-only store audit)
 echo ">>> Running native-memory audit tests..."
 PY_BIN=""

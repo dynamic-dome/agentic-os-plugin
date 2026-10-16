@@ -95,7 +95,16 @@ def main():
             json.dump(tasks, f)
         state = json.loads(run([mem], cwd=tmp).stdout)
         ids = [t.get("id") for t in state["open_tasks"]]
-        check("closed/cancelled/deferred are not open", ids == ["T1", "T2", "T3"], str(ids))
+        check("closed/cancelled/deferred are not open", sorted(ids) == ["T1", "T2", "T3"], str(ids))
+        # DCO #9711: consumers take the head - blocked first, then newest updated/created.
+        tasks = [{"id": "T-old", "title": "old", "status": "open", "updated": "2026-07-06"},
+                 {"id": "T-new", "title": "new", "status": "open", "created": "2026-10-01", "updated": "2026-10-11"},
+                 {"id": "T-mid", "title": "mid", "status": "open", "created": "2026-09-01"},
+                 {"id": "T-blk", "title": "blocked", "status": "blocked", "updated": "2026-08-01"}]
+        with open(os.path.join(mem, "context", "open-tasks.json"), "w", encoding="utf-8") as f:
+            json.dump(tasks, f)
+        ids = [t.get("id") for t in json.loads(run([mem], cwd=tmp).stdout)["open_tasks"]]
+        check("order: blocked first, then newest updated (else created)", ids == ["T-blk", "T-new", "T-mid", "T-old"], str(ids))
 
         # 3b. Learnings citing a pattern id that patterns.json does not hold
         os.makedirs(os.path.join(mem, "patterns"), exist_ok=True)

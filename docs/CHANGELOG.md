@@ -4,6 +4,60 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-16] Release v5.7.0 — Bridge-Gate delegiert (bridge_decisions); release.py; Backfill (Phase 2, Scheibe 8)
+
+MINOR (neuer Plan-Abschnitt `bridge_decisions`, neues Store-Feld-Verhalten `bridge_note` durch den Applier, neue
+Tally-Felder und `bridge_status_line`). Skill-Metadaten: wrap-up 4.12.
+
+- **Bridge-Gate delegiert (Owner-Entscheid 2026-10-16, globale Regel „Delegierte Entscheidungen", Wiki-Todo
+  `2026-10-16-gate-delegation-global`):** wrap-up Step 3d fragt nicht mehr `[j/n]`. Der Agent bewertet jeden offenen
+  Kandidaten vor (Bridge-Test: in jeder Session nuetzlich, dauerhafte Regel, nicht schon abgedeckt, heute wahr),
+  entscheidet und meldet je Fall eine Zeile mit Begruendung; im Zweifel Codex-Zweitmeinung, sonst `rejected` mit
+  `unsicher:`. `apply_wrapup.py` nimmt dafuer den Abschnitt `bridge_decisions: [{id, status, note, by?}]` an (eigener
+  Aufruf nach Step 7.4, weil die ids erst dann existieren) und setzt `bridge_status` + `bridge_note` =
+  `<datum> <by>: <note>`. Abgelehnt wird der ganze Plan vor dem ersten Byte bei fehlender Begruendung, unbekanntem,
+  abgeloestem, `retired`- oder Prinzip-Eintrag, doppelter id oder fremdem `by`. Gleiches Urteil mit gleicher Notiz
+  aendert nichts; `bridge_status_changed > 0` loest beide Projektionen aus. Owner-Einspruch = derselbe Abschnitt mit
+  `by: owner`. Ein plan-geliefertes `bridge_status` an einem Learning bleibt verworfen; der Nachtlauf entscheidet nie.
+  `tally.bridge_candidates` zaehlt abgeloeste Kandidaten nicht mehr mit (sie waeren nie entscheidbar).
+  Tests: `tests/test-apply-wrapup.py` (+26 Checks, 12/12 Mutanten rot), `gate_linkage.py` bridge-gate auf die neuen
+  Klauseln umgestellt. Step 0.6: ein vierter Batch-Aufruf nur bei offenen Kandidaten.
+- **Codex-Verifier (3 Befunde, alle an der Quelle bestaetigt und gefixt):** (F1) gleiches Urteil mit gleicher
+  Begruendung an einem spaeteren Tag schrieb die Notiz neu und verlor das Entscheidungsdatum - verglichen wird jetzt
+  ohne Datum. (F2) `review_sweep.py` behandelte jedes `rejected` als Owner-Veto und nahm die Zeile aus der
+  inhaltlichen Pruefung; eine Agenten-Ablehnung (`bridge_note` `<datum> agent: ...`) haelt die Zeile jetzt nur aus den
+  Projektionen, das Learning bleibt pruefbar, ein Owner-Nein bleibt Veto (`tests/test-review-sweep.py` +1).
+  (F3) Step 0.6 nannte genau drei Batch-Aufrufe, die Schema-Einleitung ein einziges Objekt - beide nennen jetzt den
+  eigenen `bridge_decisions`-Aufruf.
+
+- **`scripts/harvest_backfill.py` (neu, einmalig, Scheibe 8, D-024):** schliesst saubere Alt-Marker mit dem Stempel
+  `wrap-up` aus der Zeit vor 5.6.0. Opfer des stillen Nachtlauf-Fehlers erkennt es zweifach: die sid steht im
+  iteration-log („Harvested headless from working/dirty-<sid>.json“) oder `consolidated_at` liegt in einem echten
+  Nachtlauf dieses Projekts (`nightly-consolidation.jsonl`, 30 min ab Start). Ein Opfer schliesst nur ueber einen
+  echten wrap-up im Transkript (aufgezeichneter Pfad, sonst `~/.claude/projects/*/<sid>.jsonl`) oder eine native
+  Notiz, nie ueber `trivial` oder `transcript_fehlt` (alte Tracker-Daten); sonst bleibt es offen fuer Nachtlauf und
+  stale-Stempel. Alle anderen werden `closed_by: legacy` (Lauf `backfill`). Dirty, geschlossene, headless-gestempelte
+  und ungestempelte Marker bleiben unberuehrt. Standard ist ein Probelauf; `--apply` schreibt unter dem Store-Lock mit
+  Snapshot-Pruefung und ist idempotent. Tests: `tests/test-harvest-backfill.py` (25 Checks, 14/14 Mutanten rot).
+  Angewendet am 2026-10-11 nach Owner-j: 297 Marker in 33 Stores geschlossen (252 legacy, 43 native_note,
+  2 wrapup_im_transkript), 15 Opfer offen, zweiter Lauf 0.
+- **`scripts/session-start.sh`:** RECOVERY zaehlt einen Marker unter 30 min mit, sobald die Session nachweislich
+  beendet ist (`session_end.ended_at` nach der letzten Aktivitaet, Transkript nicht fortgesetzt) oder 12 h ruht -
+  dieselbe Regel `harvest_state.is_quiet` wie im Nachtlauf (DCO #8966). Nur Dateinamen gehen per stdin an Python
+  (Git-Bash wandelt Pfade nur in Argumenten). Next steps: blocked zuerst, dann neuestes `updated`/`created` statt
+  aelteste zuerst (DCO #9711); dieselbe Reihenfolge liefert `preprocess_state.open_tasks`, also auch der
+  Nachtlauf (Board-„Next“, Summary). session-bootstrap 3.6: recovery-detect Regel 2 kennt die Ausnahme.
+
+- **`release/release.py` (neu):** `pruefen <version>` prüft plugin.json, CHANGELOG-Kopf und CLAUDE.md, verlangt einen
+  sauberen Baum außer dem Store, lässt die Suite ohne Pipe laufen (Exit 0 und Fazitzeile) und setzt den annotierten
+  Tag; ein Tag auf einem anderen Commit wird nie verschoben. `abschluss <version>` prüft origin (main und Tag = HEAD),
+  aktualisiert Claude- und Codex-Plugin per CLI, vergleicht beide Caches dateiweise mit dem Tag (Codex' eigene
+  `migrated-command-skills` ausgenommen), prüft den Hook-Trust und exportiert die öffentliche Fassung. Gepusht wird
+  nie vom Skript. Nicht übernommen aus dem Plan: Pinning des Marketplace auf den Tag und der tägliche Drift-Check.
+- Tests: `release/tests/test_release.py` (Temp-Repos, Bare-Repo als origin, Stub-Suite), per Mutation geprüft.
+
+---
+
 ## [2026-10-11] Release v5.6.0 — Lebenszyklus Phase 2, Teil 2: Ernte-Zustand im dirty-Marker (A+, D-024)
 
 MINOR (neue Store-Felder `harvest`, `stale_reported`, `foreign_write_count`; neue Datei

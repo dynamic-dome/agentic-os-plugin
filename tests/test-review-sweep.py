@@ -53,6 +53,12 @@ def main():
             {"id": "L7", "date": "2026-05-01", "text": "bridge retired", "review_after": "2026-08-01", "bridge_status": "retired", "superseded_by": None},
             {"id": "L8", "date": "2026-05-01", "text": "owner veto", "review_after": "2026-08-01", "bridge_status": "rejected", "superseded_by": None},
             {"id": "L9", "date": "2026-05-01", "text": "approved and due", "review_after": "2026-08-01", "bridge_status": "approved", "superseded_by": None},
+            # 5.7.0 (Codex F2): an agent's bridge rejection only keeps the row out of the
+            # projections - the learning itself stays up for review; an owner's stays a veto.
+            {"id": "L10", "date": "2026-05-01", "text": "agent kept out of bridge", "review_after": "2026-08-01", "bridge_status": "rejected",
+             "bridge_note": "2026-10-16 agent: nicht in jeder Session", "superseded_by": None},
+            {"id": "L11", "date": "2026-05-01", "text": "owner bridge veto", "review_after": "2026-08-01", "bridge_status": "rejected",
+             "bridge_note": "2026-10-16 owner: nein", "superseded_by": None},
         ]
         write(os.path.join(mem, "learnings", "learnings.json"), json.dumps(rows))
         native = os.path.join(tmp, "memory")
@@ -66,10 +72,11 @@ def main():
         before = json.dumps(rows)
         p = run([mem, "--native-memory", native, "--report", report, "--today", "2026-09-08"], cwd=tmp)
         check("exit 0", p.returncode == 0, p.stderr[:300])
-        check("summary line", p.stdout.strip() == "review-sweep: due=2 native_stale=1 candidates_stale=1", p.stdout)
+        check("summary line", p.stdout.strip() == "review-sweep: due=3 native_stale=1 candidates_stale=1", p.stdout)
         rep = open(report, encoding="utf-8").read()
         check("due lists L1 and L9 only", "[L1]" in rep and "[L9]" in rep and "[L2]" not in rep and "[L6]" not in rep, rep)
         check("bridge_status retired/rejected are not due", "[L7]" not in rep and "[L8]" not in rep, rep)
+        check("an agent's bridge rejection stays due, an owner's does not", "[L10]" in rep and "[L11]" not in rep, rep)
         check("footer names no field that does not exist", "status: retired" not in rep, rep[-300:])
         check("native lists orphan-old only", "orphan-old.md" in rep and "orphan-new.md" not in rep and "kept.md" not in rep and "gone.md" not in rep, rep)
         check("candidates lists L4 only", "[L4]" in rep and "[L5]" not in rep, rep)

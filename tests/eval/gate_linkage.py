@@ -155,8 +155,10 @@ WRAPUP_GATES = [
     ]},
     {"name": "bridge-gate", "clauses": [
         ["bridge_status"],                               # trigger: candidate field
-        ["BRIDGE CANDIDATES"],                           # action: [j/n] prompt
-        ["explicit `j`"],                                # trigger: user confirmation
+        ["Approve only if ALL hold"],                    # judgment: delegated bridge test (5.7.0)
+        ["bridge_decisions"],                            # action: verdict + reason via the applier
+        ["bridge_status_line"],                          # contract: mandatory report
+        ["bridge_status_changed > 0"],                   # trigger: projections only on change
         ["bridge_projection.py"],                        # action: projection run
     ]},
     {"name": "layer-lifecycle", "clauses": [

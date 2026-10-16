@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '4.11'
+  version: '4.12'
   part-of: agentic-os
   layer: core
 ---
@@ -60,7 +60,9 @@ files you actually read this run; Step 9.5 logs that number.
 There are exactly THREE batch calls per run: the early one in Step 1.5 (iterations
 only, so Step 4 can see this session's errors), the main one in Step 7.4
 (everything else, before wiki sync and handoff) and the marker-only one in Step 9.5
-(`{"consolidate": true}`). Do NOT write `iteration-log.md`, `errors.json`,
+(`{"consolidate": true}`). A fourth runs only when Step 7.4 returns open
+`tally.bridge_candidates`: Step 3d's `bridge_decisions`-only call (the ids exist only
+after 7.4). Do NOT write `iteration-log.md`, `errors.json`,
 `working/current-session.json`,
 `decisions.json`, `learnings.json`/`learnings.md`, `session-summary.md`,
 `open-tasks.json`, `user-candidates.json`, `user-changelog.json`, `user.md`,
@@ -232,30 +234,51 @@ by hand. `learnings.md` is a pure projection of `learnings.json`: header
 `- **{id}** ({date}) {text}  #{tags}` newest first, superseded entries omitted.
 Regenerate without a plan: `python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --render-learnings`.
 
-### 3d: Bridge candidates gate (bridge-gate)
+### 3d: Bridge gate — delegated (bridge-gate)
 
 Curated Claude→Codex bridge (design: membrain/membridge.md). Canonical store is
-learnings.json (`bridge_status`); the AGENTS.md block is a projection.
+learnings.json (`bridge_status`, reason in `bridge_note`); the AGENTS.md block is a
+projection. **Delegated since 5.7.0** (owner decision 2026-10-16, global rule
+"Delegierte Entscheidungen"): bridging is reversible and internal, so the agent
+pre-assesses, decides and reports one reason per entry — no `[j/n]` question.
+Runs AFTER Step 7.4: the ids of this session's learnings exist only then.
 
 1. Every learning written this session with `importance >= 4` gets
    `"bridge_status": "candidate"` — **done by `apply_wrapup.py` automatically**
    (additive field; older entries without it are untouched, never backfill; a
-   plan-supplied `bridge_status` is dropped — `approved` exists only via gate 3).
-2. If ANY candidates exist store-wide (this session's or earlier declined ones),
-   emit ONE line: `BRIDGE CANDIDATES: {n} — nach AGENTS.md projizieren? [j/n]`
-   listing id + first ~10 words each. Source: `tally.bridge_candidates` from the
-   apply run — do not re-read learnings.json for this.
-3. **Only on an explicit `j`** (all) or a listed subset (`j L26 L27`): set those
-   entries to `"bridge_status": "approved"`, then run BOTH projections:
+   plan-supplied `bridge_status` is dropped — a verdict exists only via the
+   `bridge_decisions` section, which demands a reason).
+2. Source: `tally.bridge_candidates` from the Step 7.4 apply run — every open live
+   candidate store-wide, this session's and earlier undecided ones. Do not re-read
+   learnings.json for this. Empty → go to 3e.
+3. Pre-assess each candidate. Approve only if ALL hold: (a) useful in EVERY
+   Codex/Claude session of this project — every line in AGENTS.md / MEMORY.md costs
+   context on every start; (b) a durable, actionable rule, not a one-off fact or a
+   session story; (c) not already covered by a global rule, an approved learning or
+   a principle pointer; (d) self-contained and still true today. Otherwise reject.
+   Genuinely unsure → a Codex second opinion if one is at hand, else reject with a
+   note starting `unsicher:` — rejecting is the conservative default (reversible,
+   costs no context). Never leave a candidate undecided to "ask next time".
+4. Apply the verdicts in ONE call with only this section (no `consolidate`):
+   ```bash
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory      --session-id <session-id> <<'PLAN'
+   {"bridge_decisions": [{"id": "L26", "status": "approved", "note": "<one-sentence reason>"}]}
+   PLAN
+   ```
+   `status` is `approved` or `rejected`, `note` is required; the script stores
+   `bridge_note` = `<date> agent: <note>` on the object and rejects the whole plan on
+   an unknown, superseded, retired or principle id.
+5. Report — mandatory, like Step 6.5: the returned `bridge_status_line` verbatim,
+   then one line per case `L26 approved — <reason>`.
+6. If `tally.bridge_status_changed > 0`, run BOTH projections:
    `python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_projection.py" .agent-memory --agents-md <project-root>/AGENTS.md`
    (Codex side; workspace store `~/AI/.agent-memory` → `~/AI/AGENTS.md`) and
    `python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" .agent-memory --project-root <project-root>`
    (Claude side: managed block in `~/.claude/projects/<hash>/memory/MEMORY.md`;
    the script derives `<hash>` itself). Report both one-line outputs verbatim.
-4. On `n`/no answer: candidates stay queued — next wrap-up asks again. Never
-   promote silently; every line in AGENTS.md costs Codex context on EVERY start.
-5. Rollback: reset `bridge_status`, re-run both projections (blocks re-render or
-   disappear).
+7. Owner override = rollback: when Dominic disagrees, the same section with
+   `"by": "owner"` and the flipped status, then both projections again. No special
+   path, no question beforehand.
 
 ### 3e: Codex memory ingest (codex-ingest)
 
@@ -268,9 +291,9 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/ingest_codex_memory.py" .agent-memory
 ```
 
 Report its one line verbatim (`codex-ingest: {n} new, {n} dup, ...`). Rules:
-- Runs AFTER 3d so this session's own candidates were already offered; new
-  codex candidates are offered at the NEXT wrap-up (never in the same gate —
-  keeps the [j/n] line short and the origin visible).
+- Runs AFTER 3d so this session's own candidates were already decided; new
+  codex candidates are decided at the NEXT wrap-up (never in the same gate —
+  keeps the report short and the origin visible).
 - Never write into `~/.codex/memories`. A missing/odd file yields `skipped` or
   `0 new` — not an error, do not retry.
 - Snapshot-sync (5.1.3): Codex's current summary is canon. Tips Codex no longer
@@ -278,7 +301,7 @@ Report its one line verbatim (`codex-ingest: {n} new, {n} dup, ...`). Rules:
   links a reworded successor); rewordings of owner-rejected tips stay rejected
   (`dup-rejected`). Codex entries carry `origin: "agent"`.
 - If the line reports `rephrased`, `retired` or `revived` > 0, re-run BOTH
-  projections from 3d.3 — they ran before this step, and a retired entry must
+  projections from 3d.6 — they ran before this step, and a retired entry must
   not stay in MEMORY.md / AGENTS.md until the next wrap-up.
 - Entries carry `source_agent: codex`; `bridge_projection.py` excludes them
   from AGENTS.md (no echo back to Codex), `memory_index_projection.py`
@@ -471,6 +494,7 @@ Read the returned JSON:
   numbers for Step 6.5, never a hand count.
 - `identity_status_line` — emit verbatim as the mandatory Step 6.5 line.
 - `files_written` — spot-check one or two if anything looks off.
+- `tally.bridge_candidates` — not empty → Step 3d runs now (its own call, after this one).
 - `warnings` — surface them; they are contract violations (e.g. summary over
   30 lines), not noise. One is expected: in the AI workspace the store's summary
   IS the central handoff, so `session-summary.md not written: … central handoff`

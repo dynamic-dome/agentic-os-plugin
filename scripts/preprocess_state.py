@@ -218,13 +218,14 @@ def open_tasks(mem):
     except ValueError:
         return []
     tasks = data if isinstance(data, list) else data.get("tasks", [])
-    out = []
-    if isinstance(tasks, list):
-        for t in tasks:
-            if isinstance(t, dict) and t.get("status") not in CLOSED_TASK_STATUSES:
-                out.append({"id": t.get("id", ""), "title": t.get("title", ""),
-                            "status": t.get("status", "")})
-    return out
+    rows = [t for t in tasks if isinstance(t, dict) and t.get("status") not in CLOSED_TASK_STATUSES] \
+        if isinstance(tasks, list) else []
+    # Blocked first, then the most recently touched - consumers take the head of this list
+    # (night-run board "Next", bootstrap Atlas query); file order put the oldest task first
+    # (DCO #9711). Same rule as the session-start.sh briefing.
+    rows.sort(key=lambda t: str(t.get("updated") or t.get("created") or ""), reverse=True)
+    rows.sort(key=lambda t: 0 if t.get("status") == "blocked" else 1)
+    return [{"id": t.get("id", ""), "title": t.get("title", ""), "status": t.get("status", "")} for t in rows]
 
 
 def main():

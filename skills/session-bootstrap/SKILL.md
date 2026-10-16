@@ -9,7 +9,7 @@ model: sonnet
 effort: low
 metadata:
   author: agentic-os
-  version: '3.5'
+  version: '3.6'
   part-of: agentic-os
   layer: core
 ---
@@ -214,7 +214,10 @@ wrap-up). Sources: `working/dirty-*.json` (PostToolUse dirty-tracker hook) and
 
 1. List `working/dirty-*.json` with `dirty: true`.
 2. Ignore files whose `updated` is younger than **30 minutes** — that is most likely a
-   session running in parallel RIGHT NOW, not a crash. Never flag it.
+   session running in parallel RIGHT NOW, not a crash. Never flag it. Exception: a
+   `session_end` block whose `ended_at` is at or after the last activity (`updated`,
+   `foreign_updated`) proves the session ended — flag it regardless of age (same rule as
+   session-start.sh and the night run).
 3. Every remaining dirty file is an **un-consolidated session**. For each, extract:
    `session_id` (short), `updated`, `write_count`, up to 3 `touched_files`, and
    `agent` if present (`"codex"` marks a standalone Codex session).

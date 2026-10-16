@@ -39,3 +39,4 @@ node_modules/
 .codegraph/
 .pi-glla/
 .agent-memory/working/store.lock
+.agent-memory/

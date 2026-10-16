@@ -265,6 +265,118 @@ old = [r for r in rows if r["id"] == "L1"][0]
 check("bridge_status" not in old,
       "pre-existing imp-4 entry without the field is never backfilled")
 
+# --- 1c. bridge_decisions: delegated gate (5.7.0, Owner-Entscheid 2026-10-16) --
+def bridge_mem():
+    mem = make_mem()
+    put(mem, "learnings/learnings.json", [
+        {"id": "L1", "date": "2026-01-01", "text": "Alt ohne Feld", "importance": 4, "tags": [],
+         "layer": "short-term", "superseded_by": None, "last_relevant": "2026-01-01"},
+        {"id": "L2", "date": "2026-10-01", "text": "Kandidat A", "importance": 4, "tags": [],
+         "layer": "short-term", "superseded_by": None, "last_relevant": "2026-10-01",
+         "bridge_status": "candidate"},
+        {"id": "L3", "date": "2026-10-01", "text": "Kandidat B", "importance": 5, "tags": [],
+         "layer": "short-term", "superseded_by": None, "last_relevant": "2026-10-01",
+         "bridge_status": "candidate"},
+        {"id": "L4", "date": "2026-10-01", "text": "Zurueckgezogen", "importance": 2, "tags": [],
+         "layer": "short-term", "superseded_by": None, "last_relevant": "2026-10-01",
+         "bridge_status": "retired", "source_agent": "codex"},
+        {"id": "L5", "date": "2026-10-01", "text": "Abgeloest", "importance": 4, "tags": [],
+         "layer": "short-term", "superseded_by": "L3", "last_relevant": "2026-10-01",
+         "bridge_status": "candidate"},
+        {"id": "L6", "date": "2026-10-01", "kind": "principle", "text": "Regel → x.md#y",
+         "summary": "Regel", "anchor": "x.md#y", "importance": 4, "tags": [], "layer": "long-term",
+         "superseded_by": None, "last_relevant": "2026-10-01", "derived_from": ["L2"],
+         "bridge_status": "approved"},
+    ])
+    return mem
+
+
+DECIDE = {"date": "2026-10-16", "bridge_decisions": [
+    {"id": "L2", "status": "approved", "note": "Gilt  projektuebergreifend,\n  jede Session."},
+    {"id": "L3", "status": "rejected", "note": "Nur fuer dieses Repo relevant."},
+]}
+mem = bridge_mem()
+rc, out = run(mem, DECIDE)
+by_id = {r["id"]: r for r in load(mem, "learnings/learnings.json")}
+check(rc == 0 and by_id["L2"]["bridge_status"] == "approved" and by_id["L3"]["bridge_status"] == "rejected",
+      f"bridge_decisions sets approved/rejected (rc={rc}, {out.get('error')})")
+check(by_id["L2"].get("bridge_note") == "2026-10-16 agent: Gilt projektuebergreifend, jede Session."
+      and by_id["L3"].get("bridge_note") == "2026-10-16 agent: Nur fuer dieses Repo relevant.",
+      f"the reason lands on the object as one line '<date> <by>: <note>' ({by_id['L2'].get('bridge_note')!r})")
+t = out.get("tally", {})
+check(t.get("bridge_approved") == ["L2"] and t.get("bridge_rejected") == ["L3"]
+      and t.get("bridge_status_changed") == 2,
+      f"tally reports the decisions and the status changes ({t.get('bridge_approved')}, {t.get('bridge_status_changed')})")
+check(t.get("bridge_candidates") == [],
+      "tally.bridge_candidates is recomputed AFTER the decisions (superseded L5 is not live)")
+check(out.get("bridge_status_line", "").startswith("Bridge: 1 approved, 1 rejected"),
+      f"a bridge status line is returned for the mandatory report ({out.get('bridge_status_line')!r})")
+check(by_id["L4"]["bridge_status"] == "retired" and by_id["L6"]["bridge_status"] == "approved"
+      and "bridge_status" not in by_id["L1"],
+      "rows not named in the plan are untouched")
+before = snapshot(mem)
+rc, out = run(mem, DECIDE)
+check(rc == 0 and snapshot(mem) == before and out["tally"]["bridge_status_changed"] == 0,
+      "a second identical run changes nothing (idempotent)")
+# Codex F1: the same verdict and reason on a LATER day is the same decision - the
+# original decision date must survive, nothing is rewritten.
+rc, out = run(mem, {**DECIDE, "date": "2026-10-20"})
+check(rc == 0 and snapshot(mem) == before,
+      "the same verdict + reason on a later day rewrites nothing (decision date kept)")
+# owner override = rollback: the same section, `by: owner`, no special path
+rc, out = run(mem, {"date": "2026-10-17", "bridge_decisions": [
+    {"id": "L2", "status": "rejected", "note": "Dominic: doch nicht", "by": "owner"}]})
+row = {r["id"]: r for r in load(mem, "learnings/learnings.json")}["L2"]
+check(rc == 0 and row["bridge_status"] == "rejected" and row["bridge_note"] == "2026-10-17 owner: Dominic: doch nicht"
+      and out["tally"]["bridge_status_changed"] == 1,
+      "an earlier decision can be turned back (owner override), marked 'owner'")
+# note-only change: written, but no status change -> projections not needed
+rc, out = run(mem, {"date": "2026-10-17", "bridge_decisions": [
+    {"id": "L3", "status": "rejected", "note": "Neu begruendet"}]})
+row = {r["id"]: r for r in load(mem, "learnings/learnings.json")}["L3"]
+check(rc == 0 and row["bridge_note"] == "2026-10-17 agent: Neu begruendet" and out["tally"]["bridge_status_changed"] == 0,
+      "a new reason for the same status updates the note, bridge_status_changed stays 0")
+# dry run: full tally, no byte
+mem = bridge_mem()
+before = snapshot(mem)
+rc, out = run(mem, DECIDE, "--dry-run")
+check(rc == 0 and snapshot(mem) == before and out["tally"]["bridge_status_changed"] == 2,
+      "--dry-run reports the decisions without writing")
+# no section -> no status line (the night run and /agentic-os:log stay silent)
+rc, out = run(bridge_mem(), {"date": "2026-10-16"})
+check(rc == 0 and "bridge_status_line" not in out and out["tally"]["bridge_candidates"] == ["L2", "L3"],
+      "without the section nothing is decided and no bridge line is returned")
+
+# every malformed decision rejects the WHOLE plan before the first byte
+BAD = [
+    ("missing note", {"id": "L2", "status": "approved"}),
+    ("blank note", {"id": "L2", "status": "approved", "note": "  \n "}),
+    ("non-string note", {"id": "L2", "status": "approved", "note": 5}),
+    ("status candidate", {"id": "L2", "status": "candidate", "note": "x"}),
+    ("status retired", {"id": "L2", "status": "retired", "note": "x"}),
+    ("unknown id", {"id": "L99", "status": "approved", "note": "x"}),
+    ("id without bridge_status", {"id": "L1", "status": "approved", "note": "x"}),
+    ("retired row", {"id": "L4", "status": "approved", "note": "x"}),
+    ("superseded row", {"id": "L5", "status": "approved", "note": "x"}),
+    ("principle pointer", {"id": "L6", "status": "rejected", "note": "x"}),
+    ("unknown decider", {"id": "L2", "status": "approved", "note": "x", "by": "codex"}),
+    ("not an object", "L2"),
+]
+for case, item in BAD:
+    mem = bridge_mem()
+    before = snapshot(mem)
+    rc, out = run(mem, {"date": "2026-10-16", "iterations": [{"title": "Vorher geschrieben?"}],
+                        "bridge_decisions": [item]})
+    check(rc == 2 and out.get("ok") is False and snapshot(mem) == before,
+          f"bridge_decisions with {case}: plan rejected, nothing written (rc={rc}, {out.get('error')})")
+mem = bridge_mem()
+before = snapshot(mem)
+rc, out = run(mem, {"date": "2026-10-16", "bridge_decisions": [
+    {"id": "L2", "status": "approved", "note": "a"}, {"id": "L2", "status": "rejected", "note": "b"}]})
+check(rc == 2 and snapshot(mem) == before, "the same id twice in one plan is rejected")
+rc, out = run(mem, {"date": "2026-10-16", "bridge_decisions": {"L2": "approved"}})
+check(rc == 2 and snapshot(mem) == before, "bridge_decisions must be a list")
+
 # --- 2. trust boundary + mood block -----------------------------------------
 mem = make_mem()
 rc, out = run(mem, {"date": "2026-07-27", "user_candidates": [

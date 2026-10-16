@@ -247,9 +247,10 @@ tasks = data.get("tasks", data) if isinstance(data, dict) else data
 rows = [t for t in tasks if isinstance(t, dict) and t.get("status") in ("open", "blocked")]
 if not rows:
     sys.exit(0)
-def key(t):
-    return (0 if t.get("status") == "blocked" else 1, str(t.get("updated") or t.get("created") or ""))
-rows.sort(key=key)
+# Blocked first, then the most recently touched (updated, else created): ascending order let
+# the oldest task lead the briefing for months (DCO #9711; same rule in preprocess_state).
+rows.sort(key=lambda t: str(t.get("updated") or t.get("created") or ""), reverse=True)
+rows.sort(key=lambda t: 0 if t.get("status") == "blocked" else 1)
 parts = []
 for t in rows[:3]:
     title = str(t.get("title", "")).replace("\n", " ")
@@ -296,6 +297,33 @@ fi
 # spaces even though the dirty-<sid>.json filename itself never does.
 # ONE grep -l over all old markers instead of a grep per file: DCO keeps ~140
 # markers, the per-file loop cost 3.5 s of the 15 s hook budget (2026-10-11).
+# A marker younger than 30 min counts too once it has provably ended: a session_end block at
+# or after its last activity (transcript not resumed), or 12 h without activity - a stale or
+# harvest stamp refreshes the mtime, not the activity (DCO #8966; harvest_state.is_quiet, the
+# same rule the night run defers by). Fail-soft: no python -> the 30-min rule alone.
+# Only file NAMES go through stdin: Git-Bash converts POSIX paths in arguments for a native
+# python, never inside piped text (/c/... or /tmp/... would not open on Windows).
+ended_young() {
+  [ -n "$PY" ] && [ -f "$SELF_DIR/harvest_state.py" ] || return 0
+  local work="$MEMORY_DIR/working" names
+  names=$(find "$work" -name 'dirty-*.json' -mmin -30 -exec grep -l '"dirty": true' {} + 2>/dev/null | sed 's#.*/##')
+  [ -n "$names" ] || return 0
+  printf '%s\n' "$names" | "$PY" -c '
+import json, os, sys, time
+sys.path.insert(0, sys.argv[1])
+import harvest_state as hs
+now = time.time()
+for line in sys.stdin:
+    name = line.strip()
+    try:
+        with open(os.path.join(sys.argv[2], name), encoding="utf-8-sig") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        continue
+    if isinstance(d, dict) and d.get("dirty") and hs.is_quiet(d, now, hs.transcript_mtime(d)):
+        print(name)
+' "$SELF_DIR" "$work" 2>/dev/null | while IFS= read -r n; do printf '%s\n' "$work/${n%$'\r'}"; done
+}
 DIRTY_COUNT=0
 if [ -d "$MEMORY_DIR/working" ]; then
   while IFS= read -r df; do
@@ -315,7 +343,7 @@ if [ -d "$MEMORY_DIR/working" ]; then
       if [ -n "$WSC" ] && [ "$WSC" -le 5 ]; then continue; fi
     fi
     DIRTY_COUNT=$((DIRTY_COUNT + 1))
-  done < <(find "$MEMORY_DIR/working" -name 'dirty-*.json' -mmin +30 -exec grep -l '"dirty": true' {} + 2>/dev/null)
+  done < <(find "$MEMORY_DIR/working" -name 'dirty-*.json' -mmin +30 -exec grep -l '"dirty": true' {} + 2>/dev/null; ended_young)
 fi
 if [ "$DIRTY_COUNT" -gt 0 ]; then
   RECOVERY_LINE="RECOVERY: ${DIRTY_COUNT} unkonsolidierte Session(s) erkannt — wrap-up ausfuehren (Step 1.5 harvestet aus touched_files + git)"

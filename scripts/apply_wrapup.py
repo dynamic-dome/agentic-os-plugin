@@ -479,6 +479,7 @@ def validate_plan(mem, plan):
             raise PlanError("open task without 'title'")
 
     validate_principles(mem, plan)
+    validate_bridge_decisions(mem, plan)
 
     sups = [d.get("supersedes") for d in (plan.get("decisions") or []) if d.get("supersedes")]
     titles = [(d.get("title") or "").strip() for d in (plan.get("decisions") or [])]
@@ -747,7 +748,8 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
                 tally["warnings"].append(
                     f"{entry['id']}: summary {len(summary)} Zeichen > {SUMMARY_MAX} — die Projektion kuerzt sie")
         # Step 3d.1: derived from importance alone. Plan-supplied bridge_status
-        # is deliberately dropped - "approved" exists only via the [j/n] gate.
+        # is deliberately dropped - a verdict exists only via the plan section
+        # `bridge_decisions`, which demands a reason per entry (5.7.0).
         if entry["importance"] >= 4:
             entry["bridge_status"] = "candidate"
         added.append(entry)
@@ -758,11 +760,94 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
         tally["learning_ids"] = [e["id"] for e in added]
         if added:
             render_learnings_md(mem, rows, dry, touched)
-    # Store-wide, not session-scoped: earlier declined candidates must keep
-    # triggering the Step 3d.2 prompt line. Pre-3d entries lack the field
-    # (never backfilled) and are invisible here by design.
-    tally["bridge_candidates"] = [
-        r["id"] for r in rows if isinstance(r, dict) and r.get("bridge_status") == "candidate"]
+    # Store-wide, not session-scoped: earlier undecided candidates must keep
+    # reaching Step 3d.2. Pre-3d entries lack the field (never backfilled) and
+    # are invisible here by design.
+    tally["bridge_candidates"] = open_bridge_candidates(rows)
+
+
+def open_bridge_candidates(rows):
+    """Live rows still waiting for a Step 3d verdict. A superseded candidate is
+    not decidable (bridge_decisions refuses it), so listing it would ask forever."""
+    return [r["id"] for r in rows if isinstance(r, dict) and r.get("bridge_status") == "candidate"
+            and not r.get("superseded_by")]
+
+
+# Step 3d (5.7.0, Owner-Entscheid 2026-10-16): the bridge gate is delegated - the
+# agent pre-assesses, decides and reports one reason per entry. Only these states
+# are decidable: `retired` belongs to the Codex ingest, a principle pointer to
+# maintain Step 5c, a superseded row to its successor.
+BRIDGE_DECIDABLE = ("candidate", "approved", "rejected")
+BRIDGE_VERDICTS = ("approved", "rejected")
+BRIDGE_DECIDERS = ("agent", "owner")
+
+
+def validate_bridge_decisions(mem, plan):
+    """Shape and target of every verdict, before the first byte (one bad entry
+    rejects the whole plan, like a dangling `supersedes`)."""
+    if "bridge_decisions" not in plan:
+        return
+    items = plan["bridge_decisions"]
+    if not isinstance(items, list):
+        raise PlanError("bridge_decisions must be a list")
+    if not items:
+        return
+    live = {str(r.get("id")): r for r in load_json(mem, "learnings/learnings.json", [])
+            if isinstance(r, dict)}
+    seen = set()
+    for it in items:
+        if not isinstance(it, dict):
+            raise PlanError("bridge decision is not an object")
+        lid = str(it.get("id") or "").strip()
+        if it.get("status") not in BRIDGE_VERDICTS:
+            raise PlanError(f"bridge decision {lid}: status must be one of {BRIDGE_VERDICTS}, "
+                            f"got {it.get('status')!r}")
+        note = it.get("note")
+        if not isinstance(note, str) or not note.strip():
+            raise PlanError(f"bridge decision {lid}: 'note' (the reason) is required")
+        if it.get("by", "agent") not in BRIDGE_DECIDERS:
+            raise PlanError(f"bridge decision {lid}: 'by' must be one of {BRIDGE_DECIDERS}")
+        if lid in seen:
+            raise PlanError(f"bridge decision {lid} appears twice")
+        seen.add(lid)
+        row = live.get(lid)
+        if row is None:
+            raise PlanError(f"bridge decision points at unknown learning {lid!r}")
+        if row.get("kind") == "principle":
+            raise PlanError(f"{lid} is a principle pointer - its bridge state belongs to maintain Step 5c")
+        if row.get("superseded_by"):
+            raise PlanError(f"{lid} is superseded by {row['superseded_by']} - decide the successor")
+        if row.get("bridge_status") not in BRIDGE_DECIDABLE:
+            raise PlanError(f"{lid} is not a bridge candidate (bridge_status "
+                            f"{row.get('bridge_status')!r})")
+
+
+def apply_bridge_decisions(mem, plan, date, dry, touched, tally):
+    """Plan section `bridge_decisions` (Step 3d.4): sets bridge_status and the
+    reason `bridge_note` = "<date> <by>: <note>" on the object. Same verdict,
+    decider and reason again changes nothing - also on a later day, so the
+    original decision date survives (Codex F1); a new reason for the same verdict
+    is written but does not count as a status change (no projection needed)."""
+    items = plan.get("bridge_decisions") or []
+    if not items:
+        return
+    rows = load_json(mem, "learnings/learnings.json", [])
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    dirty = False
+    for it in items:
+        row = by_id[str(it["id"]).strip()]
+        status = it["status"]
+        reason = f"{it.get('by', 'agent')}: {' '.join(it['note'].split())}"
+        same_reason = str(row.get("bridge_note") or "").split(" ", 1)[-1] == reason
+        if row.get("bridge_status") != status:
+            tally["bridge_status_changed"] += 1
+        if row.get("bridge_status") != status or not same_reason:
+            row["bridge_status"], row["bridge_note"] = status, f"{date} {reason}"
+            dirty = True
+        tally[f"bridge_{status}"].append(str(row["id"]))
+    if dirty:
+        write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
+    tally["bridge_candidates"] = open_bridge_candidates(rows)
 
 
 # A member id without '/' or ':' is local (Lnn of THIS store) and must exist; a
@@ -1442,6 +1527,7 @@ def main() -> int:
         "decisions_skipped_duplicate": 0, "decision_ids": [],
         "learnings_added": 0, "learnings_skipped_duplicate": 0, "learning_ids": [],
         "near_duplicates": {}, "bridge_candidates": [],
+        "bridge_approved": [], "bridge_rejected": [], "bridge_status_changed": 0,
         "restored": 0, "restored_ids": [], "restore_skipped_live": 0, "restore_dropped": [],
         "principles_added": 0, "principles_updated": 0, "principle_ids": [],
         "candidates_new": 0, "candidates_updated": 0, "candidates_promoted": 0,
@@ -1469,6 +1555,7 @@ def main() -> int:
             apply_restore(args.mem, plan, date, args.dry_run, touched, tally)
             apply_learnings(args.mem, plan, date, args.dry_run, touched, tally)
             apply_principles(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_bridge_decisions(args.mem, plan, date, args.dry_run, touched, tally)
             if "user_candidates" in plan or plan.get("consolidate"):
                 # Identity growth is wrap-up Step 6's job: an iterations-only plan
                 # (/agentic-os:log) must not re-review the queue and promote to user.md.
@@ -1497,7 +1584,7 @@ def main() -> int:
         f"{tally['soul_candidates_added']} soul-candidates; "
         f"Queue: {tally['queue_open']} offen"
     )
-    print(json.dumps({
+    result = {
         "ok": True,
         "dry_run": args.dry_run,
         "date": date,
@@ -1507,7 +1594,13 @@ def main() -> int:
         "near_duplicates": tally.pop("near_duplicates"),
         "tally": tally,
         "identity_status_line": identity_line,
-    }, indent=2, ensure_ascii=False))
+    }
+    if "bridge_decisions" in plan:
+        # Step 3d.4: the measured line for the mandatory report, like Step 6.5's.
+        result["bridge_status_line"] = (
+            f"Bridge: {len(tally['bridge_approved'])} approved, {len(tally['bridge_rejected'])} rejected, "
+            f"{tally['bridge_status_changed']} geaendert; offen: {len(tally['bridge_candidates'])}")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
 
 
