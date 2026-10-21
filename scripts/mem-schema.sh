@@ -38,6 +38,25 @@ MEM_JSON_ARRAY=(
   identity/user-changelog.json
 )
 
+# Non-array files that create_memory_structure ALWAYS writes on a first init (stubs/defaults).
+# Together with MEM_JSON_ARRAY this is the complete list of files the init must produce:
+# session-start.sh verifies every entry after the Auto-Init (DCO #9680), and
+# tests/test-session-start-nested-guard.sh fails if this list and the function drift apart.
+# user.md is written only while absent, but a first init always finds it absent, so it is listed.
+# context/project-context.md is NOT here: each consumer writes it itself (see end of the function).
+MEM_INIT_FILES=(
+  quality/quality-score.json
+  working/current-session.json
+  iterations/iteration-log.md
+  patterns/patterns.md
+  learnings/learnings.md
+  identity/soul-candidates.md
+  knowledge/notebook-registry.md
+  session-summary.md
+  identity/soul.md
+  identity/user.md
+)
+
 # Tags/signals that are NEVER promoted into the global cross-project layer
 # (privacy / memory-poisoning guard). The sync-context Push pre-filter (4.A) drops any
 # entry carrying one of these tags BEFORE the promotion gate, so denied facts never

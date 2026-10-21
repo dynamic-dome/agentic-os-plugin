@@ -52,7 +52,7 @@ def load_approved(mem_dir):
     if not os.path.isfile(path):
         return []
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:  # a BOM is not corruption
             data = json.load(f)
     except (OSError, ValueError) as exc:
         print(f"bridge: learnings.json unreadable: {exc}", file=sys.stderr)
@@ -79,7 +79,7 @@ def load_open_tasks(mem_dir):
     if not os.path.isfile(path):
         return []
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:  # a BOM is not corruption
             data = json.load(f)
     except (OSError, ValueError) as exc:
         print(f"bridge: open-tasks.json unreadable, tasks skipped: {exc}",
@@ -97,7 +97,7 @@ def project_label(mem_dir):
     the wrong label into every other project's AGENTS.md)."""
     path = os.path.join(mem_dir, "config.json")
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             pid = json.load(f).get("project_id", "")
         if isinstance(pid, str) and pid.strip():
             return pid.strip()

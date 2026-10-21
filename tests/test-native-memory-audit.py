@@ -267,6 +267,26 @@ def main():
         _check(proc3.returncode == 2 and "Traceback" not in proc3.stderr,
                "CLI reports missing output dir cleanly (exit 2, no traceback)")
 
+    # DCO #9695: a BOM'd MEMORY.md (PowerShell Set-Content -Encoding utf8) reads like the
+    # BOM-less one: same orphans/dead_links. The byte count stays the raw file size (the
+    # BOM is part of what Claude Code loads), so only the bytes differ by exactly 3.
+    with tempfile.TemporaryDirectory() as root:
+        res = {}
+        for slug, prefix in (("p-plain", b""), ("p-bom", b"\xef\xbb\xbf")):
+            mem = _mk_index_bytes(root, slug, prefix + b"- [a](a.md) - x\n- [gone](gone.md) - x\n")
+            with open(os.path.join(mem, "a.md"), "w", encoding="utf-8") as f:
+                f.write("x")
+            with open(os.path.join(mem, "orphan.md"), "w", encoding="utf-8") as f:
+                f.write("x")
+            res[slug] = nma.scan_store(mem, now)
+        _check(res["p-bom"]["orphans"] == res["p-plain"]["orphans"] == ["orphan.md"],
+               "BOM MEMORY.md: orphans identical to the BOM-less index")
+        _check(res["p-bom"]["dead_links"] == res["p-plain"]["dead_links"] == ["gone.md"],
+               "BOM MEMORY.md: dead_links identical to the BOM-less index")
+        _check(res["p-bom"]["memory_md_bytes"] == res["p-plain"]["memory_md_bytes"] + 3
+               and res["p-bom"]["memory_md_lines"] == res["p-plain"]["memory_md_lines"],
+               "BOM MEMORY.md: raw byte count +3, line count unchanged")
+
     print()
     if FAILURES:
         print(f"{len(FAILURES)} FAILURE(S)")

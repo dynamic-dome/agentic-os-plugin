@@ -28,7 +28,7 @@ session-bootstrap (read-only)  →  WORK PHASE  →  wrap-up (Handoff + Learning
 
 ### SessionStart-Hook
 - **Datei(en):** `scripts/session-start.sh`, `hooks/hooks.json`
-- **Aufgabe:** Phase 0 sourct die SSoT; Phase 1 = Auto-Init bei fehlendem Store; Phase 2 = Backfill (heilt partielle Stores) + Kontext-Injection.
+- **Aufgabe:** Phase 0 sourct die SSoT; Phase 1 = Auto-Init bei fehlendem Store (nie im Windows-Verzeichnis; Erfolg erst nach Schreibprüfung gegen die SSoT, sonst WARNING); Phase 2 = Backfill (heilt partielle Stores) + Kontext-Injection.
 - **Abhaengigkeiten:** `mem-schema.sh`. Schreibt `project-context.md` selbst (Inline-Stack-Detection — bewusst ausserhalb der SSoT).
 
 ### Skills (5, geschichtet) + Commands mit Skript-Kern (3)

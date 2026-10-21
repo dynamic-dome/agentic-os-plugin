@@ -14,7 +14,7 @@ SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts
 FAILURES = []
 
 
-def run_hook(payload, env_project=None, script=None, extra_env=None, raw_utf8=False):
+def run_hook(payload, env_project=None, script=None, extra_env=None, raw_utf8=False, cwd=None):
     env = os.environ.copy()
     env.pop("CLAUDE_PROJECT_DIR", None)
     if env_project:
@@ -28,6 +28,7 @@ def run_hook(payload, env_project=None, script=None, extra_env=None, raw_utf8=Fa
         input=data.encode("utf-8"),
         capture_output=True,
         env=env,
+        cwd=cwd,
         timeout=15,
     )
 
@@ -36,6 +37,58 @@ def check(name, cond, detail=""):
     print(f"  {'PASS' if cond else 'FAIL'}: {name}" + (f" — {detail}" if detail and not cond else ""))
     if not cond:
         FAILURES.append(name)
+
+
+def _has_store_above(path):
+    """True when `path` or any ancestor holds an .agent-memory (it would own the path)."""
+    d = os.path.abspath(path)
+    while True:
+        if os.path.isdir(os.path.join(d, ".agent-memory")):
+            return True
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+
+
+def store_free_dir():
+    """A fresh directory with no store in any ancestor, or None.
+
+    "Outside every store" cannot be built under a %TEMP% that has a machine-wide
+    .agent-memory above it, so the filesystem root is the fallback. That is a deliberate
+    exception to the temp-only rule (here it is the normal path); the caller removes the
+    directory in a finally block.
+    """
+    tmp = tempfile.gettempdir()
+    for base in (tmp, os.path.splitdrive(tmp)[0] + os.sep):
+        try:
+            d = tempfile.mkdtemp(prefix="dirty-free-", dir=base)
+        except OSError:
+            continue
+        if not _has_store_above(d):
+            return d
+        shutil.rmtree(d, ignore_errors=True)
+    return None
+
+
+def make_dir_link(link, target):
+    """Directory link at `link` -> `target`: symlink, on Windows else junction. Kind or None."""
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return "symlink"
+    except (OSError, NotImplementedError):
+        pass
+    if os.name == "nt":
+        try:
+            import _winapi
+            _winapi.CreateJunction(target, link)
+            return "junction"
+        except (ImportError, OSError, AttributeError):
+            pass
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", link, target], capture_output=True)
+        if r.returncode == 0 and os.path.isdir(link):
+            return "junction"
+    return None
 
 
 def main():
@@ -403,6 +456,115 @@ def main():
     state12 = json.load(open(f12, encoding="utf-8")) if os.path.isfile(f12) else {}
     check("Y lock held by another writer: hook waits, then records unlocked", p.returncode == 0
           and state12.get("dirty") is True and waited >= 1.5, f"rc={p.returncode} waited={waited:.1f}s {state12}"[:300])
+
+    # Z: a path that is LEXICALLY in the project but resolves through a symlink/junction to
+    # somewhere outside every store is still own work (DCO #9705, "when in doubt: own work")
+    free = None
+    try:
+        free = store_free_dir()
+        link_kind = None
+        if free:
+            zt = os.path.join(free, "target")
+            os.makedirs(zt)
+            link_kind = make_dir_link(os.path.join(proj, "linked"), zt)
+        if not link_kind:
+            print("  SKIP: Z link tests - no store-free directory or no right to create a symlink/junction")
+        else:
+            sidz = "link-own"
+            fz = os.path.join(proj, ".agent-memory", "working", f"dirty-{sidz}.json")
+            linked_abs = os.path.join(proj, "linked", "x.py")
+            run_hook(dict(base, session_id=sidz, tool_input={"file_path": linked_abs}), env_project=proj)
+            statez = json.load(open(fz, encoding="utf-8")) if os.path.isfile(fz) else {}
+            check(f"Z {link_kind} out of the project, outside every store: own work", statez.get("dirty") is True
+                  and statez.get("touched_files") == [linked_abs] and statez.get("write_count") == 1
+                  and not statez.get("foreign_touched"), str(statez)[:300])
+            run_hook(dict(base, session_id=sidz, tool_input={"file_path": "linked/y.py"}), env_project=proj)
+            statez = json.load(open(fz, encoding="utf-8")) if os.path.isfile(fz) else {}
+            check("Z2 relative path through the link is own work too", statez.get("write_count") == 2
+                  and "linked/y.py" in statez.get("touched_files", []), str(statez)[:300])
+
+            # Z3: a link into ANOTHER store stays foreign - the real path wins for foreign
+            make_dir_link(os.path.join(proj, "flinked"), other)
+            sidz3 = "link-foreign"
+            fz3 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sidz3}.json")
+            run_hook(dict(base, session_id=sidz3, tool_input={"file_path": os.path.join(proj, "flinked", "x.py")}),
+                     env_project=proj)
+            statez3 = json.load(open(fz3, encoding="utf-8")) if os.path.isfile(fz3) else {}
+            keysz3 = [os.path.normcase(os.path.realpath(k)) for k in (statez3.get("foreign_touched") or {})]
+            check("Z3 link into another store stays foreign", statez3.get("dirty") is False
+                  and keysz3 == [os.path.normcase(os.path.realpath(other))] and not statez3.get("touched_files"),
+                  str(statez3)[:300])
+
+            # Z4: the same target reached WITHOUT the link (lexically outside, really outside) is still dropped
+            sidz4 = "link-bypass"
+            fz4 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sidz4}.json")
+            run_hook(dict(base, session_id=sidz4, tool_input={"file_path": os.path.join(zt, "x.py")}), env_project=proj)
+            check("Z4 lexically and really outside every store: ignored", not os.path.isfile(fz4),
+                  open(fz4, encoding="utf-8").read()[:300] if os.path.isfile(fz4) else "")
+
+            # Z5: "lexically in the project" is a path test, not a string prefix (pr vs pr2)
+            pr = os.path.join(free, "pr")
+            os.makedirs(os.path.join(pr, ".agent-memory"))
+            os.makedirs(os.path.join(free, "pr2"))
+            make_dir_link(os.path.join(free, "pr2", "linked"), zt)
+            sidz5 = "link-prefix"
+            fz5 = os.path.join(pr, ".agent-memory", "working", f"dirty-{sidz5}.json")
+            run_hook(dict(base, session_id=sidz5, cwd=pr, tool_input={"file_path": os.path.join(free, "pr2", "linked", "x.py")}),
+                     env_project=pr)
+            check("Z5 sibling project with the same name prefix is not the project", not os.path.isfile(fz5),
+                  open(fz5, encoding="utf-8").read()[:300] if os.path.isfile(fz5) else "")
+
+            # Z6: temp rule unchanged - a link to scratch under the (fake) temp dir stays ignored
+            make_dir_link(os.path.join(proj3, "tlinked"), fake_tmp)
+            sidz6 = "link-temp"
+            fz6 = os.path.join(proj3, ".agent-memory", "working", f"dirty-{sidz6}.json")
+            run_hook(dict(base, session_id=sidz6, cwd=proj3, tool_input={"file_path": os.path.join(proj3, "tlinked", "h.py")}),
+                     env_project=proj3, extra_env=env_tmp)
+            check("Z6 link to temp scratch is still scratch", not os.path.isfile(fz6),
+                  open(fz6, encoding="utf-8").read()[:300] if os.path.isfile(fz6) else "")
+
+            # Z7: ".." traversal out of the project into a store-free sibling is not own work
+            # (the lexical check needs normpath; plain commonpath would still see ".../z7proj/...")
+            z7proj = os.path.join(free, "z7proj")
+            os.makedirs(os.path.join(z7proj, ".agent-memory"))
+            os.makedirs(os.path.join(free, "z7other"))
+            sidz7 = "dotdot-out"
+            fz7 = os.path.join(z7proj, ".agent-memory", "working", f"dirty-{sidz7}.json")
+            run_hook(dict(base, session_id=sidz7, cwd=z7proj,
+                          tool_input={"file_path": os.path.join(z7proj, "..", "z7other", "x.py")}),
+                     env_project=z7proj)
+            check("Z7 '..' out of the project into a store-free dir is ignored", not os.path.isfile(fz7),
+                  open(fz7, encoding="utf-8").read()[:300] if os.path.isfile(fz7) else "")
+
+            # Z8: the project itself is opened THROUGH a link; the lexical root is the name given
+            # (projlink), not the real path - a write through a link inside it is own work
+            projlink = os.path.join(free, "projlink")
+            if make_dir_link(projlink, proj):
+                sidz8 = "projlink-own"
+                fz8 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sidz8}.json")
+                z8_abs = os.path.join(projlink, "linked", "z8.py")
+                run_hook(dict(base, session_id=sidz8, cwd=projlink, tool_input={"file_path": z8_abs}),
+                         env_project=projlink)
+                statez8 = json.load(open(fz8, encoding="utf-8")) if os.path.isfile(fz8) else {}
+                check("Z8 project opened through a link: write through a link inside it is own work",
+                      statez8.get("dirty") is True and statez8.get("touched_files") == [z8_abs]
+                      and statez8.get("write_count") == 1, str(statez8)[:300])
+            else:
+                print("  SKIP: Z8 - could not link the project")
+
+            # Z9: relative project dir (CLAUDE_PROJECT_DIR=".", cwd = project) AND a relative file path:
+            # the lexical root is absolute, so the candidate must be made absolute before the comparison
+            sidz9 = "relative-own"
+            fz9 = os.path.join(proj, ".agent-memory", "working", f"dirty-{sidz9}.json")
+            run_hook(dict(base, session_id=sidz9, tool_input={"file_path": "linked/x.py"}),
+                     env_project=".", cwd=proj)
+            statez9 = json.load(open(fz9, encoding="utf-8")) if os.path.isfile(fz9) else {}
+            check("Z9 relative project dir + relative path through a link is own work",
+                  statez9.get("dirty") is True and statez9.get("touched_files") == ["linked/x.py"]
+                  and statez9.get("write_count") == 1 and not statez9.get("foreign_touched"), str(statez9)[:300])
+    finally:
+        if free:
+            shutil.rmtree(free, ignore_errors=True)
 
     shutil.rmtree(root, ignore_errors=True)
     print()

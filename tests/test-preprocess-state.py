@@ -224,6 +224,39 @@ def main():
         except Exception as e:
             check("non-ascii content emits utf-8 JSON", False, str(e))
 
+    # 12. DCO #9695: a UTF-8 BOM (PowerShell Set-Content -Encoding utf8) is not corruption.
+    # Same store twice, once with BOM'd JSON files: every derived field must be identical
+    # (the raw-byte state hash differs by design and is not compared).
+    with tempfile.TemporaryDirectory() as tmp:
+        files = {
+            "working/dirty-abc.json": {"dirty": True, "touched": ["src/app.py"]},
+            "context/open-tasks.json": [{"id": "T1", "title": "open", "status": "open"},
+                                        {"id": "T2", "title": "done", "status": "done"}],
+            "patterns/patterns.json": [{"id": "P010"}],
+            "learnings/learnings.json": [{"id": "L1", "text": "cites P006"}],
+        }
+        states = {}
+        for label, prefix in (("plain", b""), ("bom", b"\xef\xbb\xbf")):
+            mem = os.path.join(tmp, label, ".agent-memory")
+            for rel, payload in files.items():
+                path = os.path.join(mem, *rel.split("/"))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(prefix + json.dumps(payload).encode("utf-8"))
+            p = run([mem], cwd=tmp)
+            check(f"BOM twin ({label}): exits 0 with JSON", p.returncode == 0 and p.stdout.strip().startswith("{"),
+                  p.stderr[:200])
+            states[label] = json.loads(p.stdout)
+        for key in ("changed_files", "open_tasks", "validation_errors"):
+            check(f"BOM store: {key} equals the BOM-less result",
+                  states["bom"].get(key) == states["plain"].get(key),
+                  f"bom={states['bom'].get(key)} plain={states['plain'].get(key)}")
+        check("BOM store: findings are real (task, changed file, dangling ref)",
+              [t["id"] for t in states["bom"]["open_tasks"]] == ["T1"]
+              and states["bom"]["changed_files"] == ["src/app.py"]
+              and states["bom"]["validation_errors"] == ["learnings.json: L1 references unknown pattern P006"],
+              str(states["bom"]))
+
     n = len(FAILURES)
     print(f"=== {('ALL PASSED' if n == 0 else str(n) + ' FAILURE(S)')} ===")
     return 0 if n == 0 else 1

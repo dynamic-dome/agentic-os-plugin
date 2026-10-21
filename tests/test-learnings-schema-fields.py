@@ -72,12 +72,24 @@ def main() -> int:
     if out.find("[L3]") == -1 or out.find("[L3]") > out.find("[L1]"):
         failures.append("importance-5 entry L3 not ranked above importance-3 entries")
 
+    # DCO #9695: a UTF-8 BOM (PowerShell Set-Content -Encoding utf8) is not corruption
+    with tempfile.TemporaryDirectory() as td:
+        bp = Path(td) / "learnings.json"
+        bp.write_bytes(b"\xef\xbb\xbf" + json.dumps(MIXED_STORE).encode("utf-8"))
+        bom = subprocess.run(
+            [sys.executable, str(SCRIPT), str(bp), "--top", "10"],
+            capture_output=True, text=True, timeout=30,
+        )
+    if bom.returncode != 0 or bom.stderr.strip() or bom.stdout != out:
+        failures.append(f"BOM learnings.json differs from BOM-less (rc={bom.returncode}, "
+                        f"stderr={bom.stderr.strip()!r}, stdout={bom.stdout!r})")
+
     if failures:
         print("FAIL: learnings schema-fields contract")
         for f in failures:
             print(f"  - {f}")
         return 1
-    print("PASS: learnings schema-fields contract (4 checks)")
+    print("PASS: learnings schema-fields contract (5 checks)")
     return 0
 
 

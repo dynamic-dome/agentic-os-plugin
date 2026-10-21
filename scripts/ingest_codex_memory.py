@@ -45,6 +45,12 @@ PROV = "codex:memory_summary:"
 # near-identical; below that only a superseded_by link, the gate re-decides.
 REPHRASE_MIN = 0.8
 LINK_MIN = 0.5
+# Veto threshold for owner-REJECTED tips (DCO #9787). Re-measured 2026-10-21
+# (Home/AI/DCO, time-aware: only older rejected entries): rewordings of rejected
+# tips 0.50-0.77 (3 of 7 owner-named pairs at 0.15-0.39 are out of reach),
+# non-rejected codex entries <= 0.214 except one undecided retiree at 0.625.
+# A wrong veto is cheap (the tip stays in Codex memory, only not bridged).
+REJECTED_MIN = 0.45
 ORIGIN = "agent"
 
 
@@ -171,7 +177,7 @@ def _ingest(a, summary, store):
     for kind, text, adhoc, key, prov in pending:
         pool = rejected + [r for r in active if id(r) not in seen]
         best = max(pool, key=lambda r: _jaccard(text, r.get("text", "")), default=None)
-        if best is not None and _jaccard(text, best.get("text", "")) >= REPHRASE_MIN \
+        if best is not None and _jaccard(text, best.get("text", "")) >= REJECTED_MIN \
                 and best.get("bridge_status") == "rejected":
             best["last_relevant"] = today
             dup_rejected += 1

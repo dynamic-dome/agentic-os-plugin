@@ -131,6 +131,7 @@ def main() -> None:
     own_root = os.path.realpath(project_dir)
     temp_root = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
     project_in_temp = _under(os.path.normcase(own_root), temp_root)  # e.g. a test fixture
+    lexical_root = os.path.normcase(os.path.normpath(os.path.abspath(project_dir)))  # the project by name, links unresolved
 
     # Resolve relative paths against the project dir BEFORE the skip check —
     # a relative ".agent-memory/x" must be skipped exactly like its absolute
@@ -146,7 +147,14 @@ def main() -> None:
             continue  # helper scripts and scratch in %TEMP% are never work
         store = _owner(real, own_root)
         if store is None:
-            continue  # outside every store
+            # Outside every store by real path. A symlink/junction can still sit lexically
+            # inside the project: "when in doubt, own work" - only a path outside the
+            # project by name AND by real path is dropped. (Real path inside another
+            # store stays foreign: the real path wins for foreign.)
+            # abspath: with a relative project dir abs_path stays relative, lexical_root is absolute
+            if _under(os.path.normcase(os.path.abspath(abs_path)), lexical_root):
+                kept.append(cand)
+            continue
         if os.path.normcase(store) == os.path.normcase(own_root):
             kept.append(cand)
         else:

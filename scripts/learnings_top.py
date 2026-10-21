@@ -31,7 +31,7 @@ def main() -> int:
     if not path.is_file():
         return 0
     try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
+        entries = json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError):
         print("WARN: learnings.json unreadable/corrupt", file=sys.stderr)
         return 0

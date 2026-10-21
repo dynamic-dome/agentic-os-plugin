@@ -4,6 +4,53 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-21] Release v5.7.1 — Robustheits-Bündel (DCO #9695, #9790, #9680, #9705, #9787)
+
+PATCH (nur Fehlerbehebungen, keine neue Schnittstelle). Je Todo ein Worktree mit TDD (rot vor grün),
+sonnet-Task-Review mit eigenen Mutanten, opus-Final-Review, eine gebündelte Fixwelle, danach Codex-Verifier in zwei
+Runden. Alle Testläufe mit umgeleitetem HOME/USERPROFILE und Vorher/Nachher-Vergleich der echten Stores (0 Änderungen).
+
+- **Codex-Verifier (Runde 1: 3 Befunde, an der Quelle geprüft; Runde 2: PASS ohne Befund):** (V-002, bestätigt) Die
+  Init-Schreibprüfung übersah die Dateien, die `create_memory_structure` außerhalb von `MEM_JSON_ARRAY` anlegt
+  (`quality-score.json`, `current-session.json`, Markdown-Stubs, `session-summary.md`, `soul.md`, `user.md`). Neu ist
+  die SSoT-Liste `MEM_INIT_FILES` in `mem-schema.sh`, geprüft mit `-s` (eine 0-Byte-Datei bei voller Platte ist ein
+  Fehler). Ein Drift-Test vergleicht die angelegten Dateien in beide Richtungen mit den Listen (Gegenproben auch für
+  ein leeres Schema). (V-003, bestätigt) Der Tracker verglich bei relativem `CLAUDE_PROJECT_DIR` einen relativen mit
+  einem absoluten Pfad; jetzt `abspath` (Test Z9). (V-001, widerlegt) Klartext-stdout des neuen Windows-Guards ist
+  gültig: Claude Code gibt Klartext eines SessionStart-Hooks als `hook_success`-Kontext ans Modell (im Transkript
+  gemessen), wie bei den beiden bestehenden Skip-Guards.
+
+- **BOM-Toleranz in den Lesern (#9695):** `preprocess_state.read_text`, `learnings_top`, die drei JSON-Leser in
+  `bridge_projection` (learnings, open-tasks, config) und der MEMORY.md-Leser in `review_sweep` lesen `utf-8-sig`.
+  Vorher meldeten sie eine Store-Datei mit UTF-8-BOM als kaputt (leere open_tasks, „unreadable“, Exit 1 der
+  Projektion). `memory_index_projection` und `native_memory_audit` waren schon BOM-fest und sind jetzt per Test
+  festgenagelt. Rohbyte-Hash und `projection_text` (BOM bleibt beim Zurückschreiben erhalten) unverändert.
+  Tests: je ein BOM-Zwilling in sechs Testdateien.
+- **release.py abschluss stürzt nicht mehr bei der Ausgabe ab (#9790):** `release.py main()` und
+  `scripts/codex-hook-trust.py main()` stellen stdout/stderr auf utf-8 um (in `main()`, nicht beim Import). Ursache war
+  der Gedankenstrich, den `codex-hook-trust.py` gepipet in cp1252 schrieb und der beim Eltern-Dekodieren zu U+FFFD
+  wurde, an dem `print()` in der cp1252-Konsole starb. Workaround `PYTHONIOENCODING=utf-8` entfällt. Tests:
+  `release/tests/test_release.py` (+2, cp1252-stdout/-stderr), neu `release/tests/test_codex_hook_trust.py`
+  (Fake-codex-Shim, nie das echte CLI).
+- **SessionStart: Init-Erfolg nur nach Schreibprüfung, kein Auto-Init im Windows-Verzeichnis (#9680):** Liegt das
+  Projekt im Windows-Verzeichnis (WINDIR / SystemRoot / SYSTEMROOT, Fallback `c:/windows`, Pfadgrenze beachtet), legt
+  der Hook nichts an und gibt nur einen Hinweis. Nach dem Auto-Init prüft er Verzeichnisse und Kerndateien gegen die
+  SSoT aus `mem-schema.sh`; fehlt etwas, kommt statt „initialized“ eine WARNING mit der fehlenden Datei, und der
+  Briefing-Kopf sagt „Agentic OS NOT active (auto-init failed)“. Exit 0 und gültiges JSON bleiben. Pfade in der
+  Warnung mit `/`, damit ein Ordner mit `n…` die Zeile nicht bricht. Tests: `tests/test-session-start-nested-guard.sh`
+  (Fake-WINDIR, je Umgebungsvariable einzeln, Fallback auf Funktionsebene, Teil-Schreibfehler über eine Temp-Kopie von
+  `scripts/`; nie ein Hook-Lauf gegen das echte C:\Windows).
+- **Dirty-Tracker zählt Link-Pfade im Projekt als eigene Arbeit (#9705):** Löst ein Pfad, der lexikalisch
+  (normpath + normcase) im Projekt liegt, über Symlink/Junction außerhalb jedes Stores auf, zählt er jetzt als eigene
+  Arbeit statt verworfen zu werden. Liegt der echte Pfad in einem fremden Store, bleibt er fremd; `..` aus dem Projekt
+  heraus bleibt verworfen; SKIP_MARKERS und Temp-Regel unverändert. Tests Z1-Z8 (Junction-Fallback ohne
+  Symlink-Recht; das store-freie Zielverzeichnis liegt notgedrungen im Laufwerks-Root und wird in `finally` entfernt).
+- **Codex-Ingest: eigene Veto-Schwelle für abgelehnte Tipps (#9787):** `REJECTED_MIN = 0.45` statt
+  `REPHRASE_MIN = 0.8` im Veto-Zweig. Gemessen 2026-10-21 (Home/AI/DCO, zeitrichtig): Umformulierungen abgelehnter
+  Tipps 0.50-0.77, nicht abgelehnte Codex-Einträge <= 0.214 (eine unentschiedene Ausnahme 0.625). 3 der 7
+  Owner-Paare (0.15-0.39) erreicht Token-Jaccard grundsätzlich nicht. Ein Fehl-Veto ist billig (Tipp bleibt im
+  Codex-Memory, wird nur nicht gebrückt). In-place-Rephrase aktiver Einträge bleibt bei 0.8.
+
 ## [2026-10-16] Release v5.7.0 — Bridge-Gate delegiert (bridge_decisions); release.py; Backfill (Phase 2, Scheibe 8)
 
 MINOR (neuer Plan-Abschnitt `bridge_decisions`, neues Store-Feld-Verhalten `bridge_note` durch den Applier, neue

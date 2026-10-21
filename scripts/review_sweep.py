@@ -41,7 +41,7 @@ def native_stale(native, stale_days, today):
     linked = set()
     idx = os.path.join(native, "MEMORY.md")
     if os.path.isfile(idx):
-        with open(idx, "r", encoding="utf-8") as f:
+        with open(idx, "r", encoding="utf-8-sig") as f:
             for t in LINK_RE.findall(f.read()):
                 linked.add(os.path.basename(t))
     cutoff = dt.datetime.combine(today, dt.time()).timestamp() - stale_days * 86400

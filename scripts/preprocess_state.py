@@ -58,7 +58,7 @@ def _nested_store_guard(mem_dir):
 
 def read_text(path):
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:  # a BOM is not corruption
             return f.read()
     except OSError:
         return None

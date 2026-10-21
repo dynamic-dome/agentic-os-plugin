@@ -47,6 +47,37 @@ fi
 # PHASE 1: Auto-Init (if .agent-memory/ does not exist)
 # ============================================================
 
+# Guard (DCO #9680): the Windows system directory is never a project. Started in
+# C:\Windows\system32 the hook used to claim "initialized" for a store it could not write.
+# Normalised for comparison: forward slashes, lower case, drive form c:/..., no trailing
+# slash - so C:\Windows\..., C:/Windows/... and /c/Windows/... all match. Only the Windows
+# directory itself (WINDIR / SystemRoot / SYSTEMROOT, fallback C:\Windows), nothing wider.
+_norm_path() {
+  local p r
+  p="$(printf '%s' "$1" | tr '\\' '/')"
+  r="$(cd "$p" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))"
+  [ -n "$r" ] && p="$r"
+  printf '%s' "$p" | tr '\\' '/' | tr 'A-Z' 'a-z' \
+    | sed -E 's#^/cygdrive/([a-z])(/|$)#\1:/#; s#^/([a-z])(/|$)#\1:/#; s#/+$##'
+}
+is_windows_system_dir() {
+  local proj w wins=""
+  proj="$(_norm_path "$1")"
+  for w in "${WINDIR:-}" "${SystemRoot:-}" "${SYSTEMROOT:-}"; do
+    [ -n "$w" ] && wins="$wins$(_norm_path "$w")"$'\n'
+  done
+  [ -z "$wins" ] && wins="c:/windows"
+  while IFS= read -r w; do
+    case "$w" in */*) ;; *) continue ;; esac   # empty or a bare drive would match everything
+    case "$proj" in "$w"|"$w"/*) return 0 ;; esac
+  done <<< "$wins"
+  return 1
+}
+if [ ! -d "$MEMORY_DIR" ] && is_windows_system_dir "$PROJECT_DIR"; then
+  echo "[Agentic OS] $PROJECT_DIR is inside the Windows system directory - skipping auto-init (open a real project folder; nothing was created)."
+  exit 0
+fi
+
 # Guard (V7, 2026-09-09): a subdirectory of a git repo is not a project root -
 # 25+ stub stores grew in scratch/proof/work dirs. Non-git dirs still init (AI workspace).
 if [ ! -d "$MEMORY_DIR" ]; then
@@ -137,7 +168,30 @@ ${PROJECT_NAME} — (one-line description: to be documented)
 - (none yet)
 EOFILE
 
-  INIT_MSG="[Agentic OS] Memory system initialized for '${PROJECT_NAME}'. Stack: ${LANG:-?} + ${FRAMEWORK:-?}. Please review .agent-memory/context/project-context.md."
+  # Verify what was written (DCO #9680): mkdir/redirect failures above are swallowed (set +e), so
+  # success is only claimed when the directory, every SSoT dir/file (JSON arrays + init files) and project-context.md
+  # really exist. The check list comes from mem-schema.sh, never from a copy here.
+  INIT_MISSING=""
+  [ -d "$MEMORY_DIR" ] || INIT_MISSING=".agent-memory"
+  if [ -z "$INIT_MISSING" ]; then
+    for d in "${MEM_DIRS[@]}"; do
+      [ -d "$MEMORY_DIR/$d" ] || { INIT_MISSING="$d/"; break; }
+    done
+  fi
+  if [ -z "$INIT_MISSING" ]; then
+    for f in "${MEM_JSON_ARRAY[@]}" "${MEM_INIT_FILES[@]}" context/project-context.md; do
+      [ -s "$MEMORY_DIR/$f" ] || { INIT_MISSING="$f"; break; }
+    done
+  fi
+  if [ -z "$INIT_MISSING" ]; then
+    INIT_MSG="[Agentic OS] Memory system initialized for '${PROJECT_NAME}'. Stack: ${LANG:-?} + ${FRAMEWORK:-?}. Please review .agent-memory/context/project-context.md."
+  else
+    # The JSON emitter below turns every literal backslash-n into a newline, so a Windows path
+    # with a folder starting with "n" would break the warning across lines: forward slashes only.
+    INIT_WARN_DIR="$(printf '%s' "$MEMORY_DIR" | tr '\\' '/')"
+    INIT_WARN_NAME="$(printf '%s' "$PROJECT_NAME" | tr '\\' '/')"
+    INIT_WARN="[Agentic OS] WARNING: auto-init failed for '${INIT_WARN_NAME}' - ${INIT_WARN_DIR} is incomplete (missing: ${INIT_MISSING}). No memory store is active; run /agentic-os:init from a writable project root."
+  fi
 fi
 
 # ============================================================
@@ -224,6 +278,8 @@ fi
 # Prepend init message if freshly initialized
 if [ -n "${INIT_MSG:-}" ]; then
   context="$INIT_MSG\n\n$context"
+elif [ -n "${INIT_WARN:-}" ]; then
+  context="$INIT_WARN\n\n$context"
 fi
 
 # Session briefing. Next steps come from the SSoT context/open-tasks.json
@@ -355,8 +411,11 @@ fi
 # escaped quotes inside the assigned double-quoted string left the test operands
 # effectively unquoted at subshell-eval time → "[: too many arguments" whenever
 # BRIEFING held pipes/spaces ("| Open: ... | Warnings: ..."). Plain statements fix it.
+AOS_STATE="Agentic OS active"
+[ -n "${INIT_WARN:-}" ] && AOS_STATE="Agentic OS NOT active (auto-init failed)"
 INIT_LINE=""
 [ -n "${INIT_MSG:-}" ] && INIT_LINE="Newly initialized!"
+[ -n "${INIT_WARN:-}" ] && INIT_LINE="WARNING: auto-init failed - no memory store was created (details below)."
 BRIEF_LINE=""
 [ -n "${BRIEFING:-}" ] && BRIEF_LINE="$BRIEFING"
 # Join the two optional lines with a \n separator only when BOTH are present,
@@ -369,7 +428,7 @@ elif [ -n "$BRIEF_LINE" ]; then
 fi
 HANDOFF_BLOCK=""
 [ -n "$HANDOFF_LINE" ] && HANDOFF_BLOCK="Central handoff: ${HANDOFF_LINE}\n"
-context="[AGENTIC OS SESSION BRIEFING] Begin your FIRST response with this compact block (adapt, do not dump files):\n---\nAgentic OS active | Branch: ${BRANCH:-?} | ${ITER_COUNT:-0} iterations, ${ERR_COUNT:-0} errors, ${PAT_COUNT:-0} patterns\n${OPT_LINES}\n---\nThen answer the user. Full briefing on request: /agentic-os:session-bootstrap. To end the session use the slash command /agentic-os:wrap-up (the slash path applies the skill's cheaper model class; invoking it via the Skill tool keeps the session model — measured 2.1.263).\n\n${HANDOFF_BLOCK}$context"
+context="[AGENTIC OS SESSION BRIEFING] Begin your FIRST response with this compact block (adapt, do not dump files):\n---\n${AOS_STATE} | Branch: ${BRANCH:-?} | ${ITER_COUNT:-0} iterations, ${ERR_COUNT:-0} errors, ${PAT_COUNT:-0} patterns\n${OPT_LINES}\n---\nThen answer the user. Full briefing on request: /agentic-os:session-bootstrap. To end the session use the slash command /agentic-os:wrap-up (the slash path applies the skill's cheaper model class; invoking it via the Skill tool keeps the session model — measured 2.1.263).\n\n${HANDOFF_BLOCK}$context"
 
 # Output contract: hookSpecificOutput.additionalContext. A top-level
 # "systemMessage" is shown to the USER only — the model context never contains

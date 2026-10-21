@@ -273,6 +273,25 @@ def main():
         check("BOM + 0 approved: block removed, BOM kept",
               BEGIN.encode() not in data and data.startswith(b"\xef\xbb\xbf"), repr(data[:80]))
 
+    # DCO #9695: a BOM'd learnings.json (PowerShell Set-Content -Encoding utf8) is not corruption
+    # - the block comes out byte-identical to the BOM-less store (reader already utf-8-sig).
+    results = {}
+    for label, prefix in (("plain", b""), ("bom", b"\xef\xbb\xbf")):
+        with tempfile.TemporaryDirectory() as tmp:
+            mem, md = setup(tmp, [learning("L1", "2026-08-01", "Older learning", importance=5),
+                                  learning("L2", "2026-08-20", "Newer learning")], memory_body=hand)
+            lp = os.path.join(mem, "learnings", "learnings.json")
+            with open(lp, "rb") as f:
+                raw = f.read()
+            with open(lp, "wb") as f:
+                f.write(prefix + raw)
+            p = run([mem, "--memory-md", md], cwd=tmp)
+            with open(md, "rb") as f:
+                results[label] = (p.returncode, f.read())
+    check("BOM learnings.json: exit 0, block written, identical to the BOM-less result",
+          results["bom"][0] == 0 and b"[L1]" in results["bom"][1] and results["bom"] == results["plain"],
+          repr(results["bom"][1][:120]))
+
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")
     return 1 if FAILURES else 0

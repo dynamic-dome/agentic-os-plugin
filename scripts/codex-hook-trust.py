@@ -27,6 +27,10 @@ DEFAULT_EVENTS = "sessionStart,postToolUse"
 
 
 def main() -> int:
+    # Piped stdout defaults to the console codepage (cp1252 on Windows); the parent decodes utf-8 (DCO #9790).
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--plugin-id", default=DEFAULT_PLUGIN_ID)
     ap.add_argument("--events", default=DEFAULT_EVENTS,

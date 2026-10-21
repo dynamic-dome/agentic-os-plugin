@@ -83,6 +83,21 @@ def main():
         check("store untouched", open(os.path.join(mem, "learnings", "learnings.json"), encoding="utf-8").read() == before)
         p = run([mem, "--today", "2026-09-08"], cwd=tmp)
         check("no native dir -> native_stale=0", "native_stale=0" in p.stdout, p.stdout)
+        # DCO #9695: a UTF-8 BOM (PowerShell Set-Content -Encoding utf8) is not corruption -
+        # BOM'd learnings.json and BOM'd MEMORY.md read exactly like the BOM-less files.
+        report_nobom = open(report, encoding="utf-8").read()
+        with open(os.path.join(mem, "learnings", "learnings.json"), "wb") as f:
+            f.write(b"\xef\xbb\xbf" + json.dumps(rows).encode("utf-8"))
+        with open(os.path.join(native, "MEMORY.md"), "wb") as f:
+            f.write(b"\xef\xbb\xbf" + "- [k](kept.md) — x\n".encode("utf-8"))
+        os.utime(os.path.join(native, "kept.md"), (old, old))
+        report_bom = os.path.join(tmp, "report-bom.md")
+        p = run([mem, "--native-memory", native, "--report", report_bom, "--today", "2026-09-08"], cwd=tmp)
+        check("BOM store: exit 0 and same summary as without BOM",
+              p.returncode == 0 and p.stdout.strip() == "review-sweep: due=3 native_stale=1 candidates_stale=1",
+              p.stdout + p.stderr[:300])
+        check("BOM store: report identical to the BOM-less run",
+              open(report_bom, encoding="utf-8").read() == report_nobom)
         write(os.path.join(mem, "learnings", "learnings.json"), "{bad")
         check("invalid store exit 1", run([mem], cwd=tmp).returncode == 1)
     n = len(FAILURES)

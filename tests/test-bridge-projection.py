@@ -391,6 +391,30 @@ def main():
         check("mixed line endings: foreign part byte-identical", data.startswith(mixed.encode("utf-8")),
               repr(data[:40]))
 
+    # 22. DCO #9695: a UTF-8 BOM (PowerShell Set-Content -Encoding utf8) is not corruption -
+    # learnings.json, open-tasks.json and config.json with BOM project exactly like without.
+    outs = {}
+    for label, prefix in (("plain", b""), ("bom", b"\xef\xbb\xbf")):
+        with tempfile.TemporaryDirectory() as tmp:
+            mem, agents = setup(tmp, [learning("L1", "2026-07-16", "bom learning", bridge="approved")], "# AGENTS\n")
+            write_tasks(mem, [task("T1", "bom task")])
+            with open(os.path.join(mem, "config.json"), "w", encoding="utf-8") as f:
+                json.dump({"project_id": "bomproj"}, f)
+            for rel in (("learnings", "learnings.json"), ("context", "open-tasks.json"), ("config.json",)):
+                path = os.path.join(mem, *rel)
+                with open(path, "rb") as f:
+                    raw = f.read()
+                with open(path, "wb") as f:
+                    f.write(prefix + raw)
+            p = run([mem, "--agents-md", agents], cwd=tmp)
+            content = read(agents)
+            outs[label] = (p.returncode, content)
+            check(f"BOM twin ({label}): exit 0, learning + task + label projected",
+                  p.returncode == 0 and "[L1]" in content and "[T1]" in content
+                  and "Offene Tasks (bomproj)" in content,
+                  f"rc={p.returncode} err={p.stderr[:200]} {content[-200:]!r}")
+    check("BOM store: AGENTS.md identical to the BOM-less result", outs["bom"] == outs["plain"])
+
     n = len(FAILURES)
     print(f"=== {n} failure(s) ===" if n else "=== all tests passed ===")
     return 1 if n else 0

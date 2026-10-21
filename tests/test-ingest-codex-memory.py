@@ -206,6 +206,51 @@ def main():
         p = run([mem, "--codex-memories", codex], cwd=tmp)
         check("invalid store exit 1", p.returncode == 1)
 
+    # DCO #9787: real rewordings of an owner-rejected tip score 0.50-0.77, so the
+    # veto uses REJECTED_MIN (0.45), not REPHRASE_MIN (0.8). SYNTHETIC texts; the
+    # Jaccard values are asserted so the fixture cannot drift away from the bands.
+    from apply_wrapup import _jaccard
+    rej_text = "Pin every release artifact checksum before publishing anywhere."
+    reword = "Pin every release artifact checksum prior to uploading anywhere."          # ~0.545 to rej_text
+    unrelated = "Pin every release artifact rotate keys."                              # 0.40 to rej_text
+    closer = "Pin every release artifact checksum prior to uploading anywhere!"        # 1.0 to reword
+    check("fixture band: reword of rejected is 0.45-0.8", 0.45 <= _jaccard(rej_text, reword) < 0.8,
+          str(_jaccard(rej_text, reword)))
+    check("fixture band: unrelated is below 0.45", _jaccard(rej_text, unrelated) < 0.45, str(_jaccard(rej_text, unrelated)))
+    check("fixture band: closer active entry beats the rejected one", _jaccard(closer, reword) > _jaccard(rej_text, reword))
+    with tempfile.TemporaryDirectory() as tmp:
+        def cx9787(i, text, status):
+            return {"id": i, "date": "2026-09-08", "text": text, "importance": 2, "tags": [], "layer": "short-term",
+                    "superseded_by": None, "last_relevant": "2026-09-08", "derived_from": [f"codex:memory_summary:{i:0>8}"],
+                    "bridge_status": status, "source_agent": "codex", "kind": "learning", "origin": "agent"}
+
+        def ingest9787(rows0, tip):
+            sub = tempfile.mkdtemp(dir=tmp)  # one fresh store per case
+            mem, codex = setup(sub, rows0)
+            with open(os.path.join(codex, "memory_summary.md"), "w", encoding="utf-8") as f:
+                f.write("## General Tips\n\n- " + tip + "\n")
+            p = run([mem, "--codex-memories", codex], cwd=sub)
+            return p, {r["id"]: r for r in load(mem)}, load(mem)
+
+        # (1) a reword at ~0.5 of a rejected tip is absorbed, not re-proposed
+        p, by_id, rows = ingest9787([cx9787("L1", rej_text, "rejected")], reword)
+        check("reword (~0.5) of a rejected tip is absorbed", "0 new" in p.stdout and "1 dup-rejected" in p.stdout
+              and len(rows) == 1 and by_id["L1"]["bridge_status"] == "rejected" and by_id["L1"]["text"] == rej_text,
+              p.stdout + p.stderr[:200])
+        # (2) an unrelated tip at 0.40 stays a candidate
+        p, by_id, rows = ingest9787([cx9787("L1", rej_text, "rejected")], unrelated)
+        check("unrelated tip (0.40) to a rejected tip stays a candidate", "1 new" in p.stdout and "0 dup-rejected" in p.stdout
+              and len(rows) == 2 and rows[1]["bridge_status"] == "candidate", p.stdout + p.stderr[:200])
+        # (3) an active entry at ~0.5 is NOT rewritten in place (REPHRASE_MIN stays 0.8)
+        p, by_id, rows = ingest9787([cx9787("L1", rej_text, "candidate")], reword)
+        check("active entry at ~0.5 is not rewritten in place", "0 rephrased" in p.stdout and "1 new" in p.stdout
+              and by_id["L1"]["text"] == rej_text and len(rows) == 2, p.stdout + str(by_id["L1"]))
+        # (4) the closer active entry wins over a farther rejected one: no veto, rewrite in place
+        p, by_id, rows = ingest9787([cx9787("L1", rej_text, "rejected"), cx9787("L2", closer, "approved")], reword)
+        check("closer active entry wins over the rejected one (no veto)", "1 rephrased" in p.stdout and "0 dup-rejected" in p.stdout
+              and by_id["L2"]["text"] == reword and by_id["L1"]["last_relevant"] == "2026-09-08" and len(rows) == 2,
+              p.stdout + str(by_id["L2"]))
+
     # 5.2.1: a BOM is not corruption, and ids held by archive files are taken.
     with tempfile.TemporaryDirectory() as tmp:
         existing = [{"id": "L3", "date": "2026-08-01", "text": "Old claude learning.", "importance": 3,
