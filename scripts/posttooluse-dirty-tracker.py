@@ -35,6 +35,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -249,12 +250,28 @@ def _update(state_path, data, raw_sid, kept, foreign) -> None:
     _write_state(state_path, state)
 
 
+REPLACE_TRIES = 3
+REPLACE_WAIT_S = 0.05
+
+
 def _write_state(state_path, state) -> None:
     tmp_path = f"{state_path}.{os.getpid()}.tmp"  # per process: an unlocked fallback never shares a tmp file
+    text = json.dumps(state, ensure_ascii=False, indent=1)
     try:
         with open(tmp_path, "w", encoding="utf-8") as fh:
-            json.dump(state, fh, ensure_ascii=False, indent=1)
-        os.replace(tmp_path, state_path)
+            fh.write(text)
+        # Windows: while another process reads the marker, os.replace fails with
+        # PermissionError -> retry briefly, then write in place (DCO #9890)
+        for attempt in range(REPLACE_TRIES):
+            try:
+                os.replace(tmp_path, state_path)
+                break
+            except PermissionError:
+                if attempt == REPLACE_TRIES - 1:
+                    with open(state_path, "w", encoding="utf-8") as fh:
+                        fh.write(text)
+                else:
+                    time.sleep(REPLACE_WAIT_S)
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)

@@ -37,7 +37,7 @@ from harvest_state import TAIL_WRITES_MAX  # noqa: E402
 import contextlib  # noqa: E402
 import store_lock  # noqa: E402
 from preprocess_state import open_tasks  # noqa: E402
-from wrapup_parts.handoff import write_board, write_central  # noqa: E402
+from wrapup_parts.handoff import rescue_blocks, rescue_dropped, write_board, write_central  # noqa: E402
 from wrapup_parts.harvest import harvest  # noqa: E402
 from wrapup_parts.wikinote import write_session_note  # noqa: E402
 
@@ -283,7 +283,14 @@ def cmd_apply_headless(args):
         section = (f"## {project}\n*Updated: {now} by Claude Code (headless)*\n"
                    f"- State: automatisch konsolidiert, {len(iterations)} Iterationen\n- Next: {top}\n"
                    f"- Repo: branch {repo['branch']}, uncommitted {repo['uncommitted']}, last {repo['last'][:40]}\n\n---\n")
-        handoff = {"central": write_central(central, names, block), "board": write_board(central, names, section)}
+        # 7.6a point 5: a foreign block pushed out by cap 5 moves into the board BEFORE the drop;
+        # a parallel writer can change what is dropped, so the really dropped blocks get a second pass
+        pre, dropped = rescue_dropped(central, names, block), []
+        central_status = write_central(central, names, block, dropped_out=dropped)
+        post = rescue_blocks(central, dropped)
+        handoff = {"central": central_status, "board": write_board(central, names, section),
+                   "rescued": {"rescued": pre["rescued"] + post["rescued"], "lost": post["lost"],
+                               "status": [pre["status"], post["status"]]}}
 
     wiki_root = args.wiki_root or cfg.get("wiki_root") or ""
     if not wiki_root:

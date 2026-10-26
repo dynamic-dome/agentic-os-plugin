@@ -198,6 +198,59 @@ def test_handoff():
     finally:
         shutil.rmtree(central, ignore_errors=True)
 
+    # DCO #9424 / template 7.6a point 5: a block pushed out by cap 5 is that project's ONLY
+    # block - its 1-line state moves into the board first. Existing sections stay untouched.
+    from wrapup_parts.handoff import rescue_blocks, rescue_dropped
+    central = tempfile.mkdtemp(prefix="wrapupcore-rescue-")
+    try:
+        os.makedirs(os.path.join(central, ".agent-memory"))
+        hand = os.path.join(central, ".agent-memory", "session-summary.md")
+        bpath = os.path.join(central, "cross-project-status.md")
+        e_block = block("E", "2026-09-14 10:00", "Vorherige Session (2026-09-14 10:00 E, erhalten)") \
+            + "\n## Aktueller Stand\n- E wartet auf Review\n"
+        five = "\n\n".join([block("A", "2026-09-20 10:00")] + [
+            block(p, f"2026-09-1{i} 10:00", f"Vorherige Session (2026-09-1{i} 10:00 {p}, erhalten)")
+            for i, p in enumerate("BCD")] + [e_block])
+        put(hand, five)
+        put(bpath, "# Cross-Project Status Board\n\n## B\n- State: b\n\n---\n")
+        r = rescue_dropped(central, "F", block("F", "2026-09-24 03:00"))
+        check(r["rescued"] == ["E"] and r["lost"] == [] and r["status"] == "written", f"cap drop -> E rescued {r}")
+        board_text = open(bpath, encoding="utf-8").read()
+        check("## E\n" in board_text and "- State: E wartet auf Review" in board_text and "2026-09-14 10:00" in board_text
+              and "## B\n- State: b" in board_text, "rescue section appended, 'Aktueller Stand' line, B untouched")
+        before = open(bpath, "rb").read()
+        mtime = os.path.getmtime(bpath)
+        r = rescue_dropped(central, "F", block("F", "2026-09-24 03:00"))
+        check(r["rescued"] == [] and r["lost"] == [] and r["status"] == "none", f"E already on the board -> nothing to do {r}")
+        check(open(bpath, "rb").read() == before and os.path.getmtime(bpath) == mtime, "no rescue need -> board not rewritten")
+        check(rescue_dropped(central, "A", block("A", "2026-09-24 03:00"))["status"] == "none",
+              "own project re-prepended -> nothing dropped")
+
+        # Pruefer AOS-2: drift between the pre-read and write_central drops a DIFFERENT block (D).
+        # write_central hands out what it really dropped; rescue_blocks catches D afterwards.
+        put(hand, five)
+        put(bpath, "# Cross-Project Status Board\n\n---\n")
+        pre = rescue_dropped(central, "F", block("F", "2026-09-24 03:00"))
+
+        def foreign():
+            put(hand, block("G", "2026-09-24 02:59") + "\n\n"
+                + five.replace("# Letzte Session", "# Vorherige Session (2026-09-20 10:00 A, erhalten)", 1))
+        dropped = []
+        write_central(central, "F", block("F", "2026-09-24 03:00"), _before_write=foreign, dropped_out=dropped)
+        post = rescue_blocks(central, dropped)
+        board_text = open(bpath, encoding="utf-8").read()
+        check(pre["rescued"] == ["E"] and sorted(b.split("*Projekt: ")[1][0] for b in dropped) == ["D", "E"]
+              and post["rescued"] == ["D"] and "## D\n" in board_text and board_text.count("## E\n") == 1,
+              f"drift: D dropped too and rescued afterwards, E not twice (pre {pre}, post {post})")
+
+        # a dropped block without any state line cannot be rescued -> reported as lost, never silent
+        put(hand, five.replace("- work in E\n", "").replace("\n## Aktueller Stand\n- E wartet auf Review\n", "\n"))
+        put(bpath, "# Cross-Project Status Board\n\n---\n")
+        r = rescue_dropped(central, "F", block("F", "2026-09-24 03:00"))
+        check(r["rescued"] == [] and r["lost"] == ["E"], f"no state line -> E reported lost {r}")
+    finally:
+        shutil.rmtree(central, ignore_errors=True)
+
 
 def make_wiki():
     wiki = tempfile.mkdtemp(prefix="wrapupcore-wiki-")
@@ -229,6 +282,8 @@ def test_wikinote():
         # Wiki-Schema kennt nur kanonische agent-Werte (claude-code, codex, ...). "claude-code-headless"
         # war ungueltig und blockierte am 2026-09-24/25 den Wiki-Derived-Refresh; headless steht im Tag.
         check("claude-code-headless" not in text, "agent is canonical claude-code, headless only as tag")
+        # Session-Notizen sind Snapshot-Artefakte: status final (Wiki-Template, DR-2026-07-17-002, DCO #9891)
+        check("status: final\n" in text and "status: active" not in text, "session note status is final")
         check("add ä" in text and "repair b" in text, "iteration titles in body (utf-8)")
         idx = open(os.path.join(wiki, "index.md"), encoding="utf-8").read()
         check(idx.index("2026-09-24-session-projA-headless.md") < idx.index("## Other")

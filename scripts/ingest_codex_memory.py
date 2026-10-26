@@ -129,7 +129,7 @@ def _ingest(a, summary, store):
     except (OSError, ValueError, PlanError) as exc:
         print(f"codex-ingest: learnings.json unreadable: {exc}", file=sys.stderr)
         return 1
-    with open(summary, "r", encoding="utf-8", errors="replace") as f:
+    with open(summary, "r", encoding="utf-8-sig", errors="replace") as f:  # BOM hides the first heading (#9695)
         raw = f.read()
 
     today = dt.date.today().isoformat()

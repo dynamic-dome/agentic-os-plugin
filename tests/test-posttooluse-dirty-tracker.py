@@ -567,6 +567,31 @@ def main():
             shutil.rmtree(free, ignore_errors=True)
 
     shutil.rmtree(root, ignore_errors=True)
+
+    # DCO #9890: on Windows os.replace fails with PermissionError while another process reads
+    # the marker -> retry, then write in place instead of losing the count; no tmp left.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("dirty_tracker", SCRIPT)
+    tracker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tracker)
+    with tempfile.TemporaryDirectory() as tmp:
+        target = os.path.join(tmp, "dirty-lk.json")
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write("{}")
+        real_replace, calls = os.replace, []
+
+        def blocked(src, dst):
+            calls.append(src)
+            raise PermissionError(13, "Zugriff verweigert")
+        os.replace = blocked
+        try:
+            tracker._write_state(target, {"write_count": 7})
+        finally:
+            os.replace = real_replace
+        check("blocked os.replace -> 3 tries, then in-place write",
+              json.load(open(target, encoding="utf-8")).get("write_count") == 7 and len(calls) == 3, str(calls))
+        check("blocked os.replace leaves no tmp file", not [f for f in os.listdir(tmp) if f.endswith(".tmp")])
+
     print()
     if FAILURES:
         print(f"DIRTY-TRACKER TESTS FAILED: {len(FAILURES)} -> {FAILURES}")

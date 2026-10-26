@@ -129,7 +129,7 @@ def main(argv):
         if not os.path.isfile(path):
             continue
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8-sig") as f:  # a BOM is not corruption (#9695)
                 raw = f.read()
             rows = json.loads(raw)
         except (OSError, ValueError) as exc:

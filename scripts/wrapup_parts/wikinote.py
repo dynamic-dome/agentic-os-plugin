@@ -37,7 +37,7 @@ def _write(path, text):
 
 
 def _render(project_id, date, iterations):
-    lines = ["---", "type: query", "status: active", f"created: {date}", f"updated: {date}", "source_count: 0",
+    lines = ["---", "type: query", "status: final", f"created: {date}", f"updated: {date}", "source_count: 0",
              "tags:", "  - session", "  - agent-generated", "  - headless", "aliases: []", "query_kind: session",
              "question: Was wurde in dieser Session erarbeitet?", "scope: []", f"project: {project_id}",
              # agent: kanonischer Wiki-Schema-Wert; "headless" steht als Tag (5.1.4)

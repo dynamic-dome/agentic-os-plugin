@@ -130,6 +130,15 @@ def main():
         check("corrupt state: snapshot recovers (exit 0)", p.returncode == 0,
               f"rc={p.returncode} err={p.stderr[:200]}")
 
+        # 11b. DCO #9695 rest: a state file with a BOM is valid, not corrupt
+        bom_state = os.path.join(tmp, "bom-state.json")
+        p = run(["snapshot", handoff, "--state", bom_state], cwd=tmp)
+        raw = open(bom_state, "rb").read()
+        with open(bom_state, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + raw)
+        p = run(["check", handoff, "--state", bom_state], cwd=tmp)
+        check("BOM state: check exits 0, not 21", p.returncode == 0, f"rc={p.returncode} out={p.stdout[:200]}")
+
         # 12. usage errors -> exit 2
         p = run(["check", "--state", state], cwd=tmp)
         check("no files: exit 2", p.returncode == 2, f"rc={p.returncode}")

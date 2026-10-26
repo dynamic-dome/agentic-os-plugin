@@ -35,6 +35,7 @@ import json
 import os
 import re
 import sys
+import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -294,6 +295,10 @@ def close_marker(mem: str, name: str, closed_by: str, run: str, expected_snap: d
     return _locked_update(mem, name, expected_snap, close, lock_timeout)
 
 
+REPLACE_TRIES = 3
+REPLACE_WAIT_S = 0.05
+
+
 def _locked_update(mem, name, expected_snap, mutate, lock_timeout) -> bool:
     """Re-read the marker under the store lock, refuse a changed snapshot, apply
     `mutate(d) -> bool` and write atomically. False = file untouched."""
@@ -310,10 +315,22 @@ def _locked_update(mem, name, expected_snap, mutate, lock_timeout) -> bool:
             if not isinstance(d, dict) or snapshot(d) != expected_snap or not mutate(d):
                 return False
             tmp = f"{path}.{os.getpid()}.tmp"
+            text = json.dumps(d, ensure_ascii=False, indent=1)
             try:
                 with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(d, fh, ensure_ascii=False, indent=1)
-                os.replace(tmp, path)
+                    fh.write(text)
+                # Windows: a reader holding the marker blocks os.replace (PermissionError)
+                # -> retry briefly, then write in place (still under the store lock, DCO #9890)
+                for attempt in range(REPLACE_TRIES):
+                    try:
+                        os.replace(tmp, path)
+                        break
+                    except PermissionError:
+                        if attempt == REPLACE_TRIES - 1:
+                            with open(path, "w", encoding="utf-8") as fh:
+                                fh.write(text)
+                        else:
+                            time.sleep(REPLACE_WAIT_S)
             finally:
                 if os.path.exists(tmp):
                     os.remove(tmp)

@@ -40,6 +40,11 @@ model is stateless, so cost is the sum of context length over calls).
                          "duplicate_of": null } ],
   "restore":         { "source": "restore_plan.py", "learnings": [ "...rows from restore_plan.py..." ] },
   "bridge_decisions": [ { "id": "L26", "status": "approved", "note": "...", "by": "agent" } ],
+  "corrections":     { "tasks": [ { "id": "T-116", "title": "...", "reason": "...", "by": "agent" } ],
+                       "learnings": [ { "id": "L154", "text": "...", "summary": "...", "reason": "...", "by": "agent" } ] },
+  "rule_explanations": [ { "id": "L26", "explained_by": "<model>", "plain": "...", "risk": "...",
+                           "verdict": "confirms", "affects": [] } ],
+  "rule_releases":   [ { "id": "L26", "by": "owner", "two_sentences": "..." } ],
   "user_candidates": [ { "key": "kebab-key", "observation": "...", "signal_type": "preference",
                          "confidence": 0.5, "evidence": [], "confirmed": false,
                          "status": "observed", "trust_source": "conversation" } ],
@@ -127,6 +132,37 @@ day (the decision date is kept). The result carries
 `tally.bridge_approved`/`bridge_rejected` (ids), `tally.bridge_status_changed`
 (projections needed when > 0), the recomputed `tally.bridge_candidates` and a
 top-level `bridge_status_line` for the Step 3d.5 report.
+
+`corrections` (Step 3g, 5.8.0) is the only way to change the TEXT of an existing row. Per entry:
+`id` (a unique live task / non-principle learning / decision), `reason` (required) and `title` (task) or
+`text`/`summary` (learning) or `title`/`context`/`decision`/`consequences`/`options_considered` (decision;
+the nested options keep their shape), optional `by` `agent` (default) | `owner` - a recorded claim, never
+verified. `user_md` entries are `{old, new, reason}` on one whole line of `identity/user.md`; `new` must be the
+deterministic encoding repair of `old` (a reworded line is refused), each repair is logged first in
+`user-changelog.json` as `user.md/encoding-correction`. The row keeps
+`corrections[]` = `{date, by, session, field, reason, was}`. The same text again changes nothing; a new
+text below similarity 0.6 to the old one, a principle pointer, an unknown or ambiguous id rejects the
+whole plan before the first byte. Correcting a rule-class learning resets its gate. `tally.tasks_retitled`,
+`learnings_corrected`, `decisions_corrected`, `user_lines_corrected`, `corrections_skipped_unchanged`, `correction_ids`, `corrections_projection_needed`.
+`--propose-encoding-corrections` (read-only) prints a `corrections` plan for every Mojibake row (tasks, learnings,
+decisions, user.md lines); a new
+learning/task whose text looks like Mojibake is written but warned about (`tally.warnings`).
+
+`rule_class` on a learning (flag or tag `regel`/`rule`/`verfassung`/`constitution`), `rule_explanations`
+and `rule_releases` (Step 3f, 5.8.0, owner decision F4) form the mixed form of the learnings gate. A
+rule-class learning stores `rule_class: true` and `release` = `{status: needs_explanation|explained|
+released|rejected, ...}`; it is always a bridge candidate, never in `tally.bridge_candidates`, and
+`bridge_decisions` cannot approve it. `rule_explanations` (second model): `explained_by`, `plain`, `risk`,
+`verdict` (`confirms|contradicts|unsure`), optional `affects`/`why`/`counter_note`; only while the gate is open.
+`rule_releases` (owner): `by` must be `owner`, state `explained`, `two_sentences` = 2..3 real sentences of
+>= 3 words, <= 400 characters, not a copy of the sheet or the rule; `"status":"rejected"` + `note` is
+allowed from any state. **`by: owner` is an honor system:** the script checks the value of the field, not who
+typed it - the agent writes the plan. The gate is a self-commitment of the agent (release only on sentences the
+owner wrote in this conversation, verbatim), made visible afterwards by `release.two_sentences` / `released_at`
+in the store; it is not an authentication and must not be described as one. A principle pointer
+(`principles`) over a rule-class learning needs the same gate: the plan is refused until every rule-class
+member is `released` (DCO #10057), and a pointer written by hand around that is not projected. `tally.rule_class_open` = `{needs_explanation: [ids], explained: [ids]}`;
+result `rule_class_status_line` for the report. The sheet comes from `scripts/learning_release.py sheet`.
 
 ## Learning entry (Step 3b)
 

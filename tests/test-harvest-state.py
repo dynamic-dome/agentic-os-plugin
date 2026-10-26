@@ -361,6 +361,30 @@ def main():
         _check([(c["sid"], c["closed_by"]) for c in res["closed"]] == [("busy", "native_note")],
                "native note closes the busy session (index built once per pass)")
 
+    # DCO #9890: on Windows os.replace fails with PermissionError while another process reads
+    # the marker -> retry, then write in place; never raise into the night run, no tmp left.
+    with tempfile.TemporaryDirectory() as tmp:
+        mem = os.path.join(tmp, ".agent-memory")
+        os.makedirs(os.path.join(mem, "working"))
+        d0 = {"session_id": "lk", "dirty": False, "write_count": 1, "updated": "2026-10-01T10:00:00+00:00"}
+        with open(os.path.join(mem, "working", "dirty-lk.json"), "w", encoding="utf-8") as fh:
+            json.dump(d0, fh)
+        real_replace, calls = os.replace, []
+
+        def blocked(src, dst):
+            calls.append(src)
+            raise PermissionError(13, "Zugriff verweigert")
+        os.replace = blocked
+        try:
+            ok = hs._locked_update(mem, "dirty-lk.json", hs.snapshot(d0), lambda d: d.update(probe=1) or True, 5)
+        finally:
+            os.replace = real_replace
+        with open(os.path.join(mem, "working", "dirty-lk.json"), encoding="utf-8") as fh:
+            after = json.load(fh)
+        _check(ok is True and after.get("probe") == 1 and len(calls) == 3,
+               f"blocked os.replace -> 3 tries, then in-place write ({len(calls)} tries, {after})")
+        _check(not [f for f in os.listdir(os.path.join(mem, "working")) if f.endswith(".tmp")], "no tmp file left")
+
     if FAILURES:
         print(f"\n{len(FAILURES)} FAILURE(S)")
         return 1

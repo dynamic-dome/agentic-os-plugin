@@ -86,7 +86,7 @@ Frontmatter fields:
 ```yaml
 ---
 type: query
-status: active
+status: final
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 source_count: 0

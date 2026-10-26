@@ -68,6 +68,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as _dt
+import difflib
 import json
 import os
 import re
@@ -244,7 +245,7 @@ def preflight_readable(mem: str, plan: dict | None = None) -> None:
         archived_rows(mem, "learnings/learnings.json")
     if spec.get("add"):
         archived_rows(mem, "context/open-tasks.json")
-    if "user_candidates" in plan or plan.get("consolidate"):
+    if "user_candidates" in plan or plan.get("consolidate") or (plan.get("corrections") or {}).get("user_md"):
         _check_utf8(mem, "identity/user.md")
     if plan.get("soul_candidates"):
         _check_utf8(mem, "identity/soul-candidates.md")
@@ -358,6 +359,47 @@ def norm(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
+# ------------------------------------------------------- mojibake (DCO #9393)
+# UTF-8 text that was read as cp1252 ("Fünf" -> "FÃ¼nf") is the one text damage the
+# stores actually showed. Detection and repair are deterministic, so the correction
+# path can be fed by a script instead of by retyped text.
+# Code points a cp1252 decode produces for the continuation bytes 0x80..0xBF (written as numbers:
+# the characters themselves are invisible or look like noise in an editor).
+_CONT_CODES = (list(range(0x80, 0xC0)) + [0x152, 0x153, 0x160, 0x161, 0x178, 0x17D, 0x17E, 0x192, 0x2C6, 0x2DC,
+                0x2013, 0x2014, 0x2018, 0x2019, 0x201A, 0x201C, 0x201D, 0x201E, 0x2020, 0x2021, 0x2022,
+                0x2026, 0x2030, 0x2039, 0x203A, 0x20AC, 0x2122])
+_MOJI_RUN = re.compile("[" + chr(0xC2) + "-" + chr(0xF4) + "][" + "".join(re.escape(chr(c)) for c in _CONT_CODES) + "]{1,3}")
+
+
+def _cp1252_bytes(text: str) -> bytes:
+    out = bytearray()
+    for ch in text:
+        try:
+            out += ch.encode("cp1252")
+        except UnicodeEncodeError:
+            if ord(ch) >= 256:
+                raise
+            out.append(ord(ch))  # the five bytes cp1252 leaves undefined (0x81 ...)
+    return bytes(out)
+
+
+def repair_mojibake(text: str) -> str:
+    """Undo UTF-8-read-as-cp1252 run by run; undamaged text is a fixpoint."""
+    def fix(m):
+        run = m.group(0)
+        for k in range(len(run), 0, -1):  # longest decodable prefix, rest stays as it is
+            try:
+                return _cp1252_bytes(run[:k]).decode("utf-8") + run[k:]
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+        return run
+    return _MOJI_RUN.sub(fix, text)
+
+
+def looks_mojibake(text) -> bool:
+    return isinstance(text, str) and repair_mojibake(text) != text
+
+
 def _is_iso_date(value) -> bool:
     try:
         _dt.date.fromisoformat(str(value)[:10])
@@ -462,6 +504,8 @@ def validate_plan(mem, plan):
                              for k, v in probe.items()})
         if errs:
             raise PlanError(f"learning '{str(lrn.get('text'))[:40]}': {'; '.join(errs)}")
+        if "rule_class" in lrn and not isinstance(lrn["rule_class"], bool):
+            raise PlanError(f"learning '{str(lrn.get('text'))[:40]}': rule_class must be a JSON bool")
         if lrn.get("duplicate_of"):
             if live_ids is None:
                 live_ids = {str(r.get("id")) for r in load_json(mem, "learnings/learnings.json", [])
@@ -480,6 +524,8 @@ def validate_plan(mem, plan):
 
     validate_principles(mem, plan)
     validate_bridge_decisions(mem, plan)
+    validate_corrections(mem, plan)
+    validate_rule_gate(mem, plan)
 
     sups = [d.get("supersedes") for d in (plan.get("decisions") or []) if d.get("supersedes")]
     titles = [(d.get("title") or "").strip() for d in (plan.get("decisions") or [])]
@@ -752,6 +798,16 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
         # `bridge_decisions`, which demands a reason per entry (5.7.0).
         if entry["importance"] >= 4:
             entry["bridge_status"] = "candidate"
+        # Mixed form (F4): the agent's own judgment (`rule_class: true`) or a rule tag
+        # puts the learning into the gate - candidate whatever its importance, hidden
+        # from Step 3d, approved only via rule_explanations + rule_releases.
+        if it.get("rule_class") is True or RULE_TAGS & {str(t).lower() for t in entry["tags"]}:
+            entry["rule_class"] = True
+            entry["release"] = {"status": "needs_explanation"}
+            entry["bridge_status"] = "candidate"
+        if looks_mojibake(text):
+            tally["warnings"].append(f"{entry['id']}: text looks like Mojibake (UTF-8 read as cp1252) - "
+                                     f"fix it through the 'corrections' section")
         added.append(entry)
     if added or refreshed:
         rows.extend(added)
@@ -763,14 +819,21 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
     # Store-wide, not session-scoped: earlier undecided candidates must keep
     # reaching Step 3d.2. Pre-3d entries lack the field (never backfilled) and
     # are invisible here by design.
-    tally["bridge_candidates"] = open_bridge_candidates(rows)
+    refresh_queues(rows, tally)
 
 
 def open_bridge_candidates(rows):
     """Live rows still waiting for a Step 3d verdict. A superseded candidate is
     not decidable (bridge_decisions refuses it), so listing it would ask forever."""
     return [r["id"] for r in rows if isinstance(r, dict) and r.get("bridge_status") == "candidate"
-            and not r.get("superseded_by")]
+            and not r.get("superseded_by") and not is_rule_class(r)]
+
+
+def refresh_queues(rows, tally):
+    """The two open queues after a store write: bridge candidates the agent decides
+    (Step 3d) and rule-class learnings waiting in the gate (Step 3f)."""
+    tally["bridge_candidates"] = open_bridge_candidates(rows)
+    tally["rule_class_open"] = rule_class_open(rows)
 
 
 # Step 3d (5.7.0, Owner-Entscheid 2026-10-16): the bridge gate is delegated - the
@@ -817,6 +880,9 @@ def validate_bridge_decisions(mem, plan):
             raise PlanError(f"{lid} is a principle pointer - its bridge state belongs to maintain Step 5c")
         if row.get("superseded_by"):
             raise PlanError(f"{lid} is superseded by {row['superseded_by']} - decide the successor")
+        if is_rule_class(row) and it["status"] == "approved":
+            raise PlanError(f"{lid} is a rule-class learning - approval only via 'rule_releases' "
+                            f"(second-model explanation, then the owner)")
         if row.get("bridge_status") not in BRIDGE_DECIDABLE:
             raise PlanError(f"{lid} is not a bridge candidate (bridge_status "
                             f"{row.get('bridge_status')!r})")
@@ -844,15 +910,554 @@ def apply_bridge_decisions(mem, plan, date, dry, touched, tally):
         if row.get("bridge_status") != status or not same_reason:
             row["bridge_status"], row["bridge_note"] = status, f"{date} {reason}"
             dirty = True
+        if is_rule_class(row) and status == "rejected" and (row.get("release") or {}).get("status") != "rejected":
+            row["release"] = dict(row.get("release") or {}, status="rejected", rejected_by=it.get("by", "agent"),
+                                  rejected_at=date)
+            dirty = True
         tally[f"bridge_{status}"].append(str(row["id"]))
     if dirty:
         write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
-    tally["bridge_candidates"] = open_bridge_candidates(rows)
+    refresh_queues(rows, tally)
 
 
-# A member id without '/' or ':' is local (Lnn of THIS store) and must exist; a
+# Corrections (DCO #9393): the one sanctioned way to change the TEXT of an existing
+# row. The wrap-up path only ever adds rows, so a wrong title or a damaged learning
+# text had no writer at all and the stores were repaired by hand - which the
+# applier-ownership rule above forbids. A correction keeps the old text on the row
+# (`corrections[]`: who, when, why, what it was), so nothing is lost and a wrong
+# correction can be undone from the store itself.
+CORRECTION_DECIDERS = ("agent", "owner")
+CORRECTION_SECTIONS = ("tasks", "learnings", "decisions", "user_md")
+# Decision fields a correction may rewrite (DCO #10057). `options_considered` is nested
+# (list of {option, pros[], cons[]}); it may only change its strings, never its shape.
+DECISION_TEXT_FIELDS = ("title", "context", "decision", "consequences")
+DECISION_CORRECTABLE = DECISION_TEXT_FIELDS + ("options_considered",)
+# Below this similarity a "correction" is a different statement, and a different
+# statement is a new learning that supersedes the old one - not a rewrite in place.
+CORRECTION_SIMILARITY_MIN = 0.6
+
+
+def _unique_row(rows, rid, what):
+    hits = [r for r in rows if isinstance(r, dict) and str(r.get("id")) == rid]
+    if not hits:
+        raise PlanError(f"correction points at unknown {what} {rid!r}")
+    if len(hits) > 1:
+        raise PlanError(f"correction id {rid!r} is ambiguous ({len(hits)} {what}s share it) - not guessing")
+    return hits[0]
+
+
+def _correction_common(it, kind, seen):
+    if not isinstance(it, dict):
+        raise PlanError(f"correction ({kind}) is not an object")
+    rid = str(it.get("id") or "").strip()
+    if not rid:
+        raise PlanError(f"correction ({kind}) without 'id'")
+    reason = it.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise PlanError(f"correction {rid}: 'reason' is required")
+    if it.get("by", "agent") not in CORRECTION_DECIDERS:
+        raise PlanError(f"correction {rid}: 'by' must be one of {CORRECTION_DECIDERS}")
+    if (kind, rid) in seen:
+        raise PlanError(f"correction {rid} appears twice")
+    seen.add((kind, rid))
+    return rid
+
+
+def validate_corrections(mem, plan):
+    """Every detectable error before the first byte, like the other sections."""
+    if "corrections" not in plan:
+        return
+    spec = plan["corrections"]
+    if not isinstance(spec, dict) or not set(spec) <= set(CORRECTION_SECTIONS):
+        raise PlanError("corrections must be an object with 'tasks', 'learnings', 'decisions' "
+                        "and/or 'user_md'")
+    for key in CORRECTION_SECTIONS:
+        if not isinstance(spec.get(key, []), list):
+            raise PlanError(f"corrections.{key} must be a list")
+    seen: set = set()
+    tasks = spec.get("tasks") or []
+    if tasks:
+        rows = load_json(mem, "context/open-tasks.json", [])
+        for it in tasks:
+            rid = _correction_common(it, "task", seen)
+            row = _unique_row(rows, rid, "task")
+            title = " ".join(str(it.get("title") or "").split())
+            if not title:
+                raise PlanError(f"correction {rid}: empty 'title'")
+            if title == " ".join(str(row.get("title") or "").split()):
+                continue  # already corrected: a re-run changes nothing
+            if any(r is not row and r.get("status") != "closed" and norm(r.get("title")) == norm(title)
+                   for r in rows if isinstance(r, dict)):
+                raise PlanError(f"correction {rid}: title equals another open task")
+    lrns = spec.get("learnings") or []
+    if lrns:
+        rows = load_json(mem, "learnings/learnings.json", [])
+        for it in lrns:
+            rid = _correction_common(it, "learning", seen)
+            row = _unique_row(rows, rid, "learning")
+            if row.get("kind") == "principle":
+                raise PlanError(f"{rid} is a principle pointer - its wording is set by the 'principles' section")
+            for field in ("text", "summary"):
+                if field not in it:
+                    continue
+                new = it[field]
+                if not isinstance(new, str) or not new.strip():
+                    raise PlanError(f"correction {rid}: '{field}' must be a non-empty string")
+                old = row.get(field)
+                if old is None and field == "text":
+                    raise PlanError(f"correction {rid}: row has no text")
+                if old is not None and norm(new) != norm(old):
+                    ratio = difflib.SequenceMatcher(None, norm(old), norm(new)).ratio()
+                    if ratio < CORRECTION_SIMILARITY_MIN:
+                        raise PlanError(
+                            f"correction {rid}: new {field} is a different statement (similarity {ratio:.2f} < "
+                            f"{CORRECTION_SIMILARITY_MIN}) - write a new learning and supersede this one")
+            if "text" not in it and "summary" not in it:
+                raise PlanError(f"correction {rid}: needs 'text' and/or 'summary'")
+    decs = spec.get("decisions") or []
+    if decs:
+        rows = load_json(mem, "context/decisions.json", [], via="decisions")
+        for it in decs:
+            rid = _correction_common(it, "decision", seen)
+            row = _unique_row(rows, rid, "decision")
+            extra = set(it) - {"id", "reason", "by"} - set(DECISION_CORRECTABLE)
+            if extra:
+                raise PlanError(f"correction {rid}: field(s) {sorted(extra)} cannot be corrected - "
+                                f"only {list(DECISION_CORRECTABLE)} (a status change is a new decision)")
+            if not set(it) & set(DECISION_CORRECTABLE):
+                raise PlanError(f"correction {rid}: needs at least one of {list(DECISION_CORRECTABLE)}")
+            for field in DECISION_TEXT_FIELDS:
+                if field not in it:
+                    continue
+                new, old = it[field], row.get(field)
+                if not isinstance(new, str) or not new.strip():
+                    raise PlanError(f"correction {rid}: '{field}' must be a non-empty string")
+                if not isinstance(old, str):
+                    raise PlanError(f"correction {rid}: the decision has no text in '{field}'")
+                _check_similar(rid, field, old, new)
+            if "options_considered" in it:
+                _check_same_shape(rid, "options_considered", row.get("options_considered"), it["options_considered"])
+    lines = spec.get("user_md") or []
+    if lines:
+        text = _read_user_md_raw(mem)
+        have = [ln.rstrip("\r\n") for ln in text.splitlines(keepends=True)]
+        for it in lines:
+            if not isinstance(it, dict):
+                raise PlanError("correction (user_md) is not an object")
+            old, new = it.get("old"), it.get("new")
+            if not isinstance(old, str) or not old.strip() or not isinstance(new, str) or not new.strip():
+                raise PlanError("correction (user_md): 'old' and 'new' must be non-empty strings")
+            tag = old[:40]
+            reason = it.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                raise PlanError(f"correction user_md {tag!r}: 'reason' is required")
+            if it.get("by", "agent") not in CORRECTION_DECIDERS:
+                raise PlanError(f"correction user_md {tag!r}: 'by' must be one of {CORRECTION_DECIDERS}")
+            if ("user_md", old) in seen:
+                raise PlanError(f"correction user_md {tag!r} appears twice")
+            seen.add(("user_md", old))
+            if "\n" in old or "\n" in new or "\r" in old or "\r" in new:
+                raise PlanError(f"correction user_md {tag!r}: one line per correction")
+            # Identity text has its own gate (queue, trust check, owner review). The correction
+            # path is NOT a way around it: it may repair the encoding of a line, never reword it.
+            if new != repair_mojibake(old):
+                raise PlanError(f"correction user_md {tag!r}: 'new' is not the encoding repair of 'old' - "
+                                f"user.md changes only through the candidate queue (wrap-up Step 6)")
+            if have.count(old) > 1:
+                raise PlanError(f"correction user_md {tag!r}: the line occurs {have.count(old)} times - not guessing")
+            if have.count(old) == 0 and have.count(new) == 0:
+                raise PlanError(f"correction user_md {tag!r}: no such line in user.md")
+
+
+def _check_similar(rid, field, old, new):
+    """Same statement, repaired - or it is a new decision/learning, not a correction."""
+    if norm(new) != norm(old):
+        ratio = difflib.SequenceMatcher(None, norm(old), norm(new)).ratio()
+        if ratio < CORRECTION_SIMILARITY_MIN:
+            raise PlanError(f"correction {rid}: new {field} is a different statement (similarity {ratio:.2f} < "
+                            f"{CORRECTION_SIMILARITY_MIN}) - record a new entry and supersede this one")
+
+
+def _check_same_shape(rid, path, old, new):
+    """`new` keeps the structure of `old` (lists same length, dicts same keys); only the
+    strings inside may change, and each by a repair, not a rewrite."""
+    if isinstance(old, str):
+        if not isinstance(new, str) or not new.strip():
+            raise PlanError(f"correction {rid}: {path} must stay a non-empty string")
+        _check_similar(rid, path, old, new)
+    elif isinstance(old, list):
+        if not isinstance(new, list) or len(new) != len(old):
+            raise PlanError(f"correction {rid}: {path} must keep its {len(old)} entries")
+        for i, (o, n) in enumerate(zip(old, new)):
+            _check_same_shape(rid, f"{path}[{i}]", o, n)
+    elif isinstance(old, dict):
+        if not isinstance(new, dict) or set(new) != set(old):
+            raise PlanError(f"correction {rid}: {path} must keep its keys {sorted(old)}")
+        for k in old:
+            _check_same_shape(rid, f"{path}.{k}", old[k], new[k])
+    elif new != old:
+        raise PlanError(f"correction {rid}: {path} is not text and must stay {old!r}")
+
+
+def _read_user_md_raw(mem):
+    path = os.path.join(mem, "identity/user.md")
+    if not os.path.isfile(path):
+        raise PlanError("correction (user_md): identity/user.md does not exist")
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            return fh.read()
+    except UnicodeDecodeError as e:
+        raise PlanError(f"identity/user.md is not UTF-8 ({e}) - nothing was written; repair the encoding")
+
+
+def _stamp_correction(row, field, old, date, it, session_id):
+    row.setdefault("corrections", []).append({
+        "date": date, "by": it.get("by", "agent"), "session": session_id or None, "field": field,
+        "reason": " ".join(str(it["reason"]).split()), "was": old})
+
+
+def apply_corrections(mem, plan, date, dry, touched, tally, session_id=""):
+    spec = plan.get("corrections") or {}
+    tasks, lrns = spec.get("tasks") or [], spec.get("learnings") or []
+    decs, lines = spec.get("decisions") or [], spec.get("user_md") or []
+    if not tasks and not lrns and not decs and not lines:
+        return
+    if tasks:
+        rows = load_json(mem, "context/open-tasks.json", [])
+        changed = False
+        for it in tasks:
+            row = _unique_row(rows, str(it["id"]).strip(), "task")
+            title = " ".join(str(it["title"]).split())
+            if title == " ".join(str(row.get("title") or "").split()):
+                tally["corrections_skipped_unchanged"] += 1
+                continue
+            if looks_mojibake(title):
+                tally["warnings"].append(f"{row.get('id')}: corrected title still looks like Mojibake")
+            _stamp_correction(row, "title", row.get("title"), date, it, session_id)
+            row["title"], row["updated"] = title, date
+            tally["tasks_retitled"] += 1
+            tally["correction_ids"].append(str(row.get("id")))
+            if row.get("status") in ("open", "blocked"):
+                tally["corrections_projection_needed"] = True
+            changed = True
+        if changed:
+            write_json(mem, "context/open-tasks.json", rows, dry, touched)
+    if lrns:
+        rows = load_json(mem, "learnings/learnings.json", [])
+        changed = False
+        for it in lrns:
+            row = _unique_row(rows, str(it["id"]).strip(), "learning")
+            row_changed = False
+            for field in ("text", "summary"):
+                if field not in it:
+                    continue
+                new = it[field].strip() if field == "text" else " ".join(it[field].split())
+                if new == (row.get(field) or "").strip():
+                    continue
+                if looks_mojibake(new):
+                    tally["warnings"].append(f"{row.get('id')}: corrected {field} still looks like Mojibake")
+                _stamp_correction(row, field, row.get(field), date, it, session_id)
+                row[field] = new
+                row_changed = True
+            if not row_changed:
+                tally["corrections_skipped_unchanged"] += 1
+                continue
+            if row.get("rule_class") and isinstance(row.get("release"), dict):
+                # A rule's wording changed after it was explained or released: the
+                # explanation no longer describes the text, so the gate starts again.
+                if row["release"].get("status") in ("explained", "released"):
+                    row["release"] = {"status": "needs_explanation", "reset_by_correction": date}
+                    if row.get("bridge_status") == "approved":
+                        row["bridge_status"] = "candidate"
+                        row["bridge_note"] = f"{date} {it.get('by', 'agent')}: Regeltext korrigiert, Freigabe neu noetig"
+                        tally["bridge_status_changed"] += 1
+                    tally["warnings"].append(f"{row.get('id')}: rule-class text corrected - release reset")
+            tally["learnings_corrected"] += 1
+            tally["correction_ids"].append(str(row.get("id")))
+            if row.get("bridge_status") == "approved":
+                tally["corrections_projection_needed"] = True
+            changed = True
+        if changed:
+            write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
+            render_learnings_md(mem, rows, dry, touched)
+            refresh_queues(rows, tally)
+    if decs:
+        rows = load_json(mem, "context/decisions.json", [], via="decisions")
+        changed = False
+        for it in decs:
+            row = _unique_row(rows, str(it["id"]).strip(), "decision")
+            row_changed = False
+            for field in DECISION_CORRECTABLE:
+                if field not in it:
+                    continue
+                new = it[field].strip() if isinstance(it[field], str) else it[field]
+                cur = row.get(field)
+                if new == (cur.strip() if isinstance(cur, str) else cur):
+                    continue
+                if _contains_mojibake(new):
+                    tally["warnings"].append(f"{row.get('id')}: corrected {field} still looks like Mojibake")
+                _stamp_correction(row, field, row.get(field), date, it, session_id)
+                row[field] = new
+                row_changed = True
+            if not row_changed:
+                tally["corrections_skipped_unchanged"] += 1
+                continue
+            if row.get("wiki_ref") or row.get("promoted_at"):
+                tally["warnings"].append(f"{row.get('id')}: already promoted to the wiki "
+                                         f"({row.get('wiki_ref') or 'wiki_ref missing'}) - the wiki copy is not repaired here")
+            tally["decisions_corrected"] += 1
+            tally["correction_ids"].append(str(row.get("id")))
+            changed = True
+        if changed:
+            write_json(mem, "context/decisions.json", rows, dry, touched, via="decisions")
+    if lines:
+        text = _read_user_md_raw(mem)
+        parts = text.splitlines(keepends=True)
+        stripped = [p.rstrip("\r\n") for p in parts]
+        now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        entries = []
+        for it in lines:
+            old, new = it["old"], it["new"]
+            if old not in stripped or old == new:
+                tally["corrections_skipped_unchanged"] += 1   # already repaired: a re-run changes nothing
+                continue
+            if looks_mojibake(new):
+                tally["warnings"].append(f"user.md: corrected line still looks like Mojibake: {new[:40]}")
+            i = stripped.index(old)
+            parts[i] = new + parts[i][len(old):]
+            stripped[i] = new
+            entries.append({"ts": now, "field": "user.md/encoding-correction", "old_value": old, "new_value": new,
+                            "reason": " ".join(str(it["reason"]).split()), "by": it.get("by", "agent")})
+            tally["user_lines_corrected"] += 1
+        if entries:
+            # audit entry BEFORE the edit - the same ordering contract as the promotion path
+            changelog = load_json(mem, "identity/user-changelog.json", [])
+            write_json(mem, "identity/user-changelog.json", changelog + entries, dry, touched)
+            write_atomic(mem, "identity/user.md", "".join(parts), dry, touched)
+
+
+def _contains_mojibake(value) -> bool:
+    if isinstance(value, str):
+        return looks_mojibake(value)
+    if isinstance(value, list):
+        return any(_contains_mojibake(v) for v in value)
+    if isinstance(value, dict):
+        return any(_contains_mojibake(v) for v in value.values())
+    return False
+
+
+def _repair_deep(value):
+    if isinstance(value, str):
+        return repair_mojibake(value)
+    if isinstance(value, list):
+        return [_repair_deep(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _repair_deep(v) for k, v in value.items()}
+    return value
+
+
+def propose_encoding_corrections(mem):
+    """Read-only: the correction plan that repairs every row whose text, summary or
+    title was read as cp1252. Rows already clean are not listed, so applying the
+    result and asking again yields an empty plan."""
+    out = {"tasks": [], "learnings": [], "decisions": [], "user_md": []}
+    why = "Encoding-Reparatur: UTF-8 war als cp1252 gelesen (Mojibake), Zeichen rueckuebersetzt"
+    for r in load_json(mem, "context/open-tasks.json", []):
+        if isinstance(r, dict) and looks_mojibake(r.get("title")):
+            out["tasks"].append({"id": r.get("id"), "title": repair_mojibake(r["title"]), "reason": why})
+    for r in load_json(mem, "learnings/learnings.json", []):
+        if not isinstance(r, dict) or r.get("kind") == "principle":
+            continue
+        item = {"id": r.get("id")}
+        for field in ("text", "summary"):
+            if looks_mojibake(r.get(field)):
+                item[field] = repair_mojibake(r[field])
+        if len(item) > 1:
+            item["reason"] = why
+            out["learnings"].append(item)
+    for r in load_json(mem, "context/decisions.json", [], via="decisions"):
+        if not isinstance(r, dict):
+            continue
+        item = {"id": r.get("id")}
+        for field in DECISION_CORRECTABLE:
+            if _contains_mojibake(r.get(field)):
+                item[field] = _repair_deep(r[field])
+        if len(item) > 1:
+            item["reason"] = why
+            out["decisions"].append(item)
+    try:
+        user_text = _read_user_md_raw(mem) if os.path.isfile(os.path.join(mem, "identity/user.md")) else ""
+    except PlanError:
+        user_text = ""   # not UTF-8: --lint / maintain Step 2 report that, the proposal stays read-only
+    for line in user_text.splitlines():
+        if looks_mojibake(line):
+            out["user_md"].append({"old": line, "new": repair_mojibake(line), "reason": why})
+    return {"corrections": out}
+
+
+# Learnings mixed form (DCO #9869, owner decision F4 2026-10-22). A normal learning
+# is curated by the agent alone (Step 3d). A RULE-CLASS learning - one that changes
+# a rule or the constitution - is held back from both projections until
+#   1. a second model has explained it in plain words (`rule_explanations`, the
+#      Erklaerbogen), and
+#   2. the owner has put it into two sentences of his own (`rule_releases`).
+# No live model call: the script only marks, stores the explanation it is handed and
+# checks the shape; who explains is the session's job (wrap-up Step 3f).
+RULE_TAGS = {"regel", "regeln", "rule", "rules", "verfassung", "constitution"}
+RELEASE_OPEN = ("needs_explanation", "explained")
+EXPLAIN_VERDICTS = ("confirms", "contradicts", "unsure")
+TWO_SENTENCES_MAX = 400
+SHEET_COPY_MAX = 0.9
+
+
+def is_rule_class(row) -> bool:
+    return isinstance(row, dict) and row.get("rule_class") is True
+
+
+def rule_class_open(rows):
+    """Store-wide queue of rule-class learnings still in the gate."""
+    out = {"needs_explanation": [], "explained": []}
+    for r in rows:
+        if is_rule_class(r) and not r.get("superseded_by"):
+            st = (r.get("release") or {}).get("status", "needs_explanation")
+            if st in out:
+                out[st].append(str(r.get("id")))
+    return out
+
+
+def sentence_count(text: str):
+    parts = [p for p in re.split(r"(?<=[.!?])\s+", str(text or "").strip()) if p.strip()]
+    return len(parts), all(len(p.split()) >= 3 for p in parts)
+
+
+def validate_rule_gate(mem, plan):
+    exps, rels = plan.get("rule_explanations"), plan.get("rule_releases")
+    for name, items in (("rule_explanations", exps), ("rule_releases", rels)):
+        if items is not None and not isinstance(items, list):
+            raise PlanError(f"{name} must be a list")
+    if not exps and not rels:
+        return
+    live = {str(r.get("id")): r for r in load_json(mem, "learnings/learnings.json", []) if isinstance(r, dict)}
+    seen = set()
+    for it in (exps or []):
+        if not isinstance(it, dict):
+            raise PlanError("rule explanation is not an object")
+        lid = str(it.get("id") or "").strip()
+        row = live.get(lid)
+        if row is None:
+            raise PlanError(f"rule explanation points at unknown learning {lid!r}")
+        if not is_rule_class(row) or row.get("superseded_by"):
+            raise PlanError(f"{lid} is not a live rule-class learning")
+        if (row.get("release") or {}).get("status") not in RELEASE_OPEN:
+            raise PlanError(f"{lid}: release state is {(row.get('release') or {}).get('status')!r} - "
+                            f"explain only while the gate is open")
+        for field in ("explained_by", "plain", "risk"):
+            if not isinstance(it.get(field), str) or not it[field].strip():
+                raise PlanError(f"rule explanation {lid}: '{field}' is required")
+        if it.get("verdict") not in EXPLAIN_VERDICTS:
+            raise PlanError(f"rule explanation {lid}: 'verdict' must be one of {EXPLAIN_VERDICTS}")
+        if "affects" in it and not (isinstance(it["affects"], list) and all(isinstance(a, str) for a in it["affects"])):
+            raise PlanError(f"rule explanation {lid}: 'affects' must be a list of strings")
+        if ("exp", lid) in seen:
+            raise PlanError(f"rule explanation {lid} appears twice")
+        seen.add(("exp", lid))
+    for it in (rels or []):
+        if not isinstance(it, dict):
+            raise PlanError("rule release is not an object")
+        lid = str(it.get("id") or "").strip()
+        row = live.get(lid)
+        if row is None:
+            raise PlanError(f"rule release points at unknown learning {lid!r}")
+        if not is_rule_class(row) or row.get("superseded_by"):
+            raise PlanError(f"{lid} is not a live rule-class learning")
+        if it.get("by") != "owner":
+            raise PlanError(f"rule release {lid}: only the owner releases a rule-class learning ('by': 'owner') - "
+                            f"a self-declaration the script cannot verify; write it only after the owner's own sentences")
+        status = it.get("status", "released")
+        if status not in ("released", "rejected"):
+            raise PlanError(f"rule release {lid}: status must be 'released' or 'rejected'")
+        if ("rel", lid) in seen:
+            raise PlanError(f"rule release {lid} appears twice")
+        seen.add(("rel", lid))
+        if status == "rejected":
+            continue
+        rel = row.get("release") or {}
+        if rel.get("status") != "explained":
+            raise PlanError(f"rule release {lid}: release state is {rel.get('status')!r} - the second "
+                            f"model's explanation must be on file first")
+        text = it.get("two_sentences")
+        if not isinstance(text, str) or not text.strip():
+            raise PlanError(f"rule release {lid}: 'two_sentences' (the owner's own words) is required")
+        n, wordy = sentence_count(text)
+        if not (2 <= n <= 3) or not wordy:
+            raise PlanError(f"rule release {lid}: 'two_sentences' must be 2 (at most 3) real sentences "
+                            f"of 3+ words, got {n}")
+        if len(text) > TWO_SENTENCES_MAX:
+            raise PlanError(f"rule release {lid}: 'two_sentences' longer than {TWO_SENTENCES_MAX} characters")
+        for source in ((rel.get("sheet") or {}).get("plain"), row.get("text")):
+            if source and difflib.SequenceMatcher(None, norm(text), norm(source)).ratio() >= SHEET_COPY_MAX:
+                raise PlanError(f"rule release {lid}: 'two_sentences' is a copy of the sheet or the rule - "
+                                f"the point is that the owner says it in his own words")
+
+
+def apply_rule_explanations(mem, plan, date, dry, touched, tally):
+    items = plan.get("rule_explanations") or []
+    if not items:
+        return
+    rows = load_json(mem, "learnings/learnings.json", [])
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    for it in items:
+        row = by_id[str(it["id"]).strip()]
+        sheet = {k: " ".join(str(it[k]).split()) for k in ("plain", "risk")}
+        sheet["verdict"] = it["verdict"]
+        for opt in ("why", "counter_note"):
+            if isinstance(it.get(opt), str) and it[opt].strip():
+                sheet[opt] = " ".join(it[opt].split())
+        if it.get("affects"):
+            sheet["affects"] = list(it["affects"])
+        row["release"] = {"status": "explained", "explained_by": " ".join(it["explained_by"].split()),
+                          "explained_at": date, "sheet": sheet}
+        tally["rule_explained"].append(str(row["id"]))
+    write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
+    refresh_queues(rows, tally)
+
+
+def apply_rule_releases(mem, plan, date, dry, touched, tally):
+    items = plan.get("rule_releases") or []
+    if not items:
+        return
+    rows = load_json(mem, "learnings/learnings.json", [])
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    for it in items:
+        row = by_id[str(it["id"]).strip()]
+        status = it.get("status", "released")
+        before = row.get("bridge_status")
+        rel = dict(row.get("release") or {})
+        if status == "released":
+            rel.update({"status": "released", "released_by": "owner", "released_at": date,
+                        "two_sentences": " ".join(it["two_sentences"].split())})
+            row["bridge_status"] = "approved"
+            row["bridge_note"] = f"{date} owner: Regel-Freigabe nach Zwei-Saetze-Erklaerung"
+            tally["bridge_approved"].append(str(row["id"]))
+        else:
+            rel.update({"status": "rejected", "rejected_by": "owner", "rejected_at": date})
+            row["bridge_status"] = "rejected"
+            note = " ".join(str(it.get("note") or "").split()) or "keine Angabe"
+            row["bridge_note"] = f"{date} owner: {note}"
+            tally["bridge_rejected"].append(str(row["id"]))
+        row["release"] = rel
+        if before != row["bridge_status"]:
+            tally["bridge_status_changed"] += 1
+        tally["rule_released" if status == "released" else "rule_rejected"].append(str(row["id"]))
+    write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
+    refresh_queues(rows, tally)
+
+
+# A member id is local (Lnn of THIS store) and must exist as a live learning. A
 # qualified one ("dome-dynamics/L31", "native:<slug>/<file>:<sha8>") is evidence
-# from elsewhere and is taken as given.
+# from elsewhere: there is no cross-repo lookup, so its rule_class / release state
+# cannot be checked and the pointer would carry the rule past the gate. It is
+# refused until such a lookup exists (DCO #10062 (1)).
 _LOCAL_MEMBER = re.compile(r"^[A-Za-z-]*\d+$")
 
 
@@ -887,13 +1492,24 @@ def validate_principles(mem, plan):
         if len(members) > DERIVED_MAX:
             raise PlanError(f"principle '{anchor}' has {len(members)} members (max {DERIVED_MAX})")
         for m in members:
-            if _LOCAL_MEMBER.match(m):
-                if m not in live:
-                    raise PlanError(f"principle member {m} is not a live learning of this store")
-                if live[m].get("kind") == "principle":
-                    raise PlanError(f"principle member {m} is itself a pointer")
-                if live[m].get("superseded_by"):
-                    raise PlanError(f"principle member {m} is superseded - point at its successor")
+            if not _LOCAL_MEMBER.match(m):
+                raise PlanError(
+                    f"principle member {m!r} is a qualified id (other store or native note) - the rule_class "
+                    f"gate cannot be checked without a cross-repo lookup, so only local Lnn ids of this store "
+                    f"are accepted as members; keep the cross-store evidence in the summary/anchor text instead")
+            if m not in live:
+                raise PlanError(f"principle member {m} is not a live learning of this store")
+            if live[m].get("kind") == "principle":
+                raise PlanError(f"principle member {m} is itself a pointer")
+            if live[m].get("superseded_by"):
+                raise PlanError(f"principle member {m} is superseded - point at its successor")
+            if is_rule_class(live[m]) and (live[m].get("release") or {}).get("status") != "released":
+                # the pointer is approved the moment it is written - it would carry the
+                # rule past the gate (DCO #10057 (1)); the member needs the same gate first
+                raise PlanError(
+                    f"principle member {m} is a rule-class learning (release state "
+                    f"{(live[m].get('release') or {}).get('status', 'needs_explanation')!r}) - it needs the "
+                    f"gate first ('rule_explanations', then the owner's 'rule_releases')")
         # The merge with an existing pointer is bounded HERE, before any applier
         # writes - not in apply_principles after the iteration log (Codex round 2).
         key = _anchor_key(anchor)
@@ -1317,6 +1933,8 @@ def apply_open_tasks(mem, plan, date, dry, touched, tally):
             tally["tasks_skipped_duplicate"] += 1
             continue
         open_titles.add(norm(title))
+        if looks_mojibake(title):
+            tally["warnings"].append(f"task title {title[:40]!r} looks like Mojibake (UTF-8 read as cp1252)")
         rows.append({
             "id": next_id(rows, "T-", pad=3, reserved=archive),
             "title": title,
@@ -1466,6 +2084,8 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--render-learnings", action="store_true",
                     help="only regenerate learnings.md from learnings.json (no plan, no marker)")
+    ap.add_argument("--propose-encoding-corrections", action="store_true",
+                    help="print the corrections plan that repairs Mojibake in tasks, learnings, decisions and user.md lines (read-only)")
     ap.add_argument("--lint", action="store_true",
                     help="report live learning rows that break the write rules (read-only)")
     ap.add_argument("--lock-timeout", type=float, default=store_lock.TIMEOUT_SECONDS,
@@ -1486,6 +2106,14 @@ def main() -> int:
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
             return 2
         print(json.dumps({"ok": True, "count": len(found), "lint": found}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.propose_encoding_corrections:
+        try:
+            print(json.dumps(propose_encoding_corrections(args.mem), ensure_ascii=False, indent=2))
+        except PlanError as e:
+            print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+            return 2
         return 0
 
     if args.render_learnings:
@@ -1528,6 +2156,10 @@ def main() -> int:
         "learnings_added": 0, "learnings_skipped_duplicate": 0, "learning_ids": [],
         "near_duplicates": {}, "bridge_candidates": [],
         "bridge_approved": [], "bridge_rejected": [], "bridge_status_changed": 0,
+        "rule_class_open": None, "rule_explained": [], "rule_released": [], "rule_rejected": [],
+        "tasks_retitled": 0, "learnings_corrected": 0, "corrections_skipped_unchanged": 0,
+        "decisions_corrected": 0, "user_lines_corrected": 0,
+        "correction_ids": [], "corrections_projection_needed": False,
         "restored": 0, "restored_ids": [], "restore_skipped_live": 0, "restore_dropped": [],
         "principles_added": 0, "principles_updated": 0, "principle_ids": [],
         "candidates_new": 0, "candidates_updated": 0, "candidates_promoted": 0,
@@ -1553,9 +2185,12 @@ def main() -> int:
             apply_iterations(args.mem, plan, date, args.dry_run, touched, tally)
             apply_decisions(args.mem, plan, date, args.dry_run, touched, tally)
             apply_restore(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_corrections(args.mem, plan, date, args.dry_run, touched, tally, session_id)
             apply_learnings(args.mem, plan, date, args.dry_run, touched, tally)
             apply_principles(args.mem, plan, date, args.dry_run, touched, tally)
             apply_bridge_decisions(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_rule_explanations(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_rule_releases(args.mem, plan, date, args.dry_run, touched, tally)
             if "user_candidates" in plan or plan.get("consolidate"):
                 # Identity growth is wrap-up Step 6's job: an iterations-only plan
                 # (/agentic-os:log) must not re-review the queue and promote to user.md.
@@ -1578,6 +2213,8 @@ def main() -> int:
                          ensure_ascii=False))
         return 2
 
+    if tally["rule_class_open"] is None:
+        tally["rule_class_open"] = rule_class_open(load_json(args.mem, "learnings/learnings.json", []))
     identity_line = (
         f"Identity: {tally['candidates_new'] + tally['candidates_updated']} beobachtet, "
         f"{tally['candidates_promoted']} → user.md promotet, "
@@ -1595,6 +2232,16 @@ def main() -> int:
         "tally": tally,
         "identity_status_line": identity_line,
     }
+    queue = tally["rule_class_open"]
+    if queue["needs_explanation"] or queue["explained"] or any(
+            k in plan for k in ("rule_explanations", "rule_releases")):
+        # Step 3f: the measured line for the report, like the bridge and identity lines.
+        result["rule_class_status_line"] = (
+            f"Regel-Learnings: {len(queue['needs_explanation'])} warten auf die Zweitmodell-Erklärung "
+            f"({', '.join(queue['needs_explanation']) or '-'}), {len(queue['explained'])} auf die "
+            f"Owner-Freigabe ({', '.join(queue['explained']) or '-'}); "
+            f"erklärt {len(tally['rule_explained'])}, freigegeben {len(tally['rule_released'])}, "
+            f"abgelehnt {len(tally['rule_rejected'])}")
     if "bridge_decisions" in plan:
         # Step 3d.4: the measured line for the mandatory report, like Step 6.5's.
         result["bridge_status_line"] = (

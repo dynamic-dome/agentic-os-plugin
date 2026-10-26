@@ -280,6 +280,85 @@ Runs AFTER Step 7.4: the ids of this session's learnings exist only then.
    `"by": "owner"` and the flipped status, then both projections again. No special
    path, no question beforehand.
 
+### 3f: Rule-class learnings — second model + owner (rule-gate)
+
+Mixed form (owner decision F4, 2026-10-22; DCO #9869). **Normal learnings** stay with
+Step 3d: the agent curates them alone and reports one line each. A learning that
+**changes a rule or the constitution** (global/project rules, hard gates, delegation,
+who may decide what) is **rule-class**: it never reaches AGENTS.md / MEMORY.md on the
+agent's say-so alone - the agent commits to the procedure below (the script checks its form, see the honor-system note below).
+
+1. **Mark it** in the Step 7.4 plan: `"rule_class": true` on the learning. A tag `regel`,
+   `rule`, `verfassung` or `constitution` marks it too. When unsure whether a learning
+   changes a rule, mark it - the cost is one explanation, not a silent rule change.
+   `apply_wrapup.py` then stores `rule_class` + `release.status: needs_explanation`,
+   makes it a bridge candidate whatever its importance, keeps it out of
+   `tally.bridge_candidates` (Step 3d cannot approve it; `bridge_decisions` approved on it is
+   rejected) and lists it in `tally.rule_class_open`.
+2. **Second model (mark + queue, no live model call in the plugin).** For each id in
+   `tally.rule_class_open.needs_explanation`:
+   `python "${CLAUDE_PLUGIN_ROOT}/scripts/learning_release.py" sheet .agent-memory <id>` renders the
+   Erklärbogen (`references/erklaerbogen-vorlage.md`). Hand it to a model that is **not**
+   the author - Codex (`/codex:rescue`) or a sub-agent of a different model class -
+   and enter its JSON answer as `rule_explanations` (own call; needs `explained_by`,
+   `plain`, `risk`, `verdict`). No second model at hand: the learning stays
+   `needs_explanation` and is reported again next time (fail closed).
+3. **Owner release.** Show Dominic the `plain` text and the verdict. He releases only when he
+   can say it in **two sentences of his own** - record them as `rule_releases`
+   (`{"id","by":"owner","two_sentences":"..."}`). The script refuses `by` other than `owner`,
+   a state other than `explained`, anything but 2 (at most 3) real sentences and a copy of the
+   sheet. Rejecting (`"status":"rejected"`) is always possible. Never release on the owner's
+   behalf and never infer a release from silence.
+
+   **`"by": "owner"` is an honor system, not an authentication.** The script checks the form
+   (the field value, state `explained`, 2-3 real sentences, no copy of the sheet) and nothing
+   else: the agent writes the plan itself, so it can neither know nor prove that Dominic said
+   those sentences. The gate binds the agent by **self-commitment**. Enter a release only when
+   Dominic wrote the two sentences in THIS conversation, copy them verbatim into
+   `two_sentences`, and never compose them from the sheet, from memory or from his silence. A
+   release the agent invented would pass every technical check; what remains is the audit
+   trail (`release.two_sentences`, `released_at` in the store) that lets the owner see and
+   revert it afterwards. The same holds for every other `by: owner` in the plan (`bridge_decisions`,
+   `corrections`): it is a recorded claim, not a verified identity.
+4. After a release `tally.bridge_status_changed > 0` -> both projections (3d.6).
+5. Report - mandatory: the returned `rule_class_status_line` verbatim, plus one line per case
+   `L26 erklärt von <modell>: <plain, ein Satz>`. A correction of a rule-class text
+   (`corrections`) resets the state to `needs_explanation` and takes the learning out of the bridge.
+
+### 3g: Corrections - fix a title or a learning text (corrections)
+
+Existing rows were never editable: the wrap-up path only adds, and the stores are
+applier-owned, so a wrong task title or a damaged learning text (Mojibake, DCO #9393) had
+no regular repair. Plan section `corrections` is that path - own call, reason required:
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --session-id <session-id> <<'PLAN'
+{"corrections": {"tasks": [{"id": "T-116", "title": "<new title>", "reason": "<why>"}],
+                 "learnings": [{"id": "L154", "text": "<corrected text>", "reason": "<why>"}]}}
+PLAN
+```
+
+The row keeps `corrections[]` (date, by, session, field, reason, `was` = the old text). A
+learning text must stay the same statement (similarity >= 0.6) - a different statement is a
+new learning that supersedes the old one. `by` (`agent` default | `owner`) is a recorded claim,
+not a verified identity (see the honor-system note in 3f).
+
+Two more sections (DCO #10057), same rules: `decisions` (`{"id","reason", title|context|decision|
+consequences|options_considered}`; `options_considered` keeps its shape - same entries, same keys,
+only the strings are repaired; `status`, `supersedes` and the like cannot be corrected here, a
+changed decision is a new decision) and `user_md` (`{"old","new","reason"}`, one whole line of
+`identity/user.md`). **`user_md` repairs the encoding and nothing else**: `new` must equal the
+deterministic repair of `old`, otherwise the plan is refused - user.md changes its wording only
+through the candidate queue (Step 6). Each repaired line gets an audit entry
+`user.md/encoding-correction` in `user-changelog.json` first. A decision that was already promoted
+to the wiki is repaired in the store only; the plan warns, the wiki page is a separate step.
+
+Mojibake: `apply_wrapup.py .agent-memory
+--propose-encoding-corrections` prints the ready plan for tasks, learnings, decisions and
+user.md lines (read-only), pipe it back in. If
+`tally.corrections_projection_needed` or `bridge_status_changed > 0`, run both projections (3d.6);
+the AGENTS.md block is a projection and is never edited by hand.
+
 ### 3e: Codex memory ingest (codex-ingest)
 
 E1 of the memory hub (membrain spec 2026-09-08). Codex writes its own native
@@ -495,6 +574,7 @@ Read the returned JSON:
 - `identity_status_line` — emit verbatim as the mandatory Step 6.5 line.
 - `files_written` — spot-check one or two if anything looks off.
 - `tally.bridge_candidates` — not empty → Step 3d runs now (its own call, after this one).
+- `tally.rule_class_open` — not empty → Step 3f (second-model explanation, then the owner).
 - `warnings` — surface them; they are contract violations (e.g. summary over
   30 lines), not noise. One is expected: in the AI workspace the store's summary
   IS the central handoff, so `session-summary.md not written: … central handoff`

@@ -270,6 +270,38 @@ fi
 
 echo ""
 
+# Run correction-path tests (5.8.0, DCO #9393)
+echo ">>> Running Corrections tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-corrections.py"; then
+    echo ">>> Corrections tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Corrections tests: SKIPPED (no python found)"
+else
+    echo ">>> Corrections tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run rule-class release tests (5.8.0, DCO #9869, F4)
+echo ">>> Running Rule-release tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-rule-release.py"; then
+    echo ">>> Rule-release tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Rule-release tests: SKIPPED (no python found)"
+else
+    echo ">>> Rule-release tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
 # Run measured session-cost tests (4.17.0: measurement replaces estimates)
 echo ">>> Running measure-session-cost tests..."
 PY_BIN=""

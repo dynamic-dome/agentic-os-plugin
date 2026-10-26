@@ -4,6 +4,129 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-25] Release v5.8.0 — Korrekturweg, Regel-Klasse-Tor (auch für Principles), Windows-Robustheit
+MINOR, **lokal vorbereitet** im Bündel AOS3-1 (Version-Bump in `.claude-plugin/plugin.json`, `CLAUDE.md`, `docs/PROJECT.md`).
+**Kein Tag, kein Push, kein Marketplace-Publish:** `python release/release.py pruefen 5.8.0` (setzt den Tag), Push und
+Publish bleiben beim Owner. Dieser Eintrag fasst die drei Kandidaten darunter zusammen (5.7.2-Robustheit, 5.8.0
+Korrekturweg/Regel-Klasse-Tor, AOS2-2-Nachtrag) und ergänzt AOS3-1 (DCO #10062, #10050).
+
+- **Principle-Tor lehnt qualifizierte IDs ab (#10062 (1), Selbstentscheid mit Test):** `validate_principles` prüfte
+  `rule_class` nur für lokale Mitglieder und nahm qualifizierte IDs (`dome-dynamics/L31`, `native:<slug>/<file>:<sha8>`)
+  ungeprüft an. Ein Zeiger darüber hätte eine Regel am Tor vorbei in AGENTS.md/MEMORY.md getragen. Ohne repo-übergreifenden
+  Lookup ist der Zustand nicht prüfbar, also lehnt der Plan jetzt jede nicht-lokale ID (alles außer `Lnn` dieses Stores)
+  vor dem ersten Byte ab, mit Fehlermeldung (qualifizierte ID, Grund, Hinweis: Fremd-Evidenz in den Kartentext).
+  `commands/maintain.md` Step 5c nennt das. Rot gegen den alten Code bewiesen (4 Fehlschläge in `test-principles.py`),
+  danach grün; der bisherige Test, der qualifizierte IDs als gültig erwartete, ist zum Ablehnungstest umgebaut.
+  Zeiger, die früher mit qualifizierten Mitgliedern geschrieben wurden, bleiben lesbar und werden projiziert wie bisher.
+- **`projection_text.gated_pointer` (#10062 (2)):** Die Bedingung stand nach einem Merge-Unfall mit einer Lücke von 17
+  Leerzeichen in einer Zeile. Jetzt zwei saubere Zeilen, gleiche Logik. Ein Test in `test-rule-release.py` schlägt an,
+  wenn in dieser Datei wieder eine Codezeile eine Leerzeichenfolge ab 10 enthält.
+- **CLAUDE.md und wrap-up Step 3f (#10062 (3)):** „nie auf Zuruf des Agenten“ und „`by: owner` ist Ehrensache“ standen
+  nebeneinander und widersprachen sich dem Wortlaut nach. Jetzt steht beides stimmig: Das Tor bindet den Agenten durch
+  Selbstverpflichtung (Freigabe nur auf Sätze, die Dominic in dieser Sitzung wörtlich geschrieben hat), das Skript
+  erzwingt Verfahren und Spur (`release.two_sentences`, `released_at`), keine Authentifizierung. Technisch wird nichts
+  vorgetäuscht; ein Test pinnt die Formulierung.
+- **Testlauf 5.8.0 (#10050):** `bash tests/run-all.sh` komplett und seriell (ohne `-n`, ein Lauf, kein Teillauf nötig,
+  keine Speicherknappheit): „ALL TEST SUITES PASSED“, Exit 0, 35 von 35 Suiten grün, 1911 PASS-Zeilen, 0 FAIL,
+  4 informative SKIP-Zeilen aus validate-plugin (optionale Dateien bzw. Skill-Zahl in der Beschreibung). Darunter validate-plugin 165/165, validate-skills 108/108, apply-wrapup 192, principles 44, corrections 70,
+  rule-release 57, restore 79, wrapup-core 118, bridge-projection 88. Ein erster Lauf auf demselben Baum war
+  rot (1 Fehlschlag): der Test „maintain Step 5c“ pinnt den Satz „>= 3 members from >= 2 stores“, den meine erste
+  `maintain.md`-Fassung entfernt hatte; der Schwellenwert bleibt jetzt stehen (Fremd-Evidenz zählt auf der Karte, nur
+  lokale IDs gehen in `members`), danach grün. **Isolation:** das Plugin nutzt kein SQLite (`sqlite-schema-guard`:
+  nichts zu schützen); stattdessen lief die Suite mit `HOME`/`USERPROFILE` und `AGENTIC_OS_SNAPSHOT_DIR` auf ein
+  Temp-Verzeichnis umgeleitet, und ein Datei-Hash-Snapshot (1532 Dateien: `~/.agentic-os`, `~/.agent-memory`,
+  `~/.claude/agentic-os.local.json` sowie die `.agent-memory/` von Plugin, DCO, AI und wiki) vor und nach dem Lauf
+  unterschied sich in genau einer Datei: dem dirty-Marker einer fremden, parallel laufenden Sitzung (Hook, 02:34,
+  `cwd` wiki/todos), nicht von der Suite. Vorher nur gezielte Läufe (Stand der Kandidaten: corrections 41, rule-release 43,
+  apply-wrapup 192, principles 41, restore 79, wrapup-core 118).
+
+## [2026-10-25] Bestandteil von 5.8.0 — Nachtrag AOS2-2 (DCO #10057)
+
+Teil des Kandidaten 5.8.0, lokal committet im Bündel AOS2-2. Je Teil TDD (`tests/test-rule-release.py`,
+`tests/test-corrections.py`), gelaufen sind die betroffenen Testdateien plus `validate-plugin.sh`/`validate-skills.sh`.
+
+- **Regel-Klasse-Tor war über `principles` umgehbar:** `validate_principles` prüfte `rule_class` nicht, und ein
+  Principle-Zeiger wird beim Schreiben `approved`. Ein Regel-Learning kam damit ohne Zweitmodell und Owner-Freigabe nach
+  AGENTS.md/MEMORY.md. Jetzt lehnt der Plan einen Zeiger ab, dessen lokales Mitglied `rule_class` ist und nicht `released`
+  (Fehlertext nennt `rule_explanations` und `rule_releases`). Zusätzlich projizieren beide Projektionen (`bridge_projection`,
+  `memory_index_projection`) keinen Zeiger über einem nicht freigegebenen Regel-Learning, auch nicht einen von Hand
+  geschriebenen, und falten dessen Mitglieder nicht weg. Rot gegen HEAD bewiesen (7 Fehlschläge), danach grün.
+- **Korrekturweg für Entscheidungen und user.md:** `corrections` kennt jetzt `decisions` (title, context, decision,
+  consequences, `options_considered` mit unveränderter Form, gleiche Stempelung wie bei Tasks/Learnings) und `user_md`
+  (eine ganze Zeile von `identity/user.md`, **nur Encoding-Reparatur**: `new` muss die deterministische Reparatur von `old`
+  sein, sonst Ablehnung, Umformulierungen laufen weiter nur über die Kandidaten-Queue). Jede Zeilenreparatur schreibt zuerst
+  einen Audit-Eintrag `user.md/encoding-correction` ins `user-changelog.json`. `--propose-encoding-corrections` liefert
+  jetzt vier Listen (`tasks`, `learnings`, `decisions`, `user_md`). Angewandt auf dome-dynamics: D42 (fünf Felder, neun
+  Zeilen) und eine user.md-Zeile (UC31) repariert; Sicherung unter `AI/artifacts/buendelplan-2026-10-24/backups/aos2-2/`.
+  Bewusst nicht angefasst: die zwei Zeilen im `user-changelog.json`, die den beschädigten Wortlaut als Verlauf festhalten.
+- **`by: owner` ehrlich beschrieben:** Die Owner-Freigabe (`rule_releases`, ebenso `by: owner` bei `bridge_decisions` und
+  `corrections`) ist eine Selbstverpflichtung des Agenten und keine Authentifizierung: das Skript prüft die Form (Feldwert,
+  Zustand, zwei bis drei Sätze, keine Kopie), nicht wer den Plan geschrieben hat. Dokumentiert in wrap-up Step 3f/3g,
+  `wrapup-schemas.md` und CLAUDE.md; die Fehlermeldung sagt es ebenfalls. Technisch wird nichts vorgetäuscht, nachträglich
+  prüfbar bleibt `release.two_sentences`/`released_at` im Store.
+
+## [2026-10-24] Bestandteil von 5.8.0 (DCO #9393 Korrekturweg, #9869 Learnings-Mischform)
+
+MINOR, lokal committet im Bündel AOS2-1. Version-Bump, Release und Marketplace-Publish macht der Owner. Je Teil TDD
+(`tests/test-corrections.py`, `tests/test-rule-release.py`), gelaufen sind nur die betroffenen Testdateien.
+
+- **Korrekturweg (#9393):** Plan-Abschnitt `corrections` in `apply_wrapup.py` ändert den Text bestehender Zeilen,
+  bisher gab es dafür keinen regelkonformen Schreiber (Tasks umtiteln, Learning-Texte korrigieren). Pflicht: `reason`;
+  die Zeile behält `corrections[]` mit Datum, `by`, Sitzung, Feld, Grund und dem alten Text. Ein Learning-Text muss
+  dieselbe Aussage bleiben (Ähnlichkeit >= 0.6), sonst neues Learning mit supersede. Mehrdeutige IDs (im Store gibt es
+  doppelte `T-115`) werden abgelehnt statt geraten. `--propose-encoding-corrections` erzeugt rein lesend den Plan für
+  Mojibake (UTF-8 als cp1252 gelesen); neue Zeilen mit Mojibake werden geschrieben, aber gewarnt.
+- **Learnings-Mischform (#9869, Owner-Entscheid F4):** Normale Learnings kuratiert der Agent weiter selbst (Schritt 3d,
+  je eine Zeile). Regel-Learnings (`rule_class`, Flag oder Tag `regel`/`verfassung`) gehen nie auf Agenten-Zuruf in
+  AGENTS.md/MEMORY.md: Ein Zweitmodell erklärt sie im Erklärbogen (`rule_explanations`), der Owner gibt erst frei
+  (`rule_releases`), wenn er sie in zwei eigenen Sätzen sagen kann. Mechanik nach Plugin-Konvention: Markierung und
+  Queue im Store (`tally.rule_class_open`), Bogen aus `scripts/learning_release.py sheet`, kein Live-Modellaufruf.
+  Fail-closed: ohne Zweitmodell bleibt das Learning in der Queue. Wird ein Regeltext korrigiert, beginnt das Tor neu.
+
+## [2026-10-22] Bestandteil von 5.8.0, ursprünglich Kandidat 5.7.2 (DCO #9695 Rest, #9424, #9891, #9890; #9393 belegt)
+
+PATCH, lokal committet im Bündel AOS-2 (unbeaufsichtigter Loop). Version-Bump, Release und Marketplace-Publish macht
+der Owner. Je Fix TDD (rot vor grün), gelaufen sind nur die betroffenen Testdateien. **Die volle Suite ist erst im Lauf zu 5.8.0 (AOS3-1, 25.10.) gelaufen**. Zuvor galt: Der isolierte Lauf gegen eine HEAD-Kopie wurde am 22.10. um 23:0x von Claude Code wegen Speicherknappheit
+des Rechners beendet. Vor dem Release ist er nachzuholen (`release/isolation.py`-Guard, HOME/USERPROFILE umgeleitet).
+
+- **BOM in fünf weiteren Lesern (#9695):** `ingest_codex_memory` liest `memory_summary.md` als `utf-8-sig`. Ein BOM vor
+  der ersten `## `-Überschrift verbarg vorher die ganze erste Sektion, ihre Bullets wurden still ignoriert.
+  `handoff_write_guard` liest seinen State als `utf-8-sig`. Ein BOM galt vorher als korrupt (check exit 21).
+  Nach einem Prüferbefund kamen drei dazu: `session-start.sh` und `codex-session-briefing.sh` lasen
+  `open-tasks.json` nicht BOM-fest, das Briefing zeigte dann still keine Next-Steps. `global_decay` meldete einen
+  globalen Store mit BOM als unreadable. Diese fünf lesen Dateien, die Menschen oder fremde Werkzeuge anfassen
+  (PowerShell 5.1 `Set-Content`). Weitere Leser lesen weiter strikt `utf-8`, das ist **bewusst nicht vollständig**:
+  Dirty-Marker, Konsolidierungsmarker und Plan-Dateien schreibt nur das Plugin selbst, und zwar ohne BOM.
+- **Cap-5-Rettung (#9424, Vorlage 7.6a Punkt 5):** Cap 5 verdrängt Blöcke aus dem zentralen Handoff. Nach der
+  Ownership-Dedup ist ein solcher Block der einzige seines Projekts. Sein Einzeiler („Aktueller Stand“, sonst „Was
+  wurde gemacht“) kommt als Mini-Sektion ins Status-Board, aber nur, wenn das Board für dieses Projekt noch keine
+  Sektion hat. Bestehende Sektionen bleiben unberührt (7.6b). Ohne Rettungsbedarf wird das Board nicht geschrieben.
+  Zwei Durchgänge:
+  - `rescue_dropped` vor dem Schreiben.
+  - `rescue_blocks` danach, für die Blöcke, die `write_central` wirklich verdrängt hat. Das fängt einen Drift durch
+    eine parallele Session ab (Prüferbefund).
+
+  Das Ergebnis `{rescued, lost, status}` steht in `handoff.rescued`. Ein Block ohne Zustandszeile oder ein
+  gescheiterter Board-Write erscheint dort als `lost`, also nie still. Eine Grenze bleibt: Aliase fremder Projekte
+  kennt der Schreiber nicht. Steht eine Sektion nur unter einem Alias, entsteht eine sichtbare zweite Sektion, aber
+  kein Verlust. Verdrahtet ist das nur im headless Pfad (`wrapup_core`), der interaktive Wrap-up folgt dem
+  Vorlagentext. Daneben wurde die doppelte DCO-Sektion im Board von Hand bereinigt: Der Stand vom 21.10. bleibt, der
+  vom 20.10. ist entfernt.
+- **Session-Notizen `status: final` (#9891):** obsidian-sync Step 4 und die headless Notiz (`wrapup_parts/wikinote.py`)
+  schrieben `active`. Wiki-Template und DR-2026-07-17-002 verlangen `final` (Snapshot-Artefakt), daraus entstanden 194
+  Freshness-Fehlalarme. Decision- und Entity-Seiten bleiben `active`.
+- **Windows: blockiertes `os.replace` (#9890):** Liest ein anderer Prozess gerade den Dirty-Marker, scheitert
+  `os.replace` mit WinError 5. Betroffen waren der Dirty-Tracker (die Zählung ging verloren) und `harvest_state` (der
+  Fehler lief bis in den Nachtlauf durch). Jetzt gibt es 3 Versuche im Abstand von 50 ms, danach wird direkt
+  geschrieben. Das direkte Schreiben ist nicht atomar. Das ist ein bewusster Kompromiss: Die Datei ist unter 1 KB
+  groß, und vorher ging die Zählung ganz verloren. Die Tests simulieren den Fehler über `os.replace`. Einmal von Hand
+  wurde zusätzlich ein Ende-zu-Ende-Lauf mit echtem offenem Leser in einem zweiten Prozess gemacht (22.10.,
+  write_count zählte weiter, kein tmp). Dieser Lauf ist nicht als Test hinterlegt.
+- **Mojibake (#9393), belegt, kein Code nötig:** Die Einträge in dome-dynamics (T-116 bis T-118, L154, L155) stammen
+  vom 08.09. Den Schreibweg (stdin von `apply_wrapup` über die Konsolen-Codepage) hat 5.0.2 am 09.09. repariert
+  (7d2b1bf). Test 33 in `test-apply-wrapup.py` wird rot, wenn man die Umstellung herausnimmt (Mutationsprobe
+  22.10.). Die Reparatur der Alt-Einträge steht noch aus.
+
 ## [2026-10-21] Release v5.7.1 — Robustheits-Bündel (DCO #9695, #9790, #9680, #9705, #9787)
 
 PATCH (nur Fehlerbehebungen, keine neue Schnittstelle). Je Todo ein Worktree mit TDD (rot vor grün),

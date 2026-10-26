@@ -117,15 +117,34 @@ def _keys(project):
     return {_norm(n) for n in names if _norm(n)}
 
 
-def prepend_block(existing, new_block, project, cap=CAP):
-    """Demote, ownership-dedup (all spellings/aliases), prepend, cap. -> (text, [projects of dropped blocks])."""
+def _prepend(existing, new_block, project, cap=CAP):
+    """-> (text, [dropped blocks]); see prepend_block."""
     keys = _keys(project)
     pre, blocks = split_blocks(existing)
     kept = [b for b in (_demote(b) for b in blocks) if _norm(block_project(b)) not in keys]
     allb = [new_block.strip()] + kept
-    dropped = [block_project(b) for b in allb[cap:]]
     body = SEP.join(allb[:cap]) + "\n"
-    return (f"{pre}\n\n{body}" if pre else body), dropped
+    return (f"{pre}\n\n{body}" if pre else body), allb[cap:]
+
+
+def prepend_block(existing, new_block, project, cap=CAP):
+    """Demote, ownership-dedup (all spellings/aliases), prepend, cap. -> (text, [projects of dropped blocks])."""
+    text, dropped = _prepend(existing, new_block, project, cap)
+    return text, [block_project(b) for b in dropped]
+
+
+def rescue_line(blk):
+    """1-line state of a handoff block: first bullet of 'Aktueller Stand', else of 'Was wurde gemacht'."""
+    lines = [ln.strip() for ln in blk.splitlines()]
+    for head in ("## Aktueller Stand", "## Was wurde gemacht"):
+        if head not in lines:
+            continue
+        for ln in lines[lines.index(head) + 1:]:
+            if ln.startswith("## "):
+                break
+            if ln.startswith("- ") and ln[2:].strip():
+                return ln[2:].strip()[:200]
+    return ""
 
 
 def _heading_matches(line, project):
@@ -174,16 +193,76 @@ def _guarded_write(path, compute, _before_write=None):
     return "drift-merged"
 
 
-def write_central(central_dir, project, new_block, _before_write=None):
-    """Prepend the block to <central_dir>/.agent-memory/session-summary.md; never create the directory."""
+def write_central(central_dir, project, new_block, _before_write=None, dropped_out=None):
+    """Prepend the block to <central_dir>/.agent-memory/session-summary.md; never create the directory.
+    dropped_out (list): receives the blocks cap 5 really dropped in the write that happened."""
     folder = os.path.join(central_dir, ".agent-memory")
     if not os.path.isdir(folder):
         return "skipped(no central dir)"
+
+    def compute(old):
+        text, dropped = _prepend(old or "", new_block, project)
+        if dropped_out is not None:
+            dropped_out[:] = dropped
+        return text
+
     try:
-        return _guarded_write(os.path.join(folder, "session-summary.md"),
-                              lambda old: prepend_block(old or "", new_block, project)[0], _before_write)
+        return _guarded_write(os.path.join(folder, "session-summary.md"), compute, _before_write)
     except OSError as exc:
         return f"failed({type(exc).__name__})"
+
+
+def rescue_blocks(central_dir, blocks, _before_write=None):
+    """Template 7.6a point 5: move the 1-line state of handoff blocks that cap 5 drops (after ownership-dedup
+    each is its project's ONLY block) into the board. Appends a section only for projects the board does not
+    know yet - existing sections are never touched (7.6b); nothing to rescue -> board not rewritten.
+    Limit: aliases of foreign projects are unknown here, so a section headed only by an alias gets a second,
+    visible rescue section - never a loss. -> {"rescued", "lost", "status"}; "lost" names projects whose block
+    could not be saved (no state line or failed write) - reported, never silent, never raised."""
+    board = os.path.join(central_dir, "cross-project-status.md")
+    rescued, lost = [], []
+
+    def compute(old):
+        text = old if old is not None else BOARD_STUB
+        rescued.clear()
+        lost.clear()
+        for blk in blocks:
+            name, line = block_project(blk), rescue_line(blk)
+            if not name or any(_heading_matches(ln, name) for ln in text.splitlines()):
+                continue
+            if not line:
+                lost.append(name or "?")
+                continue
+            stamp = _block_date(blk) or "?"
+            text = replace_board_section(text, name, f"## {name}\n*Gerettet aus dem zentralen Handoff (Cap 5), "
+                                                     f"Stand {stamp}*\n- State: {line}\n\n---\n")
+            rescued.append(name)
+        return text
+
+    try:
+        compute(_read(board) if os.path.isfile(board) else None)
+        if not rescued:
+            return {"rescued": [], "lost": list(lost), "status": "none"}
+        status = _guarded_write(board, compute, _before_write)
+    except OSError as exc:
+        status = f"failed({type(exc).__name__})"
+    if status not in ("written", "drift-merged"):
+        return {"rescued": [], "lost": list(lost) + list(rescued), "status": status}
+    return {"rescued": list(rescued), "lost": list(lost), "status": status}
+
+
+def rescue_dropped(central_dir, project, new_block, _before_write=None):
+    """Pre-write pass: the blocks write_central WOULD drop now (template order: move first, then drop).
+    A parallel writer can change that set before the write - the caller passes write_central's dropped_out
+    to rescue_blocks afterwards to catch the rest."""
+    hand = os.path.join(central_dir, ".agent-memory", "session-summary.md")
+    try:
+        if not os.path.isfile(hand):
+            return {"rescued": [], "lost": [], "status": "none"}
+        _, dropped = _prepend(_read(hand), new_block, project)
+    except OSError as exc:
+        return {"rescued": [], "lost": [], "status": f"failed({type(exc).__name__})"}
+    return rescue_blocks(central_dir, dropped, _before_write)
 
 
 def write_board(central_dir, project, section, _before_write=None):

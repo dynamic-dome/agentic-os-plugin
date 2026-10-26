@@ -268,6 +268,16 @@ def main():
         check("BOM store is ingested, not rejected", p.returncode == 0 and rows[0]["id"] == "L3", p.stderr[:200])
         check("new codex ids skip archived ids", new_ids[:1] == ["L21"], str(new_ids))
 
+    # DCO #9695 rest: a BOM in memory_summary.md must not hide the first section.
+    with tempfile.TemporaryDirectory() as tmp:
+        mem, codex = setup(tmp, [])
+        with open(os.path.join(codex, "memory_summary.md"), "wb") as f:
+            f.write(b"\xef\xbb\xbf## General Tips\n\n- Read the summary with utf-8-sig so the heading survives.\n")
+        p = run([mem, "--codex-memories", codex], cwd=tmp)
+        texts = [r.get("text") for r in load(mem)]
+        check("BOM summary: first section is still parsed", p.returncode == 0
+              and "Read the summary with utf-8-sig so the heading survives." in texts, p.stdout + p.stderr[:200])
+
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")
     return 1 if FAILURES else 0

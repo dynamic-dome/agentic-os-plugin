@@ -54,7 +54,7 @@ fi
 OPEN_TASKS=$("$PYBIN" - "$MEMORY_DIR/context/open-tasks.json" << 'EOPY'
 import json, sys
 try:
-    raw = json.load(open(sys.argv[1], encoding="utf-8"))
+    raw = json.load(open(sys.argv[1], encoding="utf-8-sig"))  # BOM-tolerant (#9695)
     tasks = raw if isinstance(raw, list) else raw.get("tasks", [])
     items = [t for t in tasks if isinstance(t, dict) and t.get("status") in ("open", "blocked")]
     print("; ".join(f"{t.get('id','?')}: {str(t.get('title',''))[:120]}" for t in items[:5]))

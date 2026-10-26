@@ -25,7 +25,7 @@ import tempfile
 from datetime import datetime, timezone
 
 # Same short-form rule as the MEMORY.md block (150 chars, line <= 200).
-from projection_text import (BOM, LINE_LIMIT, POINTER, assemble, bounded_line, entry_line,
+from projection_text import (gated_pointer, BOM, LINE_LIMIT, POINTER, assemble, bounded_line, entry_line,
                              read_raw, shorten)
 from projection_text import strip_block as _strip_block
 
@@ -59,10 +59,16 @@ def load_approved(mem_dir):
         return None
     entries = data if isinstance(data, list) else data.get("learnings", [])
     # members of a rule pointer (kind "principle", 5.4.0) are covered by the pointer
+    by_id = {str(e.get("id")): e for e in entries if isinstance(e, dict)}
+    # a pointer over an unreleased rule-class learning is not projected (gate, DCO #10057)
+    gated = {str(e.get("id")) for e in entries if isinstance(e, dict) and e.get("kind") == "principle"
+             and gated_pointer(e, by_id)}
     folded = {m for e in entries if isinstance(e, dict) and e.get("kind") == "principle"
-              and not e.get("superseded_by") for m in (e.get("derived_from") or []) if isinstance(m, str)}
+              and not e.get("superseded_by") and str(e.get("id")) not in gated
+              for m in (e.get("derived_from") or []) if isinstance(m, str)}
     approved = [e for e in entries if isinstance(e, dict)
                 and e.get("bridge_status") == "approved"
+                and str(e.get("id")) not in gated
                 and not e.get("superseded_by")
                 and str(e.get("id")) not in folded
                 and e.get("source_agent", "claude") != "codex"]   # loop guard (hub spec E3)

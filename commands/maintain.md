@@ -202,8 +202,11 @@ MEMORY.md projection shows FIRST. Members stay unchanged — they keep the concr
 3. Show the owner at most 10 pointer cards per round: summary (the rule, <= 150 chars),
    anchor (`<file>#<heading>` or `#^r-<slug>`), members. Several rules under one heading
    need an Obsidian block id at the rule's line — that is a wiki edit and part of the card.
-   A **new** rule needs >= 3 members from >= 2 stores and its own `j`; a rule derived from
-   a home-level store gets the note that the rule becomes visible to every machine reading the shared wiki.
+   A **new** rule needs >= 3 members from >= 2 stores (evidence, counted on the card) and its own `j`. Only local
+   `Lnn` ids of this store are written into `members`: a qualified id (`dome-dynamics/L31`, `native:...`) is
+   refused by the applier, because the rule-class gate cannot be checked across repos (DCO #10062); the
+   cross-store evidence goes into the card text.
+   A rule derived from a home-level store gets the note that the rule becomes visible to every machine reading the shared wiki.
 4. One `[j/n]` per card. Only on `j`: make the wiki edit (if any), then write the pointers:
 
 ```bash
@@ -211,8 +214,11 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <pla
 python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" .agent-memory --project-root .
 ```
 
-   The applier refuses an anchor that does not resolve, an unknown local member and a
-   pointer as member; the same anchor again merges members instead of adding a row.
+   The applier refuses an anchor that does not resolve, an unknown local member, a qualified member and a
+   pointer as member; the same anchor again merges members instead of adding a row. It
+   also refuses a member that is a rule-class learning not yet `released` (wrap-up Step 3f:
+   second-model explanation, then the owner): the owner's `j` on a pointer card does not
+   replace that gate (DCO #10057).
 5. Gaps and facts go into the report, nothing is written for them.
 
 ## Step 6: Report

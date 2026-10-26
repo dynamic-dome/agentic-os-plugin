@@ -115,6 +115,12 @@ OUT=$(cd "$PROJ5" && echo '{}' | CLAUDE_PROJECT_DIR="$PROJ5" bash "$FAKE/session
 echo "$OUT" | python -c "import sys,json; d=json.load(sys.stdin); assert d.get('continue') is True" 2>/dev/null \
   && pass "route: valid JSON" || fail "route: bad JSON: $OUT"
 
+# 2c. DCO #9695: open-tasks.json mit UTF-8-BOM -> Task trotzdem im Briefing
+PROJ7="$TMP/proj-bom"; mkdir -p "$PROJ7/.agent-memory/context"
+printf '\xef\xbb\xbf[{"id": "T-77", "title": "BOM-Task", "status": "open"}]\n' > "$PROJ7/.agent-memory/context/open-tasks.json"
+OUT=$(cd "$PROJ7" && echo '{}' | CLAUDE_PROJECT_DIR="$PROJ7" bash "$CB" 2>/dev/null)
+echo "$OUT" | grep -q "T-77" && pass "bom: open task id present" || fail "bom: T-77 missing: $OUT"
+
 # 6. Claude-Pfad unveraendert: session-start.sh AUSSERHALB /.codex/ initialisiert weiterhin
 PROJ6="$TMP/proj-claude"; mkdir -p "$PROJ6"
 OUT=$(cd "$PROJ6" && echo '{}' | CLAUDE_PROJECT_DIR="$PROJ6" bash "$SS" 2>/dev/null); RC=$?

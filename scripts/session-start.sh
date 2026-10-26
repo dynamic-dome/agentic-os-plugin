@@ -295,7 +295,7 @@ if [ -n "$PY" ] && [ -f "$MEMORY_DIR/context/open-tasks.json" ]; then
   NEXT_STEPS=$("$PY" - "$MEMORY_DIR/context/open-tasks.json" 2>/dev/null <<'PYEOF'
 import json, sys
 try:
-    with open(sys.argv[1], encoding="utf-8") as f:
+    with open(sys.argv[1], encoding="utf-8-sig") as f:  # BOM-tolerant (#9695)
         data = json.load(f)
 except Exception:
     sys.exit(0)

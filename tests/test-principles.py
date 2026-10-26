@@ -162,9 +162,16 @@ rc, out = run([APPLY, mem], json.dumps({"iterations": [{"type": "feature", "titl
 check(rc == 2 and not os.path.exists(os.path.join(mem, "iterations", "iteration-log.md"))
       and sha(os.path.join(mem, "learnings", "learnings.json")) == before,
       "merge over 30 members is refused before the iteration log is written")
-rc, out = run([APPLY, mem], json.dumps({"principles": [
-    {"summary": "Trust", "anchor": f"{rules}#^r-trust", "members": ["dome-dynamics/L31", "native:dco/x.md:ab12cd34"]}]}))
-check(rc == 0, "qualified members (store/Lnn, native:) are accepted without a local lookup")
+# Qualified ids (store/Lnn, native:) skip the rule_class check of the local lookup, so they are
+# refused until a cross-repo lookup exists (DCO #10062 (1), owner delegation 2026-10-25).
+for qid in ("dome-dynamics/L31", "native:dco/x.md:ab12cd34", "L1:x", "nummerlos"):
+    before = sha(os.path.join(mem, "learnings", "learnings.json"))
+    rc, out = run([APPLY, mem], json.dumps({"principles": [
+        {"summary": "Trust", "anchor": f"{rules}#^r-trust", "members": ["L1", qid]}]}))
+    err = str(out.get("error") or "")
+    check(rc == 2 and "qualified" in err and qid in err and "rule_class" in err
+          and sha(os.path.join(mem, "learnings", "learnings.json")) == before,
+          f"qualified member {qid!r} refused with a clear message, before the first byte ({rc}, {err[:90]})")
 
 # ============================================================ 3. projection
 print("--- MEMORY.md projection (block first)")

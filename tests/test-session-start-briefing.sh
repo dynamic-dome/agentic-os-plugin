@@ -146,6 +146,12 @@ echo "$CTX2" | grep -q "RECOVERY: 2 unkonsolidierte" \
   && pass "recovery: young markers count once ended (session_end / 12 h quiet); running, resumed, tail, parallel do not" \
   || fail "recovery young: $(echo "$CTX2" | grep -o 'RECOVERY: [0-9]*' || echo 'no RECOVERY line')"
 
+# DCO #9695 (Pruefer AOS-2): open-tasks.json with a UTF-8 BOM (PowerShell 5.1 Set-Content) still yields next steps.
+mkdir -p "$TMP/bom/.agent-memory/context" && cd "$TMP/bom"
+printf '\xef\xbb\xbf[{"id": "T-BOM", "title": "BOM task", "status": "open"}]\n' > "$TMP/bom/.agent-memory/context/open-tasks.json"
+CTX3=$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP/bom" bash "$DIR/scripts/session-start.sh" 2>/dev/null | PYTHONIOENCODING=utf-8 python -c "import sys,json; print(json.loads(sys.stdin.read())['hookSpecificOutput']['additionalContext'])" 2>/dev/null)
+echo "$CTX3" | grep -q "T-BOM" && pass "next steps: BOM open-tasks.json is read" || fail "next steps: BOM open-tasks.json ignored"
+
 # Fresh init path still works and still uses the same contract.
 mkdir -p "$TMP/fresh" && cd "$TMP/fresh"
 OUT2=$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP/fresh" bash "$DIR/scripts/session-start.sh" 2>/dev/null)

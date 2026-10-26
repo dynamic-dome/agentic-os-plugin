@@ -74,6 +74,17 @@ def main():
         check(raw(d, "learnings.json") == before, "second run on the same day: file byte-identical")
         check("0 decayed" in p.stdout, f"second run reports 0 decayed ({p.stdout.strip()})")
 
+    # 1b. DCO #9695: a global store with a UTF-8 BOM is read, not reported unreadable
+    with tempfile.TemporaryDirectory() as d:
+        put(d, "learnings.json", [entry("G-learning-009", 0.7, "2026-06-01")])
+        body = raw(d, "learnings.json")
+        with open(os.path.join(d, "learnings.json"), "wb") as f:
+            f.write(b"\xef\xbb\xbf" + body)
+        p = run(d, "--apply")
+        check(p.returncode == 0 and "unreadable" not in p.stderr, f"BOM store readable ({p.stderr.strip()[:200]})")
+        e = json.loads(raw(d, "learnings.json").decode("utf-8-sig"))[0]
+        check(e["confidence"] == 0.6, f"BOM store decayed like any other ({e['confidence']})")
+
     # 2. only the delta is applied when a later step falls due
     with tempfile.TemporaryDirectory() as d:
         put(d, "patterns.json", [entry("G-pattern-002", 0.8, "2026-03-01", decay_steps_applied=1)])  # 214 d -> 2 steps

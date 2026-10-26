@@ -47,7 +47,7 @@ def file_state(path):
 def load_state(state_path):
     """Snapshot dict or None when missing/corrupt (callers decide severity)."""
     try:
-        with open(state_path, "r", encoding="utf-8") as f:
+        with open(state_path, "r", encoding="utf-8-sig") as f:  # a BOM is not corruption (#9695)
             data = json.load(f)
         return data if isinstance(data, dict) else None
     except (OSError, ValueError):

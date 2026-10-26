@@ -152,6 +152,22 @@ def anchor_ok(anchor):
     return False
 
 
+def gated_pointer(ptr, by_id):
+    """True when a pointer folds a LOCAL rule-class learning the owner has not released.
+
+    The rule-class gate (DCO #9869, F4) must hold for a principle pointer too: a pointer
+    is approved when it is written, so without this a rule could reach AGENTS.md /
+    MEMORY.md through the `principles` section without second-model explanation and
+    owner release (DCO #10057 (1)). `apply_wrapup.validate_principles` refuses such a
+    plan; this guard catches rows written by hand or released-then-rejected later."""
+    for m in (ptr.get("derived_from") or []):
+        row = by_id.get(str(m)) if isinstance(m, str) else None
+        if (isinstance(row, dict) and row.get("rule_class") is True
+                and (row.get("release") or {}).get("status") != "released"):
+            return True
+    return False
+
+
 def anchor_display(anchor):
     """Short form for the projection: file name plus fragment."""
     path, frag = split_anchor(anchor)
