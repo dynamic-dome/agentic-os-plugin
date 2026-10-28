@@ -12,6 +12,9 @@
 # Defaults are intentionally MINIMAL (empty stores / stubs). Real content is written
 # at runtime by the owning skill (see skills/DEPENDENCIES.md).
 
+# Where this file lives (resolved when sourced): scripts/soul-template.txt sits next to it
+MEM_SCHEMA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Directories to create (mkdir -p, in order)
 MEM_DIRS=(
   identity
@@ -121,26 +124,12 @@ EOFILE
 2. Start first coding iteration
 EOFILE
 
-  # identity/soul.md
-  [ -f "$MEMORY_DIR/identity/soul.md" ] || cat > "$MEMORY_DIR/identity/soul.md" << 'EOFILE'
-# Agent Identity
-
-## Communication
-- Language: en (switch to de if user writes in German)
-- Brevity: 3/5 (balanced)
-- Proactivity: 3/5
-
-## Guard Rails
-- Confirm before deleting files
-- Justify new dependencies
-- For multi-file changes: write a brief plan first
-- No architecture decisions without discussion
-
-## Priorities
-1. Correctness over speed
-2. Simplicity over cleverness
-3. Working code over perfect code
-EOFILE
+  # identity/soul.md: the current part of scripts/soul-template.txt - the ONE home of the template lines (the
+  # briefing filters every template line, current and earlier versions, out of its Identity line; DCO #10148).
+  # A missing template creates nothing: the hook's completeness check then reports the store as incomplete.
+  if [ ! -f "$MEMORY_DIR/identity/soul.md" ] && [ -f "$MEM_SCHEMA_DIR/soul-template.txt" ]; then
+    sed '/^<!-- earlier versions/,$d' "$MEM_SCHEMA_DIR/soul-template.txt" | tr -d '\r' > "$MEMORY_DIR/identity/soul.md"
+  fi
 
   # identity/user.md
   if [ ! -f "$MEMORY_DIR/identity/user.md" ]; then

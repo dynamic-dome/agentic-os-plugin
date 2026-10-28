@@ -17,6 +17,10 @@ Contract:
     exist.)
   - Held only from the first read to the last write of ONE run - never nested,
     never across a subprocess call (the child would wait for its own parent).
+    One exception (P2): the project lock may enclose the central-profile lock
+    (`lock_rel=identity/profile.lock`), in this order only. apply_wrapup takes it
+    right after the project lock and holds it for the whole run (< 1 s), but only
+    when the run writes identity data into an active central profile.
   - Waiting longer than `timeout` raises LockTimeout. It is an OSError on
     purpose: every writer already reports OSError as "io error", exit 2, no
     marker - a busy store is a visible failure, never a silent skip.
@@ -64,8 +68,8 @@ def _unlock(fd: int) -> None:
 
 
 @contextlib.contextmanager
-def store_lock(mem: str, timeout: float = TIMEOUT_SECONDS):
-    path = os.path.join(mem, LOCK_REL)
+def store_lock(mem: str, timeout: float = TIMEOUT_SECONDS, lock_rel: str = LOCK_REL):
+    path = os.path.join(mem, lock_rel)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:

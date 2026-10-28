@@ -19,6 +19,11 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _isolated_home import process_env  # noqa: E402
+
+# Subprozesse laufen mit frischem Temp-Home statt mit dem echten Home (P0, tests/_isolated_home.py)
+ENV, ISO_HOME = process_env()
 GIT = shutil.which("git")
 
 TESTS = PASSED = ERRORS = 0
@@ -50,7 +55,7 @@ def put(path, text):
 
 def git(repo, *args):
     subprocess.run([GIT, "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", *args],
-                   check=True, capture_output=True, text=True, encoding="utf-8")
+                   check=True, capture_output=True, text=True, encoding="utf-8", env=ENV)
 
 
 def make_project(dirty_started="2000-01-01T00:00:00+00:00", touched=None):
@@ -353,7 +358,7 @@ def setup_core(active=False):
 def run_core(env, *extra):
     cmd = [sys.executable, CORE, "apply", "--headless", "--mem", env["mem"], "--central-dir", env["central"],
            "--home", env["home"], *extra]
-    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=120)
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=120, env=ENV)
     try:
         out = json.loads(p.stdout)
     except ValueError:
@@ -630,7 +635,7 @@ def run_nightly(root, central, home, report, *extra):
     cmd = [sys.executable, NIGHTLY, "--root", root, "--central-dir", central, "--home", home, "--report", report,
            "--deny", os.path.join(root, "deny"), "--kill-switch", os.path.join(root, "OFF"),
            "--native-root", os.path.join(root, "native"), *extra]
-    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=600)
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=600, env=ENV)
     try:
         return p.returncode, json.loads(p.stdout)
     except ValueError:
@@ -753,7 +758,7 @@ def test_collision():
         check([p.get("status") for p in out.get("projects", [])] == ["deferred(store not quiet)"],
               f"store with a young session is deferred {[p.get('status') for p in out.get('projects', [])]}")
         gc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "gc_dirty_markers.py"), mem, "--apply"],
-                            capture_output=True, text=True, encoding="utf-8")
+                            capture_output=True, text=True, encoding="utf-8", env=ENV)
         ev_path = os.path.join(mem, "metrics", "harvest-closures.jsonl")
         evidence = {json.loads(ln)["sid"] for ln in read(ev_path).splitlines() if ln.strip()}
         for sid in ("s1", "s2"):
@@ -773,7 +778,7 @@ def test_collision():
         for sid in ("s1", "s2"):
             os.utime(os.path.join(work, f"dirty-{sid}.json"), (t, t))
         subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "gc_dirty_markers.py"), mem, "--apply"],
-                       capture_output=True, text=True, encoding="utf-8")
+                       capture_output=True, text=True, encoding="utf-8", env=ENV)
         evidence = {json.loads(ln)["sid"] for ln in read(ev_path).splitlines() if ln.strip()}
         for sid in ("s1", "s2"):
             check(os.path.exists(os.path.join(work, f"dirty-{sid}.json")) or sid in evidence,

@@ -23,8 +23,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APPLY = os.path.join(ROOT, "scripts", "apply_wrapup.py")
 RELEASE = os.path.join(ROOT, "scripts", "learning_release.py")
 BRIDGE = os.path.join(ROOT, "scripts", "bridge_projection.py")
-ENV = dict(os.environ, PYTHONIOENCODING="utf-8",
-           AGENTIC_OS_SNAPSHOT_DIR=tempfile.mkdtemp(prefix="rel-snaps-"))
+from _isolated_home import process_env  # noqa: E402
+
+# Subprozesse laufen mit frischem Temp-Home statt mit dem echten Home (P0, tests/_isolated_home.py)
+ENV, ISO_HOME = process_env(PYTHONIOENCODING="utf-8")
 
 TESTS = PASSED = ERRORS = 0
 try:
@@ -84,6 +86,7 @@ def rows(mem):
 
 
 RULE_TEXT = "Bei Reversiblem und Internem entscheidet der Agent selbst und meldet danach eine Zeile."
+PLAIN = "Das ist eine Regel der Klasse Verfassung und braucht deshalb den Weg ueber die Zweitmodell-Erklaerung."  # P1: Klartext an jeder Owner-Vorlage
 EXPL = {"id": "L2", "explained_by": "codex-gpt-5", "plain": "Der Agent darf kleine, umkehrbare Dinge ohne Rueckfrage "
         "erledigen und muss sie nur melden. Grosse oder unumkehrbare Dinge bleiben beim Owner.",
         "risk": "Der Agent koennte etwas fuer reversibel halten, das es nicht ist.", "verdict": "confirms",
@@ -123,11 +126,11 @@ def main():
 
     print("== the agent cannot approve a rule-class learning")
     mem, _ = with_rule()
-    code, out = run(mem, {"bridge_decisions": [{"id": "L2", "status": "approved", "note": "sieht gut aus"}]})
+    code, out = run(mem, {"bridge_decisions": [{"id": "L2", "status": "approved", "note": "sieht gut aus", "plain": PLAIN}]})
     check(code == 2 and "rule" in json.dumps(out).lower(), "bridge_decisions approved on rule-class: plan rejected")
-    code, out = run(mem, {"bridge_decisions": [{"id": "L2", "status": "approved", "note": "ich bin Owner", "by": "owner"}]})
+    code, out = run(mem, {"bridge_decisions": [{"id": "L2", "status": "approved", "note": "ich bin Owner", "by": "owner", "plain": PLAIN}]})
     check(code == 2, "...also with by=owner (release goes only through rule_releases)")
-    code, out = run(mem, {"bridge_decisions": [{"id": "L2", "status": "rejected", "note": "unnoetig"}]})
+    code, out = run(mem, {"bridge_decisions": [{"id": "L2", "status": "rejected", "note": "unnoetig", "plain": PLAIN}]})
     check(code == 0 and rows(mem)["L2"]["bridge_status"] == "rejected" and rows(mem)["L2"]["release"]["status"] == "rejected",
           "rejecting is always allowed and closes the gate state")
 
@@ -215,8 +218,9 @@ def main():
     anchor_dir = tempfile.mkdtemp(prefix="rel-anchor-")
     rules_md = os.path.join(anchor_dir, "regeln.md")
     put(anchor_dir, "regeln.md", "# Regeln\n\n## Delegation\nReversibles entscheidet der Agent.\n\n## Zweiter Abschnitt\nText.\n")
+    # D11: a pointer card carries `plain`; without it the rejections below would not be about the gate
     princ = {"summary": "Reversibles selbst entscheiden, danach melden", "anchor": f"{rules_md}#Delegation",
-             "members": ["L2"]}
+             "members": ["L2"], "plain": "Kleine, umkehrbare Dinge entscheidet der Agent allein und meldet es danach."}
 
     def pointers(m):
         return [r for r in getj(m, "learnings/learnings.json") if r.get("kind") == "principle"]

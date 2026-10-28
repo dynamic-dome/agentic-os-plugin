@@ -78,11 +78,15 @@ SESSION END (manual: /agentic-os:wrap-up — no hook can trigger it; a skipped
   │  ├── Step 4.5 → decision-scan: decisions of record into the write plan
   │  │     (`decisions`) — since T-015 NO context-keeper invoke
   │  ├── Step 6   → IDENTITY GROWTH — the ONLY producer of identity observations:
-  │  │     checklist harvest → working/user-candidates.json (queue) →
+  │  │     checklist harvest → working/user-candidates.json (queue; existing keys come
+  │  │     from preprocess_state.py, `confirmed` needs a quote that identity_quote.py finds
+  │  │     in the session transcript, read-only) →
   │  │     FULL queue re-review (queue-re-review) → identity/user.md promotion
   │  │     (changelog-before-write) → identity/soul-candidates.md (direct +
   │  │     escalation-path; NEVER writes soul.md) → MANDATORY status line
-  │  │     (identity-visible). Consumed by bootstrap Step 6.5 gates.
+  │  │     (identity-visible). Consumed by bootstrap Step 6.5 gates. A contradicted
+  │  │     profile line is replaced via `user_md_supersede` (6.3b, verified quote required,
+  │  │     changelog first).
   │  ├── Step 7.5 → invokes obsidian-sync (gates: sync_enabled + substantiality;
   │  │     always reports — wiki-sync-visible)
   │  ├── Step 7.6 → writes cross-project: ~/AI/.agent-memory/session-summary.md
@@ -99,7 +103,7 @@ SESSION END (manual: /agentic-os:wrap-up — no hook can trigger it; a skipped
 | session-bootstrap | local: session-summary.md, soul.md, user.md, soul-candidates.md, user-candidates.json, project-context.md, patterns.md, quality-score.json (legacy), errors.json (tail), working/current-session.json, context/open-tasks.json (SSoT for next steps), config.json · learnings via Atlas-RAG or `scripts/learnings_top.py` · health via `scripts/memory-thresholds.sh` · cross-project: ~/AI/.agent-memory/session-summary.md, cross-project-status.md, SESSION-WORKFLOW.md · wiki (optional): entity + entrypoints | (read-only) EXCEPT the user-confirmed identity gates in Step 6.5 → soul.md + user.md, user-changelog.json, soul-candidates.md / user-candidates.json (only on explicit `j`). Staleness display (`[STALE? …]`) is DISPLAY-ONLY, never a write. | — |
 | pattern-extractor | errors.json, iteration-log.md, patterns.json (all via `scripts/extract_patterns.py`) | patterns.json — **written only through `scripts/extract_patterns.py`** (sole writer; the skill keeps schema ownership and the judgment-bound Steps 6.5/6.6; authorized field-GAIN exceptions: obsidian-sync → promotion metadata, implementing/validating main session → implemented_by/validated_by + dates per Step 6.6), patterns.md, generated-skills/<name>/SKILL.md (Step 6.5 skill-candidate generation, former skill-generator), context/open-tasks.json (Step 6.6 delta-draft tasks; decisions route via context-keeper, never written directly) | context-keeper (Step 6.6 architecture-level delta drafts) |
 | context-keeper | docs/PROJECT.md+ARCHITECTURE.md+CAPABILITIES.md (SoT), project-context.md, decisions.json, config.json | project-context.md (cache, own write), decisions.json — new records **only through `scripts/apply_wrapup.py`** (`decisions` plan section; Step 3.5 wiki_ref/promoted_at stays a direct field extension), ~/wiki/wiki/entities/<id>.md (optional) | — |
-| wrap-up | iteration-log.md, errors.json, learnings.json, working/current-session.json, working/user-candidates.json, context/open-tasks.json, skills/wrap-up/references/handoff-template.md | session-summary.md, learnings.json + learnings.md, user.md (via queue promotion, changelog first), user-candidates.json (queue), user-changelog.json (audit), soul-candidates.md (propose — never soul.md), working/current-session.json (reset), context/open-tasks.json (Step 5.5 SSoT); cross-project handoff (max 1 block per project, next steps as pointer + `[cross-project]` only) + status-board + Sharepoint | pattern-extractor (Step 4, ONLY for skill/rueckfluss candidates), obsidian-sync (Step 7.5). Step 9 only recommends /agentic-os:maintain. Step 1.5 session-harvest and Step 4.5 decision-scan route through the write plan instead of invoking iteration-logger/context-keeper (T-015) |
+| wrap-up | iteration-log.md, errors.json, learnings.json, working/current-session.json, working/user-candidates.json, context/open-tasks.json, skills/wrap-up/references/handoff-template.md, the session's own transcript (read ONLY by `scripts/identity_quote.py`, to verify a candidate's quote — never by the model) | session-summary.md, learnings.json + learnings.md, user.md (via queue promotion, changelog first), user-candidates.json (queue), user-changelog.json (audit), soul-candidates.md (propose — never soul.md), working/current-session.json (reset), context/open-tasks.json (Step 5.5 SSoT); cross-project handoff (max 1 block per project, next steps as pointer + `[cross-project]` only) + status-board + Sharepoint | pattern-extractor (Step 4, ONLY for skill/rueckfluss candidates), obsidian-sync (Step 7.5). Step 9 only recommends /agentic-os:maintain. Step 1.5 session-harvest and Step 4.5 decision-scan route through the write plan instead of invoking iteration-logger/context-keeper (T-015) |
 | obsidian-sync | config.json, session-summary.md, iteration-log.md, learnings.json/.md, patterns.json/.md, decisions.json, ~/wiki/{index.md,log.md,entities,synthesis} | ~/wiki/wiki/queries/*.md, ~/wiki/{index.md,log.md}, entity + synthesis (append), patterns.json (promotion_status + promotion_scope only) | — |
 
 ### Commands with a script core (v5.0.0)
@@ -153,7 +157,7 @@ Removed agents: `improvement-scout`, `fix-reviewer` (2026-04-30); `improvement-a
 5. **/agentic-os:sync-context is manual-only** — a command, no auto-sync.
 6. **docs/ is the source of truth for project-context.md** — context-keeper (and context-detective, /init) read docs first; project-context.md is a cache (Regel 13 / L9).
 7. **Thresholds live in ONE script** — `scripts/memory-thresholds.sh` is the only place scaling numbers exist; skills and commands reference it, never restate the numbers.
-8. **Identity growth is producer/consumer split** — wrap-up Step 6 is the only PRODUCER of identity observations (queues + promotions + mandatory status line); session-bootstrap Step 6.5 is the CONSUMER (gates + starvation check). Nothing else touches identity files.
+8. **Identity growth is producer/consumer split** — wrap-up Step 6 is the only PRODUCER of identity observations (queues + promotions + mandatory status line); session-bootstrap Step 6.5 is the CONSUMER (gates + starvation check). Nothing else touches identity files. **Central profile (P2):** while `~/.agent-memory/identity/profile.md` exists, the same producer writes `identity/profile*` in the central store instead of the project's identity files (`scripts/identity_store.py`), and the bootstrap reads the projection `identity/profile-briefing.txt` plus the stage-0 `identity.*` numbers; `scripts/migrate_identity.py` moves the project profiles there once (owner-gated).
 
 ## Session-Bracket Coverage
 

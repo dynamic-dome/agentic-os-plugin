@@ -45,11 +45,25 @@ measured cases, L34). Ownership moved rather than disappeared: those files are
 reachable ONLY through their named applier (see APPLIER_OWNED), so the generic
 write path still refuses them. patterns.json/patterns.md belong to
 scripts/extract_patterns.py and stay refused here; soul.md is never written.
+Since P1/B2 the identity files (user.md, user-changelog.json, user-candidates.json) are
+owned the same way - applier "identity": queue promotion, encoding corrections and the
+`user_md_supersede` plan section are the only ways in.
+
+IDENTITY QUALITY (P1/B2, design 2026-10-27)
+-------------------------------------------
+- `confirmed` on a user candidate is earned: it needs a literal `quote` that
+  scripts/identity_quote.py finds in ONE genuine user message of the session transcript
+  (read-only; --transcript or <HOME>/.claude/projects/*/<session-id>.jsonl). Otherwise the
+  candidate stays observed/inferred and the second mention confirms it as before.
+- `user_md_supersede` replaces one user.md line losslessly, changelog entry first.
+- Every owner-facing proposal (bridge_decisions, rule_explanations, user_md_supersede) carries
+  `plain` - plain German, 1..600 characters; a missing or longer one rejects the whole plan.
 
 USAGE
 -----
     python scripts/apply_wrapup.py .agent-memory --session-id <sid> < plan.json
     python scripts/apply_wrapup.py .agent-memory --session-id <sid> --dry-run < plan.json
+    python scripts/apply_wrapup.py .agent-memory --session-id <sid> --transcript <session.jsonl> < plan.json
 
 Plan schema: skills/wrap-up/references/wrapup-schemas.md §Write plan.
 
@@ -74,6 +88,7 @@ import os
 import re
 import sys
 import tempfile
+import unicodedata
 
 # Files no path in this script may ever touch.
 FORBIDDEN = {
@@ -95,6 +110,18 @@ APPLIER_OWNED = {
     # 5.3.0: the generic path could overwrite the whole store with any plan-
     # supplied content; now only the learnings and restore appliers reach it.
     "learnings/learnings.json":      "learnings",
+    # P1/B2: the identity pipeline has one writer too. user.md and its audit log change only
+    # through the queue promotion, the encoding corrections and user_md_supersede - all of them
+    # `identity`; the queue file itself belongs to the same applier.
+    "identity/user.md":              "identity",
+    "identity/user-changelog.json":  "identity",
+    "working/user-candidates.json":  "identity",
+    # P2: the same files in the central store (identity_store.PROFILE_*), plus the briefing projection
+    "identity/profile.md":              "identity",
+    "identity/profile-changelog.json":  "identity",
+    "identity/profile-candidates.json": "identity",
+    "identity/briefing-lines.txt":      "identity",
+    "identity/profile-briefing.txt":    "identity",
 }
 _FORBIDDEN_CI = {k.lower() for k in FORBIDDEN}
 _OWNED_CI = {k.lower(): v for k, v in APPLIER_OWNED.items()}
@@ -127,6 +154,10 @@ from projection_text import anchor_ok, split_anchor  # noqa: E402
 import store_lock  # noqa: E402
 import store_snapshot  # noqa: E402
 import harvest_state  # noqa: E402
+import identity_quote  # noqa: E402
+import identity_store  # noqa: E402
+import identity_briefing  # noqa: E402
+from identity_briefing import is_placeholder_line  # noqa: E402,F401  (one home for the placeholder rule)
 
 
 class PlanError(Exception):
@@ -221,16 +252,22 @@ def read_dirty_file(mem: str, name: str):
             f"un-consolidated work - fix or remove the file and re-run") from e
 
 
-def preflight_readable(mem: str, plan: dict | None = None) -> None:
+def preflight_readable(mem: str, plan: dict | None = None, paths=None) -> None:
     """Everything this plan will read must be readable before the first byte is
     written (5.2.1 review): live stores incl. their top-level type, the archives of
     every family that gets a new id, the text files the plan appends to, and the
     dirty files a consolidating plan consumes. Only what the plan needs - a broken
     learnings archive must not block a summary-only run."""
     plan = plan or {}
+    paths = _id_paths(mem, paths)
     missing = object()  # a file holding JSON null exists - it must not pass as "missing"
-    for rel, kind in STORE_JSON.items():
-        data = load_json(mem, rel, missing)
+    checks = [(mem, rel, kind) for rel, kind in STORE_JSON.items()]
+    if paths.central and plan_touches_identity(plan):
+        # P2: the central queue and changelog are read instead of the project's; a broken one stops the run here
+        # (no silent fallback to the project files)
+        checks += [(paths.root, paths.queue, list), (paths.root, paths.changelog, list)]
+    for root, rel, kind in checks:
+        data = load_json(root, rel, missing)
         if data is not missing and not isinstance(data, kind):
             raise PlanError(f"{rel} holds a JSON {type(data).__name__} at top level, expected "
                             f"a {kind.__name__} - nothing was written; repair it or run "
@@ -245,8 +282,8 @@ def preflight_readable(mem: str, plan: dict | None = None) -> None:
         archived_rows(mem, "learnings/learnings.json")
     if spec.get("add"):
         archived_rows(mem, "context/open-tasks.json")
-    if "user_candidates" in plan or plan.get("consolidate") or (plan.get("corrections") or {}).get("user_md"):
-        _check_utf8(mem, "identity/user.md")
+    if plan_touches_identity(plan):  # same condition, and a malformed corrections section reaches its validator
+        _check_utf8(paths.root, paths.md)
     if plan.get("soul_candidates"):
         _check_utf8(mem, "identity/soul-candidates.md")
     if plan.get("consolidate"):
@@ -475,7 +512,7 @@ def lint_learnings(mem: str) -> list:
 
 # ------------------------------------------------------------------- steps
 
-def validate_plan(mem, plan):
+def validate_plan(mem, plan, paths=None):
     """Reject EVERY detectable plan error before the first byte is written.
 
     Originally this only checked `supersedes`. That left the other required
@@ -512,9 +549,7 @@ def validate_plan(mem, plan):
                             if isinstance(r, dict)}
             if str(lrn["duplicate_of"]) not in live_ids:
                 raise PlanError(f"duplicate_of points at unknown learning {lrn['duplicate_of']}")
-    for cand in (plan.get("user_candidates") or []):
-        if not (cand.get("key") or "").strip():
-            raise PlanError("user candidate without 'key'")
+    validate_user_candidates(plan)
     for soul in (plan.get("soul_candidates") or []):
         if not (soul.get("proposal") or "").strip():
             raise PlanError("soul candidate without 'proposal'")
@@ -524,8 +559,9 @@ def validate_plan(mem, plan):
 
     validate_principles(mem, plan)
     validate_bridge_decisions(mem, plan)
-    validate_corrections(mem, plan)
+    validate_corrections(mem, plan, paths)
     validate_rule_gate(mem, plan)
+    validate_user_md_supersede(mem, plan, paths)
 
     sups = [d.get("supersedes") for d in (plan.get("decisions") or []) if d.get("supersedes")]
     titles = [(d.get("title") or "").strip() for d in (plan.get("decisions") or [])]
@@ -844,6 +880,23 @@ BRIDGE_DECIDABLE = ("candidate", "approved", "rejected")
 BRIDGE_VERDICTS = ("approved", "rejected")
 BRIDGE_DECIDERS = ("agent", "owner")
 
+# P1/B2 (owner request 2026-10-27: plain-language explanations were missing): every proposal the
+# owner is shown carries `plain` - plain German, no jargon, what changes concretely. The technical
+# wording stays next to it and is what gets written into the file; `plain` is the explanation.
+PLAIN_MAX = 600
+
+
+def clean_plain(value, what: str) -> str:
+    """The plain-language text of an owner-facing proposal: a non-empty string of at most PLAIN_MAX
+    characters once whitespace is collapsed. Returns the collapsed text, or raises PlanError."""
+    if not isinstance(value, str) or not value.strip():
+        raise PlanError(f"{what}: 'plain' is required (plain German for the owner, no jargon, "
+                        f"what changes concretely)")
+    text = " ".join(value.split())
+    if len(text) > PLAIN_MAX:
+        raise PlanError(f"{what}: 'plain' has {len(text)} characters (max {PLAIN_MAX})")
+    return text
+
 
 def validate_bridge_decisions(mem, plan):
     """Shape and target of every verdict, before the first byte (one bad entry
@@ -868,6 +921,7 @@ def validate_bridge_decisions(mem, plan):
         note = it.get("note")
         if not isinstance(note, str) or not note.strip():
             raise PlanError(f"bridge decision {lid}: 'note' (the reason) is required")
+        clean_plain(it.get("plain"), f"bridge decision {lid}")
         if it.get("by", "agent") not in BRIDGE_DECIDERS:
             raise PlanError(f"bridge decision {lid}: 'by' must be one of {BRIDGE_DECIDERS}")
         if lid in seen:
@@ -905,10 +959,14 @@ def apply_bridge_decisions(mem, plan, date, dry, touched, tally):
         status = it["status"]
         reason = f"{it.get('by', 'agent')}: {' '.join(it['note'].split())}"
         same_reason = str(row.get("bridge_note") or "").split(" ", 1)[-1] == reason
+        plain = clean_plain(it.get("plain"), f"bridge decision {row.get('id')}")
         if row.get("bridge_status") != status:
             tally["bridge_status_changed"] += 1
         if row.get("bridge_status") != status or not same_reason:
             row["bridge_status"], row["bridge_note"] = status, f"{date} {reason}"
+            dirty = True
+        if row.get("bridge_plain") != plain:  # P1: the owner-facing text lives in its own field
+            row["bridge_plain"] = plain       # (bridge_note keeps its '<date> <by>: <note>' shape - review_sweep reads it)
             dirty = True
         if is_rule_class(row) and status == "rejected" and (row.get("release") or {}).get("status") != "rejected":
             row["release"] = dict(row.get("release") or {}, status="rejected", rejected_by=it.get("by", "agent"),
@@ -963,7 +1021,7 @@ def _correction_common(it, kind, seen):
     return rid
 
 
-def validate_corrections(mem, plan):
+def validate_corrections(mem, plan, paths=None):
     """Every detectable error before the first byte, like the other sections."""
     if "corrections" not in plan:
         return
@@ -1039,7 +1097,7 @@ def validate_corrections(mem, plan):
                 _check_same_shape(rid, "options_considered", row.get("options_considered"), it["options_considered"])
     lines = spec.get("user_md") or []
     if lines:
-        text = _read_user_md_raw(mem)
+        text = _read_user_md_raw(mem, paths=paths)
         have = [ln.rstrip("\r\n") for ln in text.splitlines(keepends=True)]
         for it in lines:
             if not isinstance(it, dict):
@@ -1099,15 +1157,44 @@ def _check_same_shape(rid, path, old, new):
         raise PlanError(f"correction {rid}: {path} is not text and must stay {old!r}")
 
 
-def _read_user_md_raw(mem):
-    path = os.path.join(mem, "identity/user.md")
+def _id_paths(mem, paths):
+    """The identity files of this run: the given IdentityPaths, else the project's own (legacy) files."""
+    return paths if paths is not None else identity_store.legacy_paths(mem)
+
+
+def _origin(mem):
+    """Central mode: where a row comes from - the project folder of this run's store (identity_store.project_key);
+    `id` is the row's old project id, set only by the migration."""
+    return {"projekt": identity_store.project_key(mem, os.path.expanduser("~")), "id": None}
+
+
+def _legacy_contents(mem):
+    """Lines of the project's own user.md, [] when it is missing or unreadable (only used to explain a skip)."""
+    own = identity_store.legacy_paths(mem)
+    try:
+        return [c for c, _eol in split_user_md(_read_user_md_raw(mem, "user_md_supersede", own))]
+    except PlanError:
+        return []
+
+
+def plan_touches_identity(plan) -> bool:
+    """True when the plan writes the profile, its changelog or its queue (the central lock is needed)."""
+    plan = plan or {}
+    corr = plan.get("corrections")
+    return bool("user_candidates" in plan or plan.get("consolidate") or plan.get("user_md_supersede")
+                or (corr.get("user_md") if isinstance(corr, dict) else corr))
+
+
+def _read_user_md_raw(mem, what="correction (user_md)", paths=None):
+    paths = _id_paths(mem, paths)
+    path = os.path.join(paths.root, paths.md)
     if not os.path.isfile(path):
-        raise PlanError("correction (user_md): identity/user.md does not exist")
+        raise PlanError(f"{what}: {paths.md} does not exist")
     try:
         with open(path, encoding="utf-8", newline="") as fh:
             return fh.read()
     except UnicodeDecodeError as e:
-        raise PlanError(f"identity/user.md is not UTF-8 ({e}) - nothing was written; repair the encoding")
+        raise PlanError(f"{paths.md} is not UTF-8 ({e}) - nothing was written; repair the encoding")
 
 
 def _stamp_correction(row, field, old, date, it, session_id):
@@ -1116,7 +1203,7 @@ def _stamp_correction(row, field, old, date, it, session_id):
         "reason": " ".join(str(it["reason"]).split()), "was": old})
 
 
-def apply_corrections(mem, plan, date, dry, touched, tally, session_id=""):
+def apply_corrections(mem, plan, date, dry, touched, tally, session_id="", paths=None):
     spec = plan.get("corrections") or {}
     tasks, lrns = spec.get("tasks") or [], spec.get("learnings") or []
     decs, lines = spec.get("decisions") or [], spec.get("user_md") or []
@@ -1211,7 +1298,8 @@ def apply_corrections(mem, plan, date, dry, touched, tally, session_id=""):
         if changed:
             write_json(mem, "context/decisions.json", rows, dry, touched, via="decisions")
     if lines:
-        text = _read_user_md_raw(mem)
+        paths = _id_paths(mem, paths)
+        text = _read_user_md_raw(mem, paths=paths)
         parts = text.splitlines(keepends=True)
         stripped = [p.rstrip("\r\n") for p in parts]
         now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -1228,12 +1316,14 @@ def apply_corrections(mem, plan, date, dry, touched, tally, session_id=""):
             stripped[i] = new
             entries.append({"ts": now, "field": "user.md/encoding-correction", "old_value": old, "new_value": new,
                             "reason": " ".join(str(it["reason"]).split()), "by": it.get("by", "agent")})
+            if paths.central:
+                entries[-1]["origin"] = _origin(mem)
             tally["user_lines_corrected"] += 1
         if entries:
             # audit entry BEFORE the edit - the same ordering contract as the promotion path
-            changelog = load_json(mem, "identity/user-changelog.json", [])
-            write_json(mem, "identity/user-changelog.json", changelog + entries, dry, touched)
-            write_atomic(mem, "identity/user.md", "".join(parts), dry, touched)
+            changelog = load_json(paths.root, paths.changelog, [])
+            write_json(paths.root, paths.changelog, changelog + entries, dry, touched, via="identity")
+            write_atomic(paths.root, paths.md, "".join(parts), dry, touched, via="identity")
 
 
 def _contains_mojibake(value) -> bool:
@@ -1256,7 +1346,7 @@ def _repair_deep(value):
     return value
 
 
-def propose_encoding_corrections(mem):
+def propose_encoding_corrections(mem, identity_store_arg=None):
     """Read-only: the correction plan that repairs every row whose text, summary or
     title was read as cp1252. Rows already clean are not listed, so applying the
     result and asking again yields an empty plan."""
@@ -1286,13 +1376,264 @@ def propose_encoding_corrections(mem):
             item["reason"] = why
             out["decisions"].append(item)
     try:
-        user_text = _read_user_md_raw(mem) if os.path.isfile(os.path.join(mem, "identity/user.md")) else ""
+        # read only, like stage 0: the active central profile when there is one, else the project's own file (R3)
+        store, _source = identity_store.resolve_store(identity_store_arg, os.environ)
+        own = (identity_store.central_paths(store) if identity_store.central_active(store)
+               else identity_store.legacy_paths(mem))
+        user_text = _read_user_md_raw(mem, paths=own) if os.path.isfile(os.path.join(own.root, own.md)) else ""
     except PlanError:
         user_text = ""   # not UTF-8: --lint / maintain Step 2 report that, the proposal stays read-only
     for line in user_text.splitlines():
         if looks_mojibake(line):
             out["user_md"].append({"old": line, "new": repair_mojibake(line), "reason": why})
     return {"corrections": out}
+
+
+# ----------------------------------------------- user_md_supersede (P1 / B2)
+# A profile line can be REPLACED. Until now user.md only grew: a promoted line stayed even when the
+# owner had since said the opposite, and `corrections.user_md` may only repair the encoding. A
+# supersede is the regular way to resolve such a contradiction: the old wording survives in
+# user-changelog.json (written FIRST), the file changes by exactly one line.
+#
+# Contract (all checked before the first byte of the run is written):
+#   - exactly one target per entry: `match` (the exact line text) or `line_id` (the candidate id the
+#     line cites, "(UC12, date)"); zero or several hits reject the plan - the script never guesses
+#   - `new_text` is one bullet line (no line separator of any kind), `reason`, `plain` (owner-facing,
+#     <= 600 chars) and `quote` (the user's literal words) are required
+#   - a placeholder, a heading or the preamble (everything before the first '## ') is never a target;
+#     `trust_source` must be conversation; two entries with the same target or the same new_text reject the plan
+#   - the quote must be VERIFIED against the session transcript (identity_quote.py); an entry whose quote is not
+#     is skipped (nothing written for it, warning + tally), the rest of the plan runs
+#   - the file is rewritten LOSSLESSLY: every byte except the target line stays - CRLF, BOM, the
+#     preamble, the section order (read_user_md/write_user_md cannot promise any of that)
+#   - repeatable: when the old line is gone but `new_text` stands exactly once, the entry counts as
+#     applied (`supersede_skipped_unchanged`); with `line_id` the audit log must also hold an entry for that
+#     id and text (the new line no longer cites the id); after a crash between the changelog entry and
+#     the file the rerun does not write the entry twice
+_BULLET_LINE = re.compile(r"- \S")
+_LINE_ID = re.compile(r"[A-Za-z]{1,6}\d{1,6}")
+# Everything str.splitlines() ends a line at: CR, LF, VT, FF, FS, GS, RS, NEL, LS, PS. A new_text holding one of them
+# would turn one profile line into two for every reader that splits lines the Unicode way.
+LINE_SEPARATORS = "".join(map(chr, (0x0D, 0x0A, 0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029)))
+BOM = chr(0xFEFF)
+
+
+def split_user_md(text: str) -> list:
+    """[(content, eol)] with ''.join(content + eol) == text. Only '\\n' ends a line; a CR before it
+    belongs to the line ending, so CRLF, LF and a last line without any ending all survive."""
+    parts = text.split("\n")
+    out = []
+    for i, p in enumerate(parts):
+        last = i == len(parts) - 1
+        if p.endswith("\r"):
+            out.append((p[:-1], "\r" + ("" if last else "\n")))
+        else:
+            out.append((p, "" if last else "\n"))
+    return out
+
+
+def _first_section_line(contents) -> int:
+    """Index of the first '## ' heading (a BOM in front of it is ignored); everything before is the preamble."""
+    for i, c in enumerate(contents):
+        if c.lstrip(BOM).startswith("## "):
+            return i
+    return len(contents)
+
+
+def _supersede_logged(changelog, line_id, new_text) -> bool:
+    """True when the audit log proves that a supersede of `line_id` to `new_text` already ran."""
+    return any(isinstance(e, dict) and e.get("field") == "user.md/supersede" and e.get("candidate_id") == line_id
+               and e.get("new_value") == new_text for e in changelog)
+
+
+def resolve_user_md_supersede(mem, items, paths=None):
+    """Validate every entry against the file as it stands and resolve its target line.
+    Returns (resolved, skipped, legacy_only): `resolved` = [{index, old, new, item, line_id, tag, quote}] for the
+    lines that would change, `skipped` = entries that are already applied, `legacy_only` = tags of entries whose
+    target stands only in the project's user.md while the central profile is active (P2: skipped with a warning).
+    Raises PlanError on the first problem.
+    The quote is only checked for its FORM here (a non-empty string); whether it is true is decided at apply time."""
+    if not isinstance(items, list):
+        raise PlanError("user_md_supersede must be a list")
+    if not items:
+        return [], 0, []
+    paths = _id_paths(mem, paths)
+    text = _read_user_md_raw(mem, "user_md_supersede", paths)
+    contents = [c for c, _eol in split_user_md(text)]
+    first_h2 = _first_section_line(contents)
+    changelog = None  # read only when a line_id entry finds no line (rerun proof)
+    resolved, skipped, taken, seen_new, seen_target = [], 0, set(), set(), set()
+    legacy_only, legacy = [], None
+    for it in items:
+        if not isinstance(it, dict):
+            raise PlanError("user_md_supersede entry is not an object")
+        has_match, has_id = it.get("match") is not None, it.get("line_id") is not None
+        if has_match == has_id:
+            raise PlanError("user_md_supersede entry needs exactly one of 'match' or 'line_id'")
+        tag = str(it.get("match") if has_match else it.get("line_id"))[:40]
+        new = it.get("new_text")
+        if not isinstance(new, str) or not new.strip():
+            raise PlanError(f"user_md_supersede {tag!r}: 'new_text' is required")
+        if any(ch in new for ch in LINE_SEPARATORS):
+            raise PlanError(f"user_md_supersede {tag!r}: 'new_text' must be one line")
+        if not _BULLET_LINE.match(new):
+            raise PlanError(f"user_md_supersede {tag!r}: 'new_text' must be a bullet line ('- ...')")
+        if is_placeholder_line(new):
+            raise PlanError(f"user_md_supersede {tag!r}: 'new_text' is a placeholder")
+        reason = it.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise PlanError(f"user_md_supersede {tag!r}: 'reason' is required")
+        clean_plain(it.get("plain"), f"user_md_supersede {tag!r}")
+        if not _clean_quote(it.get("quote")):
+            # D7: replacing a profile line needs the user's own words. A missing quote is a form error; a quote
+            # that cannot be verified later only skips this entry.
+            raise PlanError(f"user_md_supersede {tag!r}: 'quote' is required (the user's literal words that justify "
+                            f"the change, as a string)")
+        if it.get("by", "agent") not in CORRECTION_DECIDERS:
+            raise PlanError(f"user_md_supersede {tag!r}: 'by' must be one of {CORRECTION_DECIDERS}")
+        if it.get("trust_source", "conversation") != "conversation":
+            # Same boundary as Step 6.1: profile text may only originate from the user's own conversation.
+            raise PlanError(f"user_md_supersede {tag!r}: trust_source must be 'conversation' "
+                            f"(memory-poisoning defense), got {it.get('trust_source')!r}")
+        if new in seen_new:
+            raise PlanError(f"user_md_supersede {tag!r}: 'new_text' is the same as in another entry of this plan "
+                            f"(two entries would leave the same line twice)")
+        seen_new.add(new)
+        line_id = None
+        if has_match:
+            old = it["match"]
+            if not isinstance(old, str) or not old.strip() or "\n" in old or "\r" in old:
+                raise PlanError(f"user_md_supersede {tag!r}: 'match' must be one non-empty line")
+            target = ("match", old)
+        else:
+            line_id = it["line_id"]
+            if not isinstance(line_id, str) or not _LINE_ID.fullmatch(line_id):
+                raise PlanError(f"user_md_supersede: invalid line_id {line_id!r} (expected a candidate id like UC12)")
+            target = ("line_id", line_id)
+        if target in seen_target:
+            raise PlanError(f"user_md_supersede {tag!r}: targets the same line twice")
+        seen_target.add(target)
+        if has_match:
+            hits = [i for i, c in enumerate(contents) if c == old]
+        else:
+            cite = re.compile(r"[\[(]\s*" + re.escape(line_id) + r"\s*[,\])]")
+            hits = [i for i, c in enumerate(contents) if cite.search(c)]
+        if len(hits) > 1:
+            raise PlanError(f"user_md_supersede {tag!r}: the target occurs {len(hits)} times - not guessing")
+        if not hits:
+            if has_match:
+                applied = contents.count(new) == 1  # the old line is gone and the new one stands once
+            else:
+                # the new line no longer cites the id, so only the audit log can prove an earlier run (D6)
+                if changelog is None:
+                    changelog = load_json(paths.root, paths.changelog, [])
+                applied = new in contents and _supersede_logged(changelog, line_id, new)
+            if applied:
+                skipped += 1  # applied by an earlier run
+                continue
+            if paths.central:
+                if legacy is None:
+                    legacy = _legacy_contents(mem)
+                if (old in legacy) if has_match else any(cite.search(c) for c in legacy):
+                    legacy_only.append(tag)  # the model still saw the old project file; not an error of the plan
+                    continue
+            raise PlanError(f"user_md_supersede {tag!r}: no such line in {os.path.basename(paths.md)}")
+        idx = hits[0]
+        if idx in taken:
+            raise PlanError(f"user_md_supersede {tag!r}: targets the same line twice")
+        taken.add(idx)  # before the no-op skip: an unchanged entry still claims its line (Codex round 2, P1-B2-R2-05)
+        if idx < first_h2:
+            raise PlanError(f"user_md_supersede {tag!r}: the target lies in the preamble (before the first '## ' heading) - "
+                            f"only a bullet line inside a section can be replaced")
+        old = contents[idx]
+        if old == new:
+            skipped += 1
+            continue
+        if not _BULLET_LINE.match(old):
+            raise PlanError(f"user_md_supersede {tag!r}: the target is not a bullet line (heading, preamble or text)")
+        if is_placeholder_line(old):
+            raise PlanError(f"user_md_supersede {tag!r}: the target is a placeholder line")
+        if new in contents:
+            raise PlanError(f"user_md_supersede {tag!r}: 'new_text' already stands in {os.path.basename(paths.md)} "
+                            f"as another line")
+        resolved.append({"index": idx, "old": old, "new": new, "item": it, "line_id": line_id, "tag": tag,
+                         "quote": _clean_quote(it.get("quote"))})
+    return resolved, skipped, legacy_only
+
+
+def validate_user_md_supersede(mem, plan, paths=None):
+    if "user_md_supersede" in plan:
+        resolve_user_md_supersede(mem, plan["user_md_supersede"], paths)
+
+
+def apply_user_md_supersede(mem, plan, date, dry, touched, tally, session_id="", transcript=None, paths=None):
+    """Plan section `user_md_supersede`: the audit entry goes into user-changelog.json FIRST, then the
+    file is rewritten with exactly the target lines replaced (see the contract above).
+
+    D7: an entry is applied only when its `quote` is verified against the session transcript (the same check
+    as a candidate's quote, scripts/identity_quote.py). An entry whose quote is not verified is skipped - nothing
+    is written for it, a warning and `tally.supersede_skipped_unverified` say so - and the rest of the plan runs."""
+    items = plan.get("user_md_supersede") or []
+    if not items:
+        return
+    paths = _id_paths(mem, paths)
+    resolved, skipped, legacy_only = resolve_user_md_supersede(mem, items, paths)
+    tally["supersede_skipped_unchanged"] += skipped
+    for tag in legacy_only:
+        tally["supersede_skipped_legacy"] += 1
+        tally["warnings"].append(f"user_md_supersede {tag!r}: line not in profile.md - it stands only in the "
+                                 f"project's user.md, which the central profile replaces; entry skipped, nothing "
+                                 f"written for it")
+    if not resolved:
+        return
+    verdicts, reasons = _verify_identity_quotes([r["quote"] for r in resolved], session_id, transcript, tally)
+    kept = []
+    for r in resolved:
+        if verdicts.get(r["quote"]) is True:
+            kept.append(r)
+            if not _quote_related(r["quote"], r["new"]):
+                tally["quote_unrelated"].append("supersede:" + r["tag"])
+                tally["warnings"].append(f"user_md_supersede {r['tag']!r}: the verified quote shares no content word with "
+                                         f"new_text - check that it really supports the change")
+            if _polarity_differs(r["quote"], r["new"]):
+                tally["quote_polarity"].append("supersede:" + r["tag"])  # calibration data only, no warning (noise)
+        else:
+            why = reasons.get(r["quote"]) or ("not verified" if verdicts.get(r["quote"]) is False else "no transcript")
+            tally["supersede_skipped_unverified"] += 1
+            tally["warnings"].append(f"user_md_supersede {r['tag']!r}: quote not verified ({why}) - entry skipped, "
+                                     f"nothing written for it")
+    resolved = kept
+    if not resolved:
+        return
+    lines = split_user_md(_read_user_md_raw(mem, "user_md_supersede", paths))
+    changelog = load_json(paths.root, paths.changelog, [])
+    # A previous run may have died between the changelog write and the file write: its entries are the
+    # tail of the log. Do not write them a second time.
+    recent = [(e.get("field"), e.get("old_value"), e.get("new_value"), e.get("reason"), e.get("plain"), e.get("by"))
+              for e in changelog[-len(resolved):] if isinstance(e, dict)]
+    now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    entries = []
+    for r in resolved:
+        it = r["item"]
+        entry = {"ts": now, "field": "user.md/supersede", "old_value": r["old"], "new_value": r["new"],
+                 "reason": " ".join(it["reason"].split()), "plain": clean_plain(it["plain"], "user_md_supersede"),
+                 "quote": r["quote"], "quote_verified": True,
+                 "by": it.get("by", "agent"), "session": session_id or None}
+        if r["line_id"]:
+            entry["candidate_id"] = r["line_id"]
+        if paths.central:
+            entry["origin"] = _origin(mem)
+        key = (entry["field"], entry["old_value"], entry["new_value"], entry["reason"], entry["plain"], entry["by"])
+        if key not in recent:
+            entries.append(entry)
+        lines[r["index"]] = (r["new"], lines[r["index"]][1])
+        if looks_mojibake(r["new"]):
+            tally["warnings"].append(f"user.md: superseded line still looks like Mojibake: {r['new'][:40]}")
+        tally["user_lines_superseded"] += 1
+    if entries:
+        # audit entry BEFORE the edit - the same ordering contract as the promotion path
+        write_json(paths.root, paths.changelog, changelog + entries, dry, touched, via="identity")
+    write_atomic(paths.root, paths.md, "".join(c + eol for c, eol in lines), dry, touched, via="identity")
 
 
 # Learnings mixed form (DCO #9869, owner decision F4 2026-10-22). A normal learning
@@ -1351,9 +1692,10 @@ def validate_rule_gate(mem, plan):
         if (row.get("release") or {}).get("status") not in RELEASE_OPEN:
             raise PlanError(f"{lid}: release state is {(row.get('release') or {}).get('status')!r} - "
                             f"explain only while the gate is open")
-        for field in ("explained_by", "plain", "risk"):
+        for field in ("explained_by", "risk"):
             if not isinstance(it.get(field), str) or not it[field].strip():
                 raise PlanError(f"rule explanation {lid}: '{field}' is required")
+        clean_plain(it.get("plain"), f"rule explanation {lid}")  # P1: same limits as every owner-facing proposal
         if it.get("verdict") not in EXPLAIN_VERDICTS:
             raise PlanError(f"rule explanation {lid}: 'verdict' must be one of {EXPLAIN_VERDICTS}")
         if "affects" in it and not (isinstance(it["affects"], list) and all(isinstance(a, str) for a in it["affects"])):
@@ -1481,6 +1823,7 @@ def validate_principles(mem, plan):
             raise PlanError("principle entry is not an object")
         if not str(it.get("summary") or "").strip():
             raise PlanError("principle without 'summary'")
+        clean_plain(it.get("plain"), f"principle {str(it.get('anchor') or '')[:60]!r}")  # D11: shown on the card
         anchor = str(it.get("anchor") or "").strip()
         if not anchor:
             raise PlanError("principle without 'anchor'")
@@ -1548,6 +1891,7 @@ def apply_principles(mem, plan, date, dry, touched, tally):
             if len(merged) > DERIVED_MAX:
                 raise PlanError(f"pointer {ptr.get('id')} would hold {len(merged)} members (max {DERIVED_MAX})")
             ptr["derived_from"], ptr["summary"] = merged, summary
+            ptr["plain"] = clean_plain(it.get("plain"), f"principle {it['anchor']!r}")
             ptr["text"] = f"{summary} → {it['anchor']}"
             ptr["last_relevant"] = date
             members = merged
@@ -1555,6 +1899,7 @@ def apply_principles(mem, plan, date, dry, touched, tally):
             ptr = {"id": next_id(rows + added, "L", reserved=archive), "date": date, "kind": "principle",
                    "text": f"{summary} → {it['anchor']}", "summary": summary,
                    "anchor": str(it["anchor"]).strip(), "importance": 3,
+                   "plain": clean_plain(it.get("plain"), f"principle {it['anchor']!r}"),
                    "tags": list(it.get("tags") or []), "layer": "long-term", "superseded_by": None,
                    "last_relevant": date, "derived_from": members, "bridge_status": "approved"}
             added.append(ptr)
@@ -1700,54 +2045,298 @@ def render_learnings_md(mem, rows, dry, touched):
     write_atomic(mem, "learnings/learnings.md", "\n".join(out).rstrip() + "\n", dry, touched)
 
 
-def apply_user_candidates(mem, plan, date, dry, touched, tally):
-    """Step 6.2 enqueue + 6.3 FULL queue re-review. Both rules are deterministic."""
-    obs = plan.get("user_candidates") or []
-    queue = load_json(mem, "working/user-candidates.json", [])
-    by_key = {c.get("key"): c for c in queue}
+# P1/B2: what a plan may set on a candidate directly. `confirmed` is not on the list - it is
+# earned (a verified user quote, or the second mention from ANOTHER session) and never declared.
+PLAN_CANDIDATE_STATUSES = ("observed", "inferred")
 
+
+def _clean_quote(value) -> str:
+    """The quote as stored and looked up: one line, whitespace collapsed. Empty = no quote."""
+    return " ".join(value.split()) if isinstance(value, str) else ""
+
+
+def _verify_identity_quotes(quotes, session_id, transcript, tally):
+    """Verdicts for quotes the plan relies on (candidates and supersede alike): {quote: True | False | "kein_transkript"}
+    and {quote: reason}. Fills the tally fields both appliers share: the transcript used, the warnings, a refused
+    --transcript override (D3) and a session mismatch (D2)."""
+    verdicts, info = identity_quote.verify_quotes(quotes, session_id, transcript)
+    if info["transcript"]:
+        tally["quote_transcript"] = info["transcript"]
+    for w in info["warnings"]:
+        if w not in tally["warnings"]:
+            tally["warnings"].append(w)
+    if info.get("override_rejected"):
+        tally["transcript_override_rejected"] = True
+    if info.get("session_mismatch"):
+        tally["session_binding_mismatch"] = True
+    return verdicts, info["reasons"]
+
+
+def validate_user_candidates(plan):
+    """Shape of the user_candidates section, before the first byte. A candidate that CLAIMS
+    `confirmed` is judged later (quote check) and downgraded, not rejected - but a field of the
+    wrong type is a plan error: `confirmed` must be a JSON bool, `quote` a string."""
+    cands = plan.get("user_candidates")
+    if cands is None:
+        return
+    if not isinstance(cands, list):
+        raise PlanError("user_candidates must be a list")
+    for cand in cands:
+        if not isinstance(cand, dict):
+            raise PlanError("user candidate is not an object")
+        if not (cand.get("key") or "").strip():
+            raise PlanError("user candidate without 'key'")
+        if "confirmed" in cand and not isinstance(cand["confirmed"], bool):
+            raise PlanError(f"user candidate {cand['key']!r}: 'confirmed' must be a JSON bool")
+        if cand.get("quote") is not None and not isinstance(cand["quote"], str):
+            raise PlanError(f"user candidate {cand['key']!r}: 'quote' must be a string (the user's literal words)")
+        if "confidence" in cand:
+            try:
+                float(cand["confidence"])
+            except (TypeError, ValueError):
+                raise PlanError(f"user candidate {cand['key']!r}: 'confidence' must be a number") from None
+
+
+def _merge_plan_entries(items, date, verdicts):
+    """One plan entry per key (D1): the entries of the same key in ONE plan are one mention, not several.
+    Evidence is united in order, a claim to be confirmed holds if any entry makes it, and a VERIFIED quote wins
+    over an unverified or missing one (else the first quote stays). Scalars come from the first entry."""
+    first = items[0]
+    evidence = []
+    for it in items:
+        for e in (it.get("evidence") or []):
+            if e not in evidence:
+                evidence.append(e)
+    quotes = [q for q in (_clean_quote(it.get("quote")) for it in items) if q]
+    quote = next((q for q in quotes if verdicts.get(q) is True), quotes[0] if quotes else "")
+    wanted = next((it.get("status") for it in items if it.get("status") is not None), None)
+    return {
+        "observation": next(((it.get("observation") or "").strip() for it in items if (it.get("observation") or "").strip()), ""),
+        "signal_type": first.get("signal_type", "preference"),
+        "confidence": first.get("confidence", 0.5),
+        "evidence": evidence or [f"session {date}"],
+        "claims": any(bool(it.get("confirmed")) or it.get("status") == "confirmed" for it in items),
+        "quote": quote,
+        "statuses": [it.get("status") for it in items],
+        "wanted": wanted,
+    }
+
+
+# Function words that carry no claim. A quote and a statement "share a content word" only through words that are
+# not in this list (D5/D7 round 2); it is a lexical hint for the owner, not a proof of meaning.
+_STOP_WORDS = frozenset("""
+dass nicht kein keine keinen keinem keiner keines ohne immer wenn dann aber auch oder eine einen einer einem eines
+sind sein wird werden wurde habe haben hatte bitte mach machen macht gerne gern mein meine meinen dies diese dieser
+dieses diesem noch nach jetzt sehr mehr schon doch wieder will wollen soll sollen kann koennen muss muessen hier dort
+alle allen alles etwas nichts ganz sowie damit dabei davon dafuer ueber fuer unter sich ihre ihnen dich mich unser
+that this with have will from your what when they them then than there here been does just also only very more some
+into over like make should would could about always never want need please okay
+""".split())
+
+
+_UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
+
+
+def _fold(text) -> str:
+    """Word comparison form: NFC, case-folded, umlauts written out (a-umlaut = ae, o-umlaut = oe, u-umlaut = ue, sharp s = ss),
+    so 'ausführliche' and 'ausfuehrliche' are one word (R2 round 3). Invisible characters left after NFC (format
+    characters such as zero-width space and soft hyphen, combining marks such as a variation selector) go, so they
+    cannot split a word inside it (rounds 5 and 6)."""
+    text = unicodedata.normalize("NFC", str(text or ""))
+    return "".join(ch for ch in text if unicodedata.category(ch) not in _INVISIBLE).casefold().translate(_UMLAUTS)
+
+
+_INVISIBLE = ("Cf", "Mn")
+
+
+def _spaced(text) -> str:
+    """The text (NFC) with every invisible character read as a space."""
+    nfc = unicodedata.normalize("NFC", str(text or ""))
+    return "".join(" " if unicodedata.category(ch) in _INVISIBLE else ch for ch in nfc)
+
+
+def _tokens(text):
+    """Every word of 2+ characters in comparison form. An invisible character is read once as nothing and once as a
+    space, so neither 'hal<ZWSP>ten' nor 'Antworten<ZWSP>kurz<ZWSP>halten' hides a word (round 6)."""
+    return {w for t in (text, _spaced(text)) for w in re.findall(r"[^\W_]{2,}", _fold(t))}
+
+
+def _content_words(text):
+    return [w for w in re.findall(r"[^\W_]{4,}", _fold(text)) if w not in _STOP_WORDS and not w.isdigit()]
+
+
+def _words_related(a, b) -> bool:
+    """Same word, or the same stem: a common prefix of at least 4 characters that covers 80% of the shorter word
+    (kurz/kurzen, Antwort/Antworten, ausfuehrlich/ausfuehrliche)."""
+    if a == b:
+        return True
+    p = len(os.path.commonprefix([a, b]))
+    return p >= 4 and p >= 0.8 * min(len(a), len(b))
+
+
+def _quote_related(quote, text) -> bool:
+    """True when the quote and the statement it is meant to support share at least one content word (D5/D7 round 2).
+    A statement without any content word gives nothing to compare and counts as related. The check is a lexical
+    hint: it does not change a verdict, it makes a quote that has nothing to do with the claim visible."""
+    target = _content_words(_CITATION_SUFFIX.sub("", str(text or "")))
+    if not target:
+        return True
+    return any(_words_related(q, t) for q in _content_words(quote) for t in target)
+
+
+def _polarity_differs(quote, text) -> bool:
+    """True when one of the two carries a negation word and the other none ("keine langen Antworten" cannot support
+    "Mag lange Antworten", nor the reverse; R3 round 3). Like _quote_related a lexical hint: it does not change a
+    verdict, it makes a quote that says the opposite of the statement visible."""
+    return identity_quote.has_negation(quote) != identity_quote.has_negation(_CITATION_SUFFIX.sub("", str(text or "")))
+
+
+def apply_user_candidates(mem, plan, date, dry, touched, tally, session_id="", transcript=None, paths=None):
+    """Step 6.2 enqueue + 6.3 FULL queue re-review. Both rules are deterministic.
+
+    P1/B2 - `confirmed` is earned, never declared. A candidate that claims it (`confirmed: true`
+    or `status: "confirmed"`) is confirmed at first sight only when its `quote` is a substring
+    of a genuine user message in the session transcript (scripts/identity_quote.py). Otherwise it stays
+    observed / inferred and the old rule applies: the second mention confirms. The verdict is stored
+    on the candidate (`quote_verified`: true | false | "kein_transkript") and measured in the tally.
+    No transcript to check against is not an error, it just never confirms at first sight.
+
+    D1 - the second mention counts only from ANOTHER session: the candidate carries `sessions` (the ids of the
+    sessions that named it) and `occurrences` rises only when the current session id is not among them. The same
+    key twice in one plan is one mention; a rerun in the same session adds nothing; an empty session id counts
+    nothing (a repetition cannot be proven). A legacy row without `sessions` keeps its `occurrences` and the
+    first new session adds one.
+    D2 - if CLAUDE_CODE_SESSION_ID names another session than the one given, the identity evidence of this run
+    is not verifiable: no quote verifies and nothing is counted.
+    """
+    obs = plan.get("user_candidates") or []
+    paths = _id_paths(mem, paths)
+    queue = load_json(paths.root, paths.queue, [])
+    # A run that died after the changelog (written FIRST) and before the queue left its candidate id only in the
+    # audit log and the profile; re-issuing it would make another statement a 'duplicate' of that line (Codex P2-A-01)
+    taken = [{"id": e["candidate_id"]} for e in load_json(paths.root, paths.changelog, [])
+             if isinstance(e, dict) and isinstance(e.get("candidate_id"), str)]
+    by_key = {c.get("key"): c for c in queue}
+    sid = str(session_id or "").strip()
+    binding = identity_quote.session_binding(sid)
+    can_count = bool(sid) and not binding["mismatch"]
+    if obs and not can_count:
+        if binding["mismatch"]:
+            tally["session_binding_mismatch"] = True
+            msg = identity_quote.mismatch_warning(binding)
+        else:
+            msg = "user candidates: no session id - repeats are not counted (a repetition cannot be proven)"
+        if msg not in tally["warnings"]:
+            tally["warnings"].append(msg)
+
+    # Trust boundary first: a foreign-source candidate is dropped before anything is checked or merged for it.
+    grouped = {}
     for o in obs:
         key = (o.get("key") or "").strip()
         if not key:
             raise PlanError("user candidate without 'key'")
-        trust = o.get("trust_source", "conversation")
-        if trust != "conversation":
+        if o.get("trust_source", "conversation") != "conversation":
             # Step 6.1 trust boundary - memory-poisoning defense.
             tally["candidates_rejected_trust"] += 1
             continue
+        if key in grouped:
+            tally["plan_duplicates_merged"] += 1
+            tally["warnings"].append(f"candidate {key!r} appears more than once in the plan - merged, counted as one mention")
+        grouped.setdefault(key, []).append(o)
+
+    quotes = [q for items in grouped.values() for q in (_clean_quote(it.get("quote")) for it in items) if q]
+    verdicts, reasons = {}, {}
+    if quotes:
+        verdicts, reasons = _verify_identity_quotes(quotes, sid, transcript, tally)
+
+    for key, items in grouped.items():
+        eff = _merge_plan_entries(items, date, verdicts)
+        quote = eff["quote"]
+        verdict = verdicts.get(quote) if quote else None
+        if quote:
+            tally["quotes_verified" if verdict is True else
+                  "quotes_no_transcript" if verdict == identity_quote.NO_TRANSCRIPT else "quotes_unverified"] += 1
+            if verdict is not True and reasons.get(quote):
+                tally["quote_reasons"][key] = reasons[quote]
+            # R1 round 3: the relation is checked against the text that is STORED and later promoted - for a known
+            # key that is the queue row's observation, not what this plan happens to carry.
+            stored_obs = (by_key[key].get("observation") if key in by_key else eff["observation"]) or ""
+            if verdict is True and stored_obs and not _quote_related(quote, stored_obs):
+                tally["quote_unrelated"].append(key)
+                tally["warnings"].append(f"candidate {key!r}: the verified quote shares no content word with the "
+                                         f"observation - check that it really supports it")
+            if verdict is True and stored_obs and _polarity_differs(quote, stored_obs):
+                tally["quote_polarity"].append(key)  # calibration data only, no warning (noise)
+        claims = eff["claims"]
+        earned = claims and verdict is True
+        wanted = eff["wanted"]
+        for st in eff["statuses"]:
+            if st not in (None, "confirmed") + PLAN_CANDIDATE_STATUSES:
+                tally["warnings"].append(f"candidate {key!r}: status {st!r} is not allowed in a plan - recorded as observed")
         if key in by_key:
             c = by_key[key]
-            c["occurrences"] = int(c.get("occurrences", 1)) + 1
+            sessions = c.get("sessions") if isinstance(c.get("sessions"), list) else []
+            counted = False
+            if can_count and "sessions" in c and not sessions:
+                # D1 round 2: the row was born without a provable session (empty id, blank id, session mismatch).
+                # The first real id is taken in WITHOUT counting - the earlier run may be this very session, and
+                # a repetition cannot be proven. Only a row without the key (legacy) follows the plain D1 rule.
+                c["sessions"] = [sid]
+                tally["session_adopted"] += 1
+                tally["warnings"].append(f"candidate {key!r}: created without a provable session - session {sid} taken in, "
+                                         f"the mention is not counted as a repeat")
+            elif can_count and sid not in sessions:
+                c["occurrences"] = int(c.get("occurrences", 1)) + 1
+                c["sessions"] = sessions + [sid]
+                counted = True
+            else:
+                tally["repeat_not_counted"] += 1  # same session again, no session id, or a session mismatch
             c["last_seen"] = date
             ev = c.setdefault("evidence", [])
-            for e in (o.get("evidence") or [f"session {date}"]):
+            for e in eff["evidence"]:
                 if e not in ev:
                     ev.append(e)
-            if o.get("confirmed") or int(c["occurrences"]) >= 2:
-                if c.get("status") in ("observed", "inferred"):
-                    c["status"] = "confirmed"
+            if quote and (verdict is True or c.get("quote_verified") is not True):
+                c["quote"], c["quote_verified"] = quote, verdict
+            if c.get("status") in PLAN_CANDIDATE_STATUSES and (earned or (counted and int(c["occurrences"]) >= 2)):
+                c["status"] = "confirmed"
+                c["confirmed_by"] = "quote" if earned else "repeat"
+            elif earned and c.get("status") == "confirmed":
+                c["confirmed_by"] = "quote"  # D9: the user's verified words lift a row confirmed by repetition to the top proof
             tally["candidates_updated"] += 1
         else:
             c = {
-                "id": next_id(queue, "UC"),
+                "id": next_id(queue, paths.id_prefix, reserved=taken),
                 "key": key,
-                "observation": (o.get("observation") or "").strip(),
-                "status": "confirmed" if o.get("confirmed") else o.get("status", "observed"),
-                "signal_type": o.get("signal_type", "preference"),
-                "confidence": float(o.get("confidence", 0.5)),
+                "observation": eff["observation"],
+                "status": "confirmed" if earned else (wanted if wanted in PLAN_CANDIDATE_STATUSES else "observed"),
+                "signal_type": eff["signal_type"],
+                "confidence": float(eff["confidence"]),
                 "occurrences": 1,
-                "evidence": list(o.get("evidence") or [f"session {date}"]),
+                "sessions": [sid] if can_count else [],
+                "evidence": list(eff["evidence"]),
                 "first_seen": date,
                 "last_seen": date,
                 "trust_source": "conversation",
             }
+            if quote:
+                c["quote"], c["quote_verified"] = quote, verdict
+            if earned:
+                c["confirmed_by"] = "quote"
+            if paths.central:
+                c["origin"] = _origin(mem)
             queue.append(c)
             by_key[key] = c
             tally["candidates_new"] += 1
+        if claims and c.get("status") in PLAN_CANDIDATE_STATUSES:
+            # the claim was not honoured: no quote, not found, or nothing to check it against
+            tally["confirm_downgraded"] += 1
+            tally["confirm_downgraded_keys"].append(key)
 
-    promoted = promote_candidates(mem, queue, date, dry, touched, tally)
-    if obs or promoted:
-        write_json(mem, "working/user-candidates.json", queue, dry, touched)
+    marks = [c.get("blocked_by_supersede") for c in queue]
+    promoted = promote_candidates(mem, queue, date, dry, touched, tally, paths=paths)
+    if obs or promoted or marks != [c.get("blocked_by_supersede") for c in queue]:  # a new block note must reach the file
+        write_json(paths.root, paths.queue, queue, dry, touched, via="identity")
     tally["queue_open"] = sum(1 for c in queue if c.get("status") != "promoted")
 
 
@@ -1762,7 +2351,7 @@ def _jaccard(a, b):
     return len(ta & tb) / len(ta | tb)
 
 
-_CITATION_SUFFIX = re.compile(r"\s*[\[(]\s*UC\d+\s*,[^\])]*[\])]\s*$")
+_CITATION_SUFFIX = re.compile(r"\s*[\[(]\s*(?:UC|PC)\d+\s*,[^\])]*[\])]\s*$")
 
 
 def _already_in_user_md(cand, user_md):
@@ -1783,7 +2372,66 @@ def _already_in_user_md(cand, user_md):
     return None
 
 
-def promote_candidates(mem, queue, date, dry, touched, tally):
+# D9: a statement the owner retracted through user_md_supersede must not come back on a lower proof. The word measure does
+# not judge the MEANING (every such heuristic has a gap) - it only decides the PROOF LEVEL: a candidate that touches a
+# retracted statement is promoted only when it is confirmed by a verified quote (confirmed_by == "quote", the user's own
+# words); a repetition or an inference does not bring it back. "Touches" is measured generously, a false alarm costs one
+# quote: the retracted line is read twice - without the citation "(UC3, 2026-07-01)" at its END (every other bracket
+# stays content) and without every unnested bracket group at its end ("(Owner, 2026-07-01)", "(seit Juli)") - and it is
+# touched when one reading is. From RETRACT_MIN_TOKENS content words (4+ letters, no function words, umlauts written
+# out) on, at least RETRACT_MIN of them stand in the observation; a line of 1-2 content words needs all of them (a
+# function word of the line may be missing, round 5), a line without one ("Mag TDD") all its tokens of 2+ characters.
+# "Stand in" = an equal or same-stem word among ALL words of the observation, function words included ("noch einmal"
+# stands for "nochmal", round 6). Known limits: a synonym or a paraphrase that keeps under half of the words ("kurz" ->
+# "knapp" in a longer sentence), a candidate that names only part of the line ("Will keine Emojis" against "Will keine
+# Emojis in Commits"), and deliberately disguised wording (look-alike letters) are not touched.
+RETRACT_MIN = 0.5
+RETRACT_MIN_TOKENS = 3
+
+
+def _share(words, pool) -> float:
+    """Share of `words` that stand in `pool` (the same word or the same stem)."""
+    return sum(1 for w in words if any(_words_related(w, p) for p in pool)) / len(words)
+
+
+_CITED_ID = re.compile(r"[\[(]\s*([A-Za-z]{1,6}\d{1,6})\s*[,\])]")
+# The citation "(UC3, 2026-07-01)" at the END of the line (optionally followed by further notes): a bracket in the
+# middle of the line ("Nutzt Python (py3, uv) ...") is no citation (Pruefer Runde 3, N6).
+_CITED_AT_END = re.compile(r"[\[(]\s*([A-Za-z]{1,6}\d{1,6})\s*,[^\[\]()]*[\])]\s*(?:[\[(][^\[\]()]*[\])]\s*)*$")
+
+
+def retracted_statements(changelog):
+    """Every user.md supersede in the audit log, as {old, line, readings}: statements the owner has contradicted or
+    refined, which must not come back through a fresh candidate (D9). `line` = the id of the replaced line (the entry's
+    candidate_id, else the id the old line cited) or None; `readings` = the two readings of the old line the measure
+    compares, taken from the line as written and from the line with its invisible characters read as spaces, each also
+    with its invisible characters read as spaces (round 7; computed once per entry, not per candidate)."""
+    out = []
+    for e in changelog:
+        if isinstance(e, dict) and e.get("field") == "user.md/supersede" and e.get("old_value"):
+            old = str(e["old_value"])
+            cited = _CITED_AT_END.search(old) or _CITED_ID.search(old)
+            # the notes come off the line as written AND with its invisible characters read as spaces: a zero-width
+            # character behind the closing bracket would otherwise keep the note in (Codex-Verifier 2026-10-28, P1-B2-01)
+            readings = tuple(rx.sub("", s) for s in (old, _spaced(old)) for rx in (_CITED_AT_END, _NOTES_AT_END))
+            out.append({"old": old, "line": e.get("candidate_id") or (cited.group(1) if cited else None),
+                        "readings": tuple(dict.fromkeys(readings + tuple(_spaced(r) for r in readings)))})
+    return out
+
+
+_NOTES_AT_END = re.compile(r"(?:\s*[\[(][^\[\]()]*[\])])+[\s.,;:!?]*$")
+
+
+def _touches_line(pool, line) -> bool:
+    """Does the observation whose words are `pool` (_tokens) touch this reading of a retracted line?"""
+    words = set(_content_words(line))
+    if words:
+        return _share(words, pool) >= (RETRACT_MIN if len(words) >= RETRACT_MIN_TOKENS else 1)
+    words = set(re.findall(r"[^\W_]{2,}", _fold(line)))
+    return bool(words) and _share(words, pool) == 1
+
+
+def promote_candidates(mem, queue, date, dry, touched, tally, paths=None):
     """Step 6.3: review EVERY candidate, not just this session's."""
     promotable = []
     for c in queue:
@@ -1808,11 +2456,13 @@ def promote_candidates(mem, queue, date, dry, touched, tally):
     if not promotable:
         return []
 
-    changelog = load_json(mem, "identity/user-changelog.json", [])
-    user_md = read_user_md(mem)
+    paths = _id_paths(mem, paths)
+    changelog = load_json(paths.root, paths.changelog, [])
+    user_md = read_user_md(mem, paths)
+    retracted = retracted_statements(changelog)
     now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
-    promoted = []
+    promoted, additions, blocked, log_changed = [], [], [], False
     for c in promotable:
         dup = _already_in_user_md(c, user_md)
         if dup is not None:
@@ -1825,41 +2475,73 @@ def promote_candidates(mem, queue, date, dry, touched, tally):
                 "evidence": c.get("evidence") or [],
                 "reason": "duplicate_of_existing",
             })
+            if paths.central:
+                changelog[-1]["origin"] = c.get("origin") or _origin(mem)
+            log_changed = True
             c["status"] = "promoted"
             c["status_after_promotion"] = "duplicate_of_existing"
+            c.pop("blocked_by_supersede", None)
             tally["promotion_skipped_duplicate"] += 1
             continue
+        # D9: a candidate that touches a statement the owner retracted needs the highest proof, his verified words.
+        hit = None
+        if c.get("confirmed_by") != "quote":
+            pool = _tokens(c.get("observation", ""))
+            hit = next((r for r in retracted if any(_touches_line(pool, ln) for ln in r["readings"])), None)
+        if hit is not None:
+            # There is no rejected status in the candidate schema: the status stays, it is just not promoted.
+            # The block is noted on the candidate (blocked_by_supersede = the id of the replaced line) and warned about
+            # once - the same candidate would otherwise be reported again by every wrap-up.
+            tally["promotion_blocked_superseded"] += 1
+            line = hit["line"] or "unknown"
+            if c.get("blocked_by_supersede") != line:
+                c["blocked_by_supersede"] = line
+                tally["warnings"].append(f"candidate {c.get('id')} ({c.get('key')}) touches a statement a user.md supersede "
+                                         f"retracted (line {line}) - not promoted: it needs the verified words of the user "
+                                         f"(confirmed with a verified quote), a repetition is not enough (wrap-up 6.3)")
+            blocked.append(c)
+            continue
+        c.pop("blocked_by_supersede", None)
         promoted.append(c)
         section = SECTION_BY_SIGNAL.get(c.get("signal_type", "preference"), "Preferences")
         line = f"- {c.get('observation')} ({c.get('id')}, {date})"
         # changelog BEFORE edit - ordering is part of the contract
-        changelog.append({
+        entry = {
             "ts": now,
             "field": f"user.md/{section}",
             "old_value": None,
             "new_value": c.get("observation"),
             "candidate_id": c.get("id"),
             "evidence": c.get("evidence") or [],
-        })
-        user_md.setdefault(section, [])
-        if line not in user_md[section]:
-            user_md[section].append(line)
+        }
+        if c.get("quote"):  # P1/B2: the audit trail names the words the confirmation rests on
+            entry["quote"], entry["quote_verified"] = c["quote"], c.get("quote_verified")
+        if c.get("confirmed_by"):
+            entry["confirmed_by"] = c["confirmed_by"]
+        if paths.central:
+            entry["origin"] = c.get("origin") or _origin(mem)
+        changelog.append(entry)
+        log_changed = True
+        additions.append((section, line))
         c["status"] = "promoted"
         c["status_after_promotion"] = "promoted"
 
-    write_json(mem, "identity/user-changelog.json", changelog, dry, touched)
-    write_user_md(mem, user_md, dry, touched)
+    if log_changed:
+        write_json(paths.root, paths.changelog, changelog, dry, touched, via="identity")
+    if additions:
+        insert_user_md_lines(mem, additions, dry, touched, paths)
     tally["candidates_promoted"] = len(promoted)
     tally["promoted_ids"] = [c.get("id") for c in promoted]
-    return promotable
+    return [c for c in promotable if c not in blocked]
 
 
-def read_user_md(mem):
+def read_user_md(mem, paths=None):
     """Parse user.md into {section: [lines]} preserving unknown sections."""
-    path = os.path.join(mem, "identity/user.md")
+    paths = _id_paths(mem, paths)
+    path = os.path.join(paths.root, paths.md)
     sections, current = {}, None
     if os.path.exists(path):
-        for raw in open(path, encoding="utf-8"):
+        for raw in open(path, encoding="utf-8-sig"):  # a BOM may stand right before the first '## '
             line = raw.rstrip("\n")
             if line.startswith("## "):
                 current = line[3:].strip()
@@ -1871,7 +2553,9 @@ def read_user_md(mem):
     return sections
 
 
-def write_user_md(mem, sections, dry, touched):
+def write_user_md(mem, sections, dry, touched, paths=None):
+    """The CANONICAL form, for a user.md that does not exist yet. An existing file is never rewritten this way
+    (see insert_user_md_lines): it would lose the BOM, CRLF, the preamble and the section order."""
     order = ["Preferences", "Work Style", "Known Corrections"]
     ordered = order + [s for s in sections if s not in order]
     out = ["# User Profile", ""]
@@ -1882,7 +2566,66 @@ def write_user_md(mem, sections, dry, touched):
         out.append("")
         out.extend(sections[s] or [])
         out.append("")
-    write_atomic(mem, "identity/user.md", "\n".join(out).rstrip() + "\n", dry, touched)
+    paths = _id_paths(mem, paths)
+    write_atomic(paths.root, paths.md, "\n".join(out).rstrip() + "\n", dry, touched, via="identity")
+
+
+def _is_heading(content: str) -> bool:
+    c = content.lstrip(BOM)
+    return c.startswith("## ") or c.startswith("# ")
+
+
+def _dominant_eol(lines) -> str:
+    crlf = sum(1 for _c, e in lines if e == "\r\n")
+    lf = sum(1 for _c, e in lines if e == "\n")
+    return "\r\n" if crlf > lf else "\n"
+
+
+def insert_user_md_lines(mem, additions, dry, touched, paths=None):
+    """Add promoted lines to identity/user.md WITHOUT rewriting the file (D8): each `(section, line)` goes after
+    the last non-blank line of its `## section`; a missing section is appended at the end. Everything else stays
+    byte for byte - the BOM, CRLF or LF, the preamble, the order of the sections, a last line without a line ending.
+    A user.md that does not exist yet (or is blank) gets the canonical form."""
+    paths = _id_paths(mem, paths)
+    path = os.path.join(paths.root, paths.md)
+    text = _read_user_md_raw(mem, "promotion", paths) if os.path.isfile(path) else ""
+    if not text.strip():
+        sections = {}
+        for section, line in additions:
+            bucket = sections.setdefault(section, [])
+            if line not in bucket:
+                bucket.append(line)
+        write_user_md(mem, sections, dry, touched, paths)
+        return
+    lines = split_user_md(text)
+    for section, line in additions:
+        contents = [c for c, _e in lines]
+        head = next((i for i, c in enumerate(contents)
+                     if c.lstrip(BOM).startswith("## ") and c.lstrip(BOM)[3:].strip() == section), None)
+        if head is None:
+            eol = _dominant_eol(lines)
+            if len(lines) > 1 and lines[-1] == ("", ""):
+                lines.pop()  # the empty tail after the final line ending is not a line
+            if lines and lines[-1][1] == "":
+                lines[-1] = (lines[-1][0], eol)  # the last line gets an ending before something follows it
+            if lines and lines[-1][0].strip():
+                lines.append(("", eol))
+            lines += [(f"## {section}", eol), ("", eol), (line, eol)]
+            continue
+        end = next((i for i in range(head + 1, len(contents)) if _is_heading(contents[i])), len(contents))
+        if any(contents[i] == line for i in range(head + 1, end)):
+            continue  # the very line is already in this section
+        last = head
+        for i in range(head + 1, end):
+            if contents[i].strip():
+                last = i
+        content, eol = lines[last]
+        if eol:
+            lines.insert(last + 1, (line, eol))
+        else:  # the last line of the file has no ending: it gets one, the new line takes over "no ending"
+            lines[last] = (content, _dominant_eol(lines))
+            lines.insert(last + 1, (line, ""))
+    write_atomic(paths.root, paths.md, "".join(c + e for c, e in lines), dry, touched, via="identity")
 
 
 def apply_soul_candidates(mem, plan, date, dry, touched, tally):
@@ -1896,6 +2639,11 @@ def apply_soul_candidates(mem, plan, date, dry, touched, tally):
         proposal = (it.get("proposal") or "").strip()
         if not proposal:
             raise PlanError("soul candidate without 'proposal'")
+        if it.get("trust_source", "conversation") != "conversation":
+            # Step 6.1 trust boundary, now enforced here too (DCO #10148): a proposal for the agent's identity may
+            # only come from the user's own conversation, never from a file or tool output (memory poisoning)
+            tally["soul_rejected_trust"] += 1
+            continue
         if norm(proposal) in norm(existing):
             tally["soul_skipped_duplicate"] += 1
             continue
@@ -1903,6 +2651,9 @@ def apply_soul_candidates(mem, plan, date, dry, touched, tally):
         block.append(f"\n## {date} — {proposal}\n\n- **Evidence:** {ev or 'n/a'}\n")
         tally["soul_candidates_added"] += 1
     if block:
+        # the init stub "*Keine offenen Kandidaten.*" is wrong as soon as one candidate stands below it (DCO #10148:
+        # 6 stores, bootstrap reported "none open")
+        existing = re.sub(r"(?m)^\*Keine offenen Kandidaten\.\*[ \t]*(?:\n|\Z)(?:[ \t]*\n)?", "", existing)
         write_atomic(mem, "identity/soul-candidates.md",
                      existing.rstrip() + "\n" + "".join(block), dry, touched)
 
@@ -2066,6 +2817,44 @@ def apply_consolidation(mem, plan, session_id, dry, touched, tally, by="wrap-up"
     }, dry, touched)
 
 
+# -------------------------------------------------------------------- tally
+
+
+def new_tally() -> dict:
+    """The measured counters of one run, all at zero. One home for the field list: main() uses it and so can
+    a test that calls an applier in-process."""
+    return {
+        "iterations_logged": 0, "iterations_skipped_duplicate": 0,
+        "errors_added": 0, "errors_recurred": 0,
+        "decisions_added": 0, "decisions_superseded": 0,
+        "decisions_skipped_duplicate": 0, "decision_ids": [],
+        "learnings_added": 0, "learnings_skipped_duplicate": 0, "learning_ids": [],
+        "near_duplicates": {}, "bridge_candidates": [],
+        "bridge_approved": [], "bridge_rejected": [], "bridge_status_changed": 0,
+        "rule_class_open": None, "rule_explained": [], "rule_released": [], "rule_rejected": [],
+        "tasks_retitled": 0, "learnings_corrected": 0, "corrections_skipped_unchanged": 0,
+        "decisions_corrected": 0, "user_lines_corrected": 0,
+        "correction_ids": [], "corrections_projection_needed": False,
+        "restored": 0, "restored_ids": [], "restore_skipped_live": 0, "restore_dropped": [],
+        "principles_added": 0, "principles_updated": 0, "principle_ids": [],
+        "candidates_new": 0, "candidates_updated": 0, "candidates_promoted": 0,
+        "candidates_rejected_trust": 0, "promotion_blocked_trust": 0,
+        "promotion_skipped_duplicate": 0,
+        "quotes_verified": 0, "quotes_unverified": 0, "quotes_no_transcript": 0, "quote_transcript": None,
+        "confirm_downgraded": 0, "confirm_downgraded_keys": [],
+        "user_lines_superseded": 0, "supersede_skipped_unchanged": 0, "supersede_skipped_legacy": 0,
+        "identity_target": "project", "central_path": None,
+        "promoted_ids": [], "queue_open": 0,
+        "soul_candidates_added": 0, "soul_skipped_duplicate": 0, "soul_rejected_trust": 0,
+        "tasks_added": 0, "tasks_closed": 0, "tasks_skipped_duplicate": 0,
+        "session_summary_lines": 0, "dirty_files_consolidated": 0,
+        "touched_files_seen": 0, "warnings": [],
+        "quote_reasons": {}, "transcript_override_rejected": False, "session_binding_mismatch": False,
+        "repeat_not_counted": 0, "session_adopted": 0, "plan_duplicates_merged": 0,
+        "supersede_skipped_unverified": 0, "promotion_blocked_superseded": 0, "quote_unrelated": [], "quote_polarity": [],
+    }
+
+
 # -------------------------------------------------------------------- main
 
 def main() -> int:
@@ -2079,7 +2868,7 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="Apply a wrap-up write plan in one pass.")
     ap.add_argument("mem", nargs="?", default=".agent-memory")
-    ap.add_argument("--session-id", default="")
+    ap.add_argument("--session-id", default=None)
     ap.add_argument("--plan", default="-", help="plan JSON file, '-' for stdin")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--render-learnings", action="store_true",
@@ -2090,6 +2879,13 @@ def main() -> int:
                     help="report live learning rows that break the write rules (read-only)")
     ap.add_argument("--lock-timeout", type=float, default=store_lock.TIMEOUT_SECONDS,
                     help="seconds to wait for working/store.lock")
+    ap.add_argument("--transcript", default=None,
+                    help="transcript file the quotes (user_candidates, user_md_supersede) are checked against. Accepted "
+                         "only as <HOME>/.claude/projects/<dir>/<session-id>.jsonl, otherwise refused (default: the "
+                         "session's own transcript there, resolved at call time; read-only)")
+    ap.add_argument("--identity-store", default=None,
+                    help="central identity store (P2); else $AGENTIC_OS_IDENTITY_STORE, else ~/.agent-memory. It is "
+                         "used only when its identity/profile.md exists, otherwise the project files stay the target")
     ap.add_argument("--central-dir", default=DEFAULT_CENTRAL_DIR,
                     help="central handoff dir; a store whose summary IS <dir>/.agent-memory/session-summary.md "
                          "never overwrites it (DCO #9433)")
@@ -2110,7 +2906,7 @@ def main() -> int:
 
     if args.propose_encoding_corrections:
         try:
-            print(json.dumps(propose_encoding_corrections(args.mem), ensure_ascii=False, indent=2))
+            print(json.dumps(propose_encoding_corrections(args.mem, args.identity_store), ensure_ascii=False, indent=2))
         except PlanError as e:
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
             return 2
@@ -2146,46 +2942,45 @@ def main() -> int:
         return 2
 
     date = plan.get("date") or _dt.date.today().isoformat()
-    session_id = args.session_id or plan.get("session_id", "")
+    # the flag wins, an explicitly empty one too: it counts nothing, the plan's id does not step in (Codex round 2, R2-06)
+    session_id = args.session_id if args.session_id is not None else plan.get("session_id", "")
 
-    tally = {
-        "iterations_logged": 0, "iterations_skipped_duplicate": 0,
-        "errors_added": 0, "errors_recurred": 0,
-        "decisions_added": 0, "decisions_superseded": 0,
-        "decisions_skipped_duplicate": 0, "decision_ids": [],
-        "learnings_added": 0, "learnings_skipped_duplicate": 0, "learning_ids": [],
-        "near_duplicates": {}, "bridge_candidates": [],
-        "bridge_approved": [], "bridge_rejected": [], "bridge_status_changed": 0,
-        "rule_class_open": None, "rule_explained": [], "rule_released": [], "rule_rejected": [],
-        "tasks_retitled": 0, "learnings_corrected": 0, "corrections_skipped_unchanged": 0,
-        "decisions_corrected": 0, "user_lines_corrected": 0,
-        "correction_ids": [], "corrections_projection_needed": False,
-        "restored": 0, "restored_ids": [], "restore_skipped_live": 0, "restore_dropped": [],
-        "principles_added": 0, "principles_updated": 0, "principle_ids": [],
-        "candidates_new": 0, "candidates_updated": 0, "candidates_promoted": 0,
-        "candidates_rejected_trust": 0, "promotion_blocked_trust": 0,
-        "promotion_skipped_duplicate": 0,
-        "promoted_ids": [], "queue_open": 0,
-        "soul_candidates_added": 0, "soul_skipped_duplicate": 0,
-        "tasks_added": 0, "tasks_closed": 0, "tasks_skipped_duplicate": 0,
-        "session_summary_lines": 0, "dirty_files_consolidated": 0,
-        "touched_files_seen": 0, "warnings": [],
-    }
+    tally = new_tally()
     touched: list = []
+    try:
+        paths = identity_store.select_paths(args.mem, args.identity_store, os.environ)
+    except identity_store.GuardError as e:
+        if plan_touches_identity(plan):
+            print(json.dumps({"ok": False, "error": f"plan rejected: {e}", "files_written": [],
+                              "note": "consolidation marker NOT written - dirty state stays honest"}, ensure_ascii=False))
+            return 2
+        # a plan that writes no identity data (iterations, decisions, ...) runs; the guard only protects the profile
+        paths = identity_store.legacy_paths(args.mem)
+    if paths.central:
+        tally["identity_target"], tally["central_path"] = "central", paths.root
 
     # One store lock from the first read to the last write (5.3.0): without it a
     # wrap-up and the nightly run (or extract_patterns) lose each other's rows.
     # A dry run only reads and takes no lock.
     guard = (contextlib.nullcontext() if args.dry_run
              else store_lock.store_lock(args.mem, timeout=args.lock_timeout))
+    # P2: the central profile has its own lock, taken AFTER the project lock (never the other way round) and only
+    # when this run writes identity data into it - an iterations-only plan never waits for another project.
+    central_guard = (store_lock.store_lock(paths.root, timeout=args.lock_timeout, lock_rel=identity_store.PROFILE_LOCK)
+                     if paths.central and not args.dry_run and plan_touches_identity(plan)
+                     else contextlib.nullcontext())
     try:
-        with guard:
-            preflight_readable(args.mem, plan)  # before the FIRST write, not per applier
-            validate_plan(args.mem, plan)
+        with guard, central_guard:
+            preflight_readable(args.mem, plan, paths)  # before the FIRST write, not per applier
+            validate_plan(args.mem, plan, paths)
             apply_iterations(args.mem, plan, date, args.dry_run, touched, tally)
             apply_decisions(args.mem, plan, date, args.dry_run, touched, tally)
             apply_restore(args.mem, plan, date, args.dry_run, touched, tally)
-            apply_corrections(args.mem, plan, date, args.dry_run, touched, tally, session_id)
+            # BEFORE corrections and promotions: they are the only other writers of user.md, and the
+            # check above resolved the target lines against the file as it stands now.
+            apply_user_md_supersede(args.mem, plan, date, args.dry_run, touched, tally, session_id, args.transcript,
+                                    paths=paths)
+            apply_corrections(args.mem, plan, date, args.dry_run, touched, tally, session_id, paths=paths)
             apply_learnings(args.mem, plan, date, args.dry_run, touched, tally)
             apply_principles(args.mem, plan, date, args.dry_run, touched, tally)
             apply_bridge_decisions(args.mem, plan, date, args.dry_run, touched, tally)
@@ -2194,7 +2989,11 @@ def main() -> int:
             if "user_candidates" in plan or plan.get("consolidate"):
                 # Identity growth is wrap-up Step 6's job: an iterations-only plan
                 # (/agentic-os:log) must not re-review the queue and promote to user.md.
-                apply_user_candidates(args.mem, plan, date, args.dry_run, touched, tally)
+                apply_user_candidates(args.mem, plan, date, args.dry_run, touched, tally, session_id, args.transcript,
+                                      paths=paths)
+            if paths.md in touched or paths.queue in touched:
+                # P2: the briefing shows the most confirmed profile lines, never the oldest ones (DCO #10148)
+                identity_briefing.write_projection(paths, args.dry_run, touched)
             apply_soul_candidates(args.mem, plan, date, args.dry_run, touched, tally)
             apply_open_tasks(args.mem, plan, date, args.dry_run, touched, tally)
             apply_session_summary(args.mem, plan, args.dry_run, touched, tally, args.central_dir)
@@ -2217,7 +3016,7 @@ def main() -> int:
         tally["rule_class_open"] = rule_class_open(load_json(args.mem, "learnings/learnings.json", []))
     identity_line = (
         f"Identity: {tally['candidates_new'] + tally['candidates_updated']} beobachtet, "
-        f"{tally['candidates_promoted']} → user.md promotet, "
+        f"{tally['candidates_promoted']} → {'profile.md' if paths.central else 'user.md'} promotet, "
         f"{tally['soul_candidates_added']} soul-candidates; "
         f"Queue: {tally['queue_open']} offen"
     )

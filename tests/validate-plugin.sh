@@ -632,22 +632,26 @@ else
 fi
 
 
-# 49. init command soul.md template must not default to German language
-#     commands/init.md creates soul.md with "Language: de" as the default,
-#     which forces every new project to start in German. All other plugin
-#     content uses English. The default should be "en" to match the plugin's
-#     English-first convention; users can change it to "de" if desired.
+# 49. soul.md init template: ONE source, German default (owner decision, spec 2026-10-27 P2 "die Vorlage wird
+#     auf Language: de gestellt"; DCO #10148). Before P2 this test demanded the opposite ("no Language: de in
+#     commands/init.md"), but neither init.md nor the hook writes soul.md - scripts/mem-schema.sh does, from
+#     scripts/soul-template.txt, and the hook filters the template lines out of its Identity line.
 echo ""
-echo "-- init command soul.md language default consistency --"
-INIT_CMD="$PLUGIN_ROOT/commands/init.md"
-if [ -f "$INIT_CMD" ]; then
-    if grep -q "Language: de" "$INIT_CMD"; then
-        fail "init: soul.md template defaults to 'Language: de' (German) — inconsistent with the plugin's English-first convention; default should be 'en'"
+echo "-- soul.md init template (scripts/soul-template.txt) --"
+SOUL_TPL="$PLUGIN_ROOT/scripts/soul-template.txt"
+if [ -f "$SOUL_TPL" ]; then
+    if grep -qxF -- "- Language: de (switch to en if user writes in English)" <(tr -d '\r' < "$SOUL_TPL"); then
+        pass "soul-template.txt: the init template says 'Language: de (switch to en if user writes in English)'"
     else
-        pass "init: soul.md template language default is English (no 'Language: de')"
+        fail "soul-template.txt: the init template must say 'Language: de (switch to en if user writes in English)'"
+    fi
+    if grep -q "Agent Identity" "$PLUGIN_ROOT/scripts/mem-schema.sh"; then
+        fail "mem-schema.sh holds its own copy of the soul.md template - it must read scripts/soul-template.txt"
+    else
+        pass "mem-schema.sh holds no copy of the soul.md template (one source: soul-template.txt)"
     fi
 else
-    fail "init: commands/init.md not found"
+    fail "scripts/soul-template.txt not found"
 fi
 
 

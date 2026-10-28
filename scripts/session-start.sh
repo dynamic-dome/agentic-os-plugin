@@ -236,19 +236,37 @@ if [ -d "$MEMORY_DIR" ]; then
     [ -n "$SUMMARY" ] && context="$context\nLast session: $SUMMARY"
   fi
 
-  # Soul (first 5 lines, core settings only)
+  # Soul: the first 5 OWN lines. Lines of the init template (scripts/soul-template.txt, current and earlier
+  # versions) say nothing about this agent and are filtered out (DCO #10148) - a template-only soul.md gives no
+  # Identity line at all.
   if [ -f "$MEMORY_DIR/identity/soul.md" ]; then
-    SOUL=$(grep -E "^- " "$MEMORY_DIR/identity/soul.md" 2>/dev/null | head -5 | tr '\n' ' ' || true)
+    SOUL_TPL="$(dirname "${BASH_SOURCE[0]}")/soul-template.txt"
+    if [ -f "$SOUL_TPL" ]; then
+      SOUL=$(tr -d '\r' < "$MEMORY_DIR/identity/soul.md" 2>/dev/null | grep -E "^- " \
+        | grep -vxF -f <(tr -d '\r' < "$SOUL_TPL" | grep -E "^- ") | head -5 | tr '\n' ' ' || true)
+    else
+      SOUL=$(grep -E "^- " "$MEMORY_DIR/identity/soul.md" 2>/dev/null | head -5 | tr '\n' ' ' || true)
+    fi
     [ -n "$SOUL" ] && context="$context\nIdentity: $SOUL"
   fi
 
-  # User profile (first 4 preference/work-style bullets) — primes the agent to
-  # NOTICE preference deltas mid-session; without this, identity growth relies
-  # entirely on end-of-session recall (the weakest context point).
-  if [ -f "$MEMORY_DIR/identity/user.md" ]; then
-    USER_PROFILE=$(grep -E "^- " "$MEMORY_DIR/identity/user.md" 2>/dev/null | head -4 | tr '\n' ' ' || true)
-    [ -n "$USER_PROFILE" ] && context="$context\nUser: $USER_PROFILE"
+  # User profile — primes the agent to NOTICE preference deltas mid-session; without this,
+  # identity growth relies entirely on end-of-session recall (the weakest context point).
+  # P2: the projection scripts/identity_briefing.py writes (most confirmed lines first, no
+  # placeholders, length-capped) - from the central profile when it is active (profile.md
+  # exists; the migration writes it last), else from the project; without a projection the
+  # first 4 real bullets of the project's user.md. Read only - the hook never writes identity.
+  ID_STORE="${AGENTIC_OS_IDENTITY_STORE:-$HOME/.agent-memory}"
+  USER_PROFILE=""
+  if [ -f "$ID_STORE/identity/profile.md" ] && [ -f "$ID_STORE/identity/profile-briefing.txt" ]; then
+    USER_PROFILE=$(head -6 "$ID_STORE/identity/profile-briefing.txt" 2>/dev/null | tr -d '\r' | tr '\n' ' ' || true)
+  elif [ -f "$MEMORY_DIR/identity/briefing-lines.txt" ]; then
+    USER_PROFILE=$(head -6 "$MEMORY_DIR/identity/briefing-lines.txt" 2>/dev/null | tr -d '\r' | tr '\n' ' ' || true)
+  elif [ -f "$MEMORY_DIR/identity/user.md" ]; then
+    USER_PROFILE=$(grep -E "^- " "$MEMORY_DIR/identity/user.md" 2>/dev/null \
+      | grep -vE "^- \((Will be populated|Recorded when|Weiteres wird|Wird erst nach)" | head -4 | tr '\n' ' ' || true)
   fi
+  [ -n "$USER_PROFILE" ] && context="$context\nUser: $USER_PROFILE"
 
   # Project context (language + framework)
   if [ -f "$MEMORY_DIR/context/project-context.md" ]; then

@@ -657,5 +657,70 @@ check(not any(p["cluster_key"].startswith("fragile:") for p in out.get("proposal
 check(any(p["cluster_key"].startswith("approach:") for p in out.get("proposals", [])),
       "'0 failed' counts as passing for the approach heuristic")
 
+# --- 26. DCO #10149: check and render everything, then write ------------------
+# run() wrote patterns.json atomically and only then rendered patterns.md. A
+# pattern with confidence "high" (seen in a real store, 2026-10-27) left a changed JSON
+# next to a stale patterns.md and ended in exit 2 'unreadable input' (L87/L94:
+# abort before the first byte, and a test that a rejection wrote nothing).
+PATTERN_FILES = ("patterns/patterns.json", "patterns/patterns.md")
+OLD_NS = 1_600_000_000_000_000_000  # fixed mtime, so a rewrite is visible even within one tick
+
+
+def pin_files(mem):
+    for f in PATTERN_FILES:
+        os.utime(os.path.join(mem, f), ns=(OLD_NS, OLD_NS))
+    return {f: open(os.path.join(mem, f), "rb").read() for f in PATTERN_FILES}
+
+
+def untouched(mem, before):
+    return all(open(os.path.join(mem, f), "rb").read() == before[f]
+               and os.stat(os.path.join(mem, f)).st_mtime_ns == OLD_NS for f in PATTERN_FILES)
+
+
+def bad_store(field, value):
+    # P001 shares evidence with the error cluster, so --update has a real change
+    # to write; P002 carries the broken value and matches no cluster.
+    second = {"id": "P002", "type": "anti-pattern", "description": "Freitext-Wert",
+              "evidence": ["err-900"], "confidence": 0.5, "severity": "minor",
+              "tags": ["ganz", "anders"], "occurrences": 2, "first_seen": "2026-05-01",
+              "last_seen": "2026-05-01", "recommendation": "r", "skill_candidate": False,
+              "lifecycle": "active"}
+    second[field] = value
+    return [dict(existing[0]), second]
+
+
+for extra, field, value in ((("--update",), "confidence", "high"),
+                            (("--refresh",), "confidence", "high"),
+                            (("--update",), "confidence", None),
+                            (("--update",), "occurrences", "zwei")):
+    mem = make_mem(errors=errors, patterns=bad_store(field, value))
+    write(mem, "patterns/patterns.md", "# Pattern Catalog\n\nalter Stand\n")
+    before = pin_files(mem)
+    rc, out = run(mem, *extra)
+    label = f"{' '.join(extra)} with {field}={value!r}"
+    check(rc == 2 and out.get("ok") is False and out.get("files_written") == [],
+          f"{label}: exit 2, files_written empty (rc={rc}, {str(out)[:160]})")
+    check(untouched(mem, before),
+          f"{label}: patterns.json and patterns.md byte-identical, mtime unchanged")
+    msg = str(out.get("error", ""))
+    check("P002" in msg and field in msg,
+          f"{label}: the error names pattern and field ({msg[:160]})")
+
+# --- 27. DCO #10149: --update is quiet when the catalog does not change -------
+# The docstring promised "writes no file at all", but a cluster that matched an
+# existing pattern counted as an update even when nothing changed, so every run
+# rewrote both files (new mtime, identical content).
+mem = make_mem(errors=errors, patterns=existing)
+rc1, out1 = run(mem, "--update")
+check(rc1 == 0 and sorted(out1.get("files_written", [])) == sorted(PATTERN_FILES),
+      f"precondition: the first --update merges evidence and writes both files ({out1.get('files_written')})")
+before = pin_files(mem)
+rc2, out2 = run(mem, "--update")
+check(rc2 == 0 and out2.get("files_written") == [],
+      f"second --update without new data writes no file (files_written={out2.get('files_written')})")
+check(untouched(mem, before), "second --update leaves both files byte-identical with their old mtime")
+check(out2.get("tally", {}).get("patterns_updated") == 0,
+      f"tally counts real changes only (patterns_updated={out2.get('tally', {}).get('patterns_updated')})")
+
 print(f"=== Results: {PASSED}/{TESTS} passed, {ERRORS} failures ===")
 sys.exit(1 if ERRORS else 0)

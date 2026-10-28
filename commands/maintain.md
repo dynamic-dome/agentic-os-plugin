@@ -199,7 +199,9 @@ MEMORY.md projection shows FIRST. Members stay unchanged — they keep the concr
    from `--catalog` or `rule_catalog` in `~/.claude/agentic-os.local.json`). The scores are
    hints, not verdicts: classify each proposal yourself as **rule** (an existing rule
    covers it), **gap** (no rule yet) or **fact** (project-specific, stays a plain learning).
-3. Show the owner at most 10 pointer cards per round: summary (the rule, <= 150 chars),
+3. Show the owner at most 10 pointer cards per round: summary (the rule, <= 150 chars), **`plain`**
+   (the same rule in plain German, no jargon, what changes concretely for his sessions, <= 600 chars - the
+   text he actually reads and decides on),
    anchor (`<file>#<heading>` or `#^r-<slug>`), members. Several rules under one heading
    need an Obsidian block id at the rule's line — that is a wiki edit and part of the card.
    A **new** rule needs >= 3 members from >= 2 stores (evidence, counted on the card) and its own `j`. Only local
@@ -210,12 +212,13 @@ MEMORY.md projection shows FIRST. Members stay unchanged — they keep the concr
 4. One `[j/n]` per card. Only on `j`: make the wiki edit (if any), then write the pointers:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <plan.json>   # {"principles": [{summary, anchor, members, tags}]}
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <plan.json>   # {"principles": [{summary, anchor, members, plain, tags}]}
 python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" .agent-memory --project-root .
 ```
 
-   The applier refuses an anchor that does not resolve, an unknown local member, a qualified member and a
-   pointer as member; the same anchor again merges members instead of adding a row. It
+   The applier refuses a card without `plain` (empty, not a string or over 600 characters: the whole plan, before
+   the first byte), an anchor that does not resolve, an unknown local member, a qualified member and a
+   pointer as member; it stores `plain` on the pointer row; the same anchor again merges members instead of adding a row. It
    also refuses a member that is a rule-class learning not yet `released` (wrap-up Step 3f:
    second-model explanation, then the owner): the owner's `j` on a pointer card does not
    replace that gate (DCO #10057).

@@ -38,7 +38,14 @@ MODES
         Regenerates patterns.md from patterns.json even when nothing changed
         ("refresh patterns"). Without it a run that changes nothing writes no
         file at all - which is right for the routine path and wrong for an
-        explicit refresh request.
+        explicit refresh request. Either way a file whose bytes would stay the
+        same is not rewritten (its mtime stays).
+
+Write order (DCO #10149): the store is validated, every change computed and
+patterns.md rendered in memory BEFORE the first byte is written. A store the
+run cannot process - a non-numeric confidence/occurrences such as "high",
+null or true - is rejected as a whole (exit 2, nothing written, the error
+names pattern and field); such a value is never reinterpreted.
 
 The plan supplies judgment only: description, recommendation, and the
 classification fields type/severity (deliberately settable - deciding WHAT a
@@ -62,6 +69,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import math
 import os
 import re
 import sys
@@ -101,6 +109,14 @@ LEGACY_FIELDS = {
 
 class PlanError(Exception):
     """Plan is malformed - nothing gets written."""
+
+
+class StoreError(PlanError):
+    """patterns.json holds a value the run cannot process - nothing gets written."""
+
+
+# Fields the run does arithmetic on, and whether they must be whole numbers.
+NUMERIC_FIELDS = (("confidence", False), ("occurrences", True))
 
 
 # ---------------------------------------------------------------- io helpers
@@ -168,7 +184,55 @@ def write_atomic(mem: str, rel: str, text: str, dry: bool, touched: list) -> Non
 
 
 def write_json(mem: str, rel: str, data, dry: bool, touched: list) -> None:
-    write_atomic(mem, rel, json.dumps(data, indent=2, ensure_ascii=False) + "\n", dry, touched)
+    write_atomic(mem, rel, json_text(data), dry, touched)
+
+
+def json_text(data) -> str:
+    return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+
+def disk_bytes(mem: str, rel: str):
+    """Current bytes of an owned file, None when it does not exist yet."""
+    try:
+        with open(_p(mem, rel), "rb") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+
+
+def validate_patterns(patterns, rel: str = "patterns/patterns.json") -> None:
+    """Refuse a catalog the run cannot process, before anything is computed.
+
+    DCO #10149: float("high") failed only while rendering patterns.md - after
+    patterns.json had already been replaced. A non-number is never
+    reinterpreted ("high" is no 0.9, null no 0, true no 1, "0.7" no 0.7); the
+    owner repairs it. A missing field keeps its documented default
+    (confidence 0, occurrences 1).
+    """
+    if not isinstance(patterns, list):
+        raise StoreError(f"{rel} must be a JSON list of patterns, found "
+                         f"{type(patterns).__name__} - nothing was written")
+    problems = []
+    for i, p in enumerate(patterns):
+        if not isinstance(p, dict):
+            problems.append(f"row {i + 1} is not an object")
+            continue
+        for field, whole in NUMERIC_FIELDS:
+            if field not in p:
+                continue
+            v = p[field]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                why = "is not a number"
+            elif whole and isinstance(v, float) and not v.is_integer():
+                why = "is not a whole number"
+            else:
+                continue
+            pid = p.get("id") or f"row {i + 1}"
+            problems.append(f"pattern {pid} field '{field}' {why} "
+                            f"({json.dumps(v, ensure_ascii=False)})")
+    if problems:
+        raise StoreError(f"{rel}: {'; '.join(problems)} - nothing was written; "
+                         f"repair the value by hand, it is never guessed")
 
 
 def norm_tokens(text: str) -> set:
@@ -563,6 +627,9 @@ def match_existing(cluster, patterns, wording=""):
 
 
 def update_pattern(p, cluster, tally):
+    # Only a real change counts (DCO #10149): a cluster that matches its pattern
+    # again without new evidence is a match, not an update - and no write.
+    before = json.dumps(p, sort_keys=True, ensure_ascii=False)
     evidence = list(p.get("evidence") or [])
     added = 0
     for e in cluster["evidence"]:
@@ -586,7 +653,8 @@ def update_pattern(p, cluster, tally):
             tags.append(t)
     p["tags"] = tags
     p["skill_candidate"] = is_skill_candidate(p)
-    tally["patterns_updated"] += 1
+    if json.dumps(p, sort_keys=True, ensure_ascii=False) != before:
+        tally["patterns_updated"] += 1
     # description / recommendation are the model's words - never overwritten.
 
 
@@ -800,6 +868,8 @@ def run(args) -> int:
     try:
         errors = load_json(args.mem, "iterations/errors.json", [])
         patterns = load_json(args.mem, "patterns/patterns.json", [])
+        validate_patterns(patterns)
+        loaded_text = json_text(patterns)  # the catalog as read, before any change
         # Archived ids are read lazily - only a run that assigns a NEW id needs them,
         # so a broken archive cannot block --refresh or an --update without new ids.
         _archived: list = []
@@ -862,15 +932,26 @@ def run(args) -> int:
                     tally["patterns_added"] += 1
                 proposals = [p for p in proposals if p["cluster_key"] != key]
 
+        # DCO #10149: everything is computed and rendered in memory first - the
+        # projection used to be rendered after patterns.json had been replaced,
+        # so a render failure left a changed JSON next to a stale patterns.md.
+        new_json = json_text(patterns)
+        new_md = render_patterns_md(patterns, date)
         # --refresh forces the projection: "refresh patterns" must actually rewrite
         # patterns.md, and a run that changed nothing writes nothing without it.
-        if (args.refresh or tally["patterns_added"] or tally["patterns_updated"]
-                or tally["patterns_normalized"]):
-            write_json(args.mem, "patterns/patterns.json", patterns, args.dry_run, touched)
-            write_atomic(args.mem, "patterns/patterns.md",
-                         render_patterns_md(patterns, date), args.dry_run, touched)
+        # Either way a file whose bytes stay the same keeps its mtime; all disk
+        # reads happen before the first write.
+        pending = []
+        if args.refresh or new_json != loaded_text:
+            for rel, text in (("patterns/patterns.json", new_json),
+                              ("patterns/patterns.md", new_md)):
+                if disk_bytes(args.mem, rel) != text.encode("utf-8"):
+                    pending.append((rel, text))
+        for rel, text in pending:
+            write_atomic(args.mem, rel, text, args.dry_run, touched)
     except (PlanError, OSError, ValueError) as e:  # ValueError: decode/shape (5.2.1)
-        kind = ("plan rejected" if isinstance(e, PlanError)
+        kind = ("store rejected" if isinstance(e, StoreError)
+                else "plan rejected" if isinstance(e, PlanError)
                 else "io error" if isinstance(e, OSError) else "unreadable input")
         print(json.dumps({"ok": False, "error": f"{kind}: {e}", "files_written": touched},
                          ensure_ascii=False))

@@ -44,7 +44,9 @@ Report age-based risks (the dimension the manual audit got wrong from old data):
 2. **quality never initialized** — if `quality/quality-score.json` has `last_updated: null`
    while `iterations/iteration-log.md` has entries → flag "quality metrics never run".
 3. **user.md stub** — if `identity/user.md` is still only the init stub (no real Preferences)
-   → flag "user.md not growing — check wrap-up Step 6 candidate queue".
+   → flag "user.md not growing — check wrap-up Step 6 candidate queue". Skip this flag while the
+   central profile is active (`~/.agent-memory/identity/profile.md` exists): wrap-up then grows
+   `profile.md`, and the project's `user.md` stays a stub by design.
 4. **soul candidates pending** — if `identity/soul-candidates.md` has open candidates → note
    "N soul candidates awaiting the [j/n] gate at next session start".
 

@@ -9,7 +9,7 @@ model: sonnet
 effort: low
 metadata:
   author: agentic-os
-  version: '3.6'
+  version: '3.7'
   part-of: agentic-os
   layer: core
 ---
@@ -108,6 +108,15 @@ Read files in this priority order. Skip any that don't exist:
 7. **`iterations/errors.json`** — last 3 entries only (tail, not full load)
 8. **`working/current-session.json`** — if exists, resume working memory from interrupted session
 9. **`context/open-tasks.json`** — open/blocked tasks (SSoT for next steps; feeds Step 6)
+
+**Central profile (central-profile-read)** (P2). When `~/.agent-memory/identity/profile.md` exists (or
+the one under `$AGENTIC_OS_IDENTITY_STORE`), the central profile is active. Item 3 then reads the
+projection `identity/profile-briefing.txt` next to it (at most 6 lines, the most confirmed statements)
+instead of the project's `user.md`; open the full `profile.md` (~50 KB, all projects) only when a
+question really needs it. Gates 6.5(b) and (c) take their numbers from the stage-0 state
+(`identity.target`, `identity.promotable`, `identity.promotable_example`, `identity.last_seen`): the
+central queue `profile-candidates.json` (~360 KB) is never read by the bootstrap. The project's own
+`user.md` is then legacy and not loaded.
 
 Apply identity settings from `soul.md` silently (communication style, guard rails).
 
@@ -367,16 +376,20 @@ user-triggered, never autonomous, touches only soul.md + changelog + queue.
 
 ### (b) User candidate fallback gate
 
-Read `working/user-candidates.json`. If any candidate meets wrap-up's promotion gate
-(status `confirmed`, or `inferred` with occurrences >= 2 and confidence >= 0.6) but is
-not yet `promoted` — wrap-up apparently missed it. Add ONE briefing line:
+Take `identity.promotable` and `identity.promotable_example` from the stage-0 state: they count the
+candidates of the queue wrap-up writes to (the project's `working/user-candidates.json`, or the central
+queue when `identity.target` is `central`) that meet wrap-up's promotion gate (status `confirmed`, or
+`inferred` with occurrences >= 2 and confidence >= 0.6) but are not yet `promoted`. Only without a
+stage-0 state read `working/user-candidates.json` yourself - never the central queue. If the count is
+above 0 - wrap-up apparently missed them - add ONE briefing line:
 `USER CANDIDATES: {n} promotable (z.B. {id}: {key}) — jetzt übernehmen? [j/n]`
-On explicit `j`: perform wrap-up Step 6.3's promotion (changelog first, then user.md,
-then mark `promoted`). Same audit trail, same trust rules.
+On explicit `j`: perform wrap-up Step 6.3's promotion (changelog first, then user.md - or
+`profile.md` - then mark `promoted`) through `apply_wrapup.py`. Same audit trail, same trust rules.
 
 ### (c) Identity starvation warning (read-only)
 
-Compare `max(last_seen)` across user-candidates.json with the local session-summary
+Compare `identity.last_seen` from the stage-0 state (the newest `last_seen` of that same queue; without a
+stage-0 state `max(last_seen)` across user-candidates.json) with the local session-summary
 date. If the last identity observation is 2+ sessions old (or the file is empty while
 sessions exist), add to HEALTH:
 `Identity-Scan zuletzt {date} — Pipeline verhungert, wrap-up Step 6 prüfen`

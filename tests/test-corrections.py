@@ -20,8 +20,10 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "apply_wrapup.py")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
-ENV = dict(os.environ, PYTHONIOENCODING="utf-8",
-           AGENTIC_OS_SNAPSHOT_DIR=tempfile.mkdtemp(prefix="corr-snaps-"))
+from _isolated_home import process_env  # noqa: E402
+
+# Subprozesse laufen mit frischem Temp-Home statt mit dem echten Home (P0, tests/_isolated_home.py)
+ENV, ISO_HOME = process_env(PYTHONIOENCODING="utf-8")
 
 TESTS = PASSED = ERRORS = 0
 try:

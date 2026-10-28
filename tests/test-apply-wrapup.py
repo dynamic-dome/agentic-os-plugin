@@ -19,6 +19,11 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "scripts", "apply_wrapup.py")
 
+from _isolated_home import process_env  # noqa: E402
+
+# Subprozesse laufen mit frischem Temp-Home statt mit dem echten Home (P0, tests/_isolated_home.py)
+ENV, ISO_HOME = process_env()
+
 TESTS = PASSED = ERRORS = 0
 
 
@@ -142,7 +147,7 @@ def snapshot(mem):
 def run(mem, plan, *extra):
     proc = subprocess.run(
         [sys.executable, SCRIPT, mem, "--session-id", "sess-A", *extra],
-        input=json.dumps(plan), capture_output=True, text=True, encoding="utf-8",
+        input=json.dumps(plan), capture_output=True, text=True, encoding="utf-8", env=ENV,
     )
     try:
         return proc.returncode, json.loads(proc.stdout)
@@ -203,7 +208,7 @@ mem = make_mem()
 write(mem, "learnings/learnings.md", "# Learnings\n\n- handgebaut, ohne Kopf\n")
 before = snapshot(mem)
 proc = subprocess.run([sys.executable, SCRIPT, mem, "--render-learnings"],
-                      input="", capture_output=True, text=True, encoding="utf-8")
+                      input="", capture_output=True, text=True, encoding="utf-8", env=ENV)
 md = read(mem, "learnings/learnings.md")
 check(proc.returncode == 0 and md.startswith("# Learnings\n\n" + LEARNINGS_MD_HEADER + "\n")
       and "**L1**" in md and "handgebaut" not in md,
@@ -221,7 +226,7 @@ for case, setup_src in (("corrupt", lambda m: write(m, "learnings/learnings.json
     setup_src(mem)
     before = snapshot(mem)
     proc = subprocess.run([sys.executable, SCRIPT, mem, "--render-learnings"],
-                          input="", capture_output=True, text=True, encoding="utf-8")
+                          input="", capture_output=True, text=True, encoding="utf-8", env=ENV)
     check(proc.returncode == 2 and snapshot(mem) == before,
           f"--render-learnings with {case} learnings.json: exit 2, nothing renamed or written (rc={proc.returncode})")
 
@@ -291,9 +296,12 @@ def bridge_mem():
     return mem
 
 
+# P1/B2: every owner-facing proposal carries `plain` (plain German, <= 600 characters).
+PLAIN = "Das gilt in jedem Projekt und jeder Sitzung, nicht nur hier."
 DECIDE = {"date": "2026-10-16", "bridge_decisions": [
-    {"id": "L2", "status": "approved", "note": "Gilt  projektuebergreifend,\n  jede Session."},
-    {"id": "L3", "status": "rejected", "note": "Nur fuer dieses Repo relevant."},
+    {"id": "L2", "status": "approved", "note": "Gilt  projektuebergreifend,\n  jede Session.", "plain": PLAIN},
+    {"id": "L3", "status": "rejected", "note": "Nur fuer dieses Repo relevant.",
+     "plain": "Das betrifft nur dieses eine Projekt."},
 ]}
 mem = bridge_mem()
 rc, out = run(mem, DECIDE)
@@ -303,6 +311,8 @@ check(rc == 0 and by_id["L2"]["bridge_status"] == "approved" and by_id["L3"]["br
 check(by_id["L2"].get("bridge_note") == "2026-10-16 agent: Gilt projektuebergreifend, jede Session."
       and by_id["L3"].get("bridge_note") == "2026-10-16 agent: Nur fuer dieses Repo relevant.",
       f"the reason lands on the object as one line '<date> <by>: <note>' ({by_id['L2'].get('bridge_note')!r})")
+check(by_id["L2"].get("bridge_plain") == PLAIN and by_id["L3"].get("bridge_plain") == "Das betrifft nur dieses eine Projekt.",
+      f"the plain-language text lands in its own field bridge_plain ({by_id['L2'].get('bridge_plain')!r})")
 t = out.get("tally", {})
 check(t.get("bridge_approved") == ["L2"] and t.get("bridge_rejected") == ["L3"]
       and t.get("bridge_status_changed") == 2,
@@ -325,14 +335,14 @@ check(rc == 0 and snapshot(mem) == before,
       "the same verdict + reason on a later day rewrites nothing (decision date kept)")
 # owner override = rollback: the same section, `by: owner`, no special path
 rc, out = run(mem, {"date": "2026-10-17", "bridge_decisions": [
-    {"id": "L2", "status": "rejected", "note": "Dominic: doch nicht", "by": "owner"}]})
+    {"id": "L2", "status": "rejected", "note": "Dominic: doch nicht", "by": "owner", "plain": PLAIN}]})
 row = {r["id"]: r for r in load(mem, "learnings/learnings.json")}["L2"]
 check(rc == 0 and row["bridge_status"] == "rejected" and row["bridge_note"] == "2026-10-17 owner: Dominic: doch nicht"
       and out["tally"]["bridge_status_changed"] == 1,
       "an earlier decision can be turned back (owner override), marked 'owner'")
 # note-only change: written, but no status change -> projections not needed
 rc, out = run(mem, {"date": "2026-10-17", "bridge_decisions": [
-    {"id": "L3", "status": "rejected", "note": "Neu begruendet"}]})
+    {"id": "L3", "status": "rejected", "note": "Neu begruendet", "plain": "Das betrifft nur dieses eine Projekt."}]})
 row = {r["id"]: r for r in load(mem, "learnings/learnings.json")}["L3"]
 check(rc == 0 and row["bridge_note"] == "2026-10-17 agent: Neu begruendet" and out["tally"]["bridge_status_changed"] == 0,
       "a new reason for the same status updates the note, bridge_status_changed stays 0")
@@ -363,6 +373,8 @@ BAD = [
     ("not an object", "L2"),
 ]
 for case, item in BAD:
+    if isinstance(item, dict):
+        item = {"plain": PLAIN, **item}  # each case must fail for the reason it names, not for a missing plain
     mem = bridge_mem()
     before = snapshot(mem)
     rc, out = run(mem, {"date": "2026-10-16", "iterations": [{"title": "Vorher geschrieben?"}],
@@ -379,9 +391,17 @@ check(rc == 2 and snapshot(mem) == before, "bridge_decisions must be a list")
 
 # --- 2. trust boundary + mood block -----------------------------------------
 mem = make_mem()
+# P1/B2: `confirmed` counts only with a quote that stands in a real user message of the session
+# transcript. The fake transcript lives in the isolated test home, where the script looks for it.
+transcript_dir = os.path.join(ISO_HOME, ".claude", "projects", "proj-test")
+os.makedirs(transcript_dir, exist_ok=True)
+with open(os.path.join(transcript_dir, "sess-A.jsonl"), "w", encoding="utf-8") as fh:
+    fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "Ich bin heute wirklich genervt vom Ablauf"},
+                         "origin": {"kind": "human"}}) + "\n")
 rc, out = run(mem, {"date": "2026-07-27", "user_candidates": [
     {"key": "aus-web", "observation": "Von einer Webseite", "trust_source": "web"},
-    {"key": "laune", "observation": "War genervt", "signal_type": "mood", "confirmed": True},
+    {"key": "laune", "observation": "War genervt", "signal_type": "mood", "confirmed": True,
+     "quote": "wirklich genervt vom Ablauf"},
 ]})
 check(out["tally"]["candidates_rejected_trust"] == 1,
       "trust_source != conversation is rejected (poisoning defense)")
@@ -391,7 +411,9 @@ laune_id = [c["id"] for c in load(mem, "working/user-candidates.json") if c["key
 check(laune_id not in out["tally"]["promoted_ids"],
       "signal_type=mood is never promoted, even when confirmed")
 laune = [c for c in load(mem, "working/user-candidates.json") if c["key"] == "laune"][0]
-check(laune["status"] == "confirmed", "mood candidate is still recorded, just not promoted")
+check(laune["status"] == "confirmed" and laune.get("quote_verified") is True,
+      "mood candidate is still recorded (confirmed by a verified quote), just not promoted")
+shutil.rmtree(os.path.join(ISO_HOME, ".claude"), ignore_errors=True)
 
 # --- 3. promotion rule + changelog ordering ---------------------------------
 mem = make_mem()
@@ -547,7 +569,7 @@ fake_home = tempfile.mkdtemp(prefix="wrapup-home-")
 mem = os.path.join(fake_home, "AI", ".agent-memory")
 shutil.copytree(make_mem(), mem)
 write(mem, "session-summary.md", HANDOFF)
-env = dict(os.environ, USERPROFILE=fake_home, HOME=fake_home)
+env = dict(ENV, USERPROFILE=fake_home, HOME=fake_home)
 proc = subprocess.run([sys.executable, SCRIPT, mem, "--session-id", "sess-A"], input=json.dumps(SUMMARY_PLAN),
                       capture_output=True, text=True, encoding="utf-8", env=env)
 check(proc.returncode == 0 and read(mem, "session-summary.md") == HANDOFF,
@@ -1053,7 +1075,7 @@ check(out["tally"]["candidates_promoted"] == 1,
 # The skill pipes the plan as a heredoc. On Windows sys.stdin defaults to cp1252,
 # so every "—" in the plan became "â€”" on disk (L57/L59/L60 membrain, L177-L179 DCO).
 mem = make_mem()
-env = dict(os.environ, PYTHONIOENCODING="cp1252")
+env = dict(ENV, PYTHONIOENCODING="cp1252")
 proc = subprocess.run(
     [sys.executable, SCRIPT, mem, "--session-id", "sess-A"],
     input=json.dumps({"date": "2026-09-09", "learnings": [

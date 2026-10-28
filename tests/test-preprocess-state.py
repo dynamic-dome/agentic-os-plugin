@@ -5,6 +5,7 @@ Covers spec test cases 24.1 (unchanged state -> hash equality) and the
 deterministic half of 24.4 (structured delta instead of transcripts).
 Run: python tests/test-preprocess-state.py  (exit 0 = pass)
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -13,6 +14,11 @@ import tempfile
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(PLUGIN_ROOT, "scripts", "preprocess_state.py")
+
+from _isolated_home import process_env  # noqa: E402
+
+# Subprozesse laufen mit frischem Temp-Home statt mit dem echten Home (P0, tests/_isolated_home.py)
+ENV, ISO_HOME = process_env()
 
 FAILURES = []
 
@@ -28,7 +34,7 @@ def check(name, cond, detail=""):
 def run(args, cwd):
     proc = subprocess.run(
         [sys.executable, SCRIPT] + args,
-        capture_output=True, encoding="utf-8", errors="replace", cwd=cwd,
+        capture_output=True, encoding="utf-8", errors="replace", cwd=cwd, env=ENV,
     )
     return proc
 
@@ -210,7 +216,7 @@ def main():
         tasks_cjk = [{"id": "T3", "title": "emoji \U0001F600 and CJK 中文", "status": "open"}]
         with open(os.path.join(mem, "context", "open-tasks.json"), "w", encoding="utf-8") as f:
             json.dump(tasks_cjk, f, ensure_ascii=False)
-        env = dict(os.environ)
+        env = dict(ENV)
         env.pop("PYTHONIOENCODING", None)
         env.pop("PYTHONUTF8", None)
         proc = subprocess.run(
@@ -256,6 +262,218 @@ def main():
               and states["bom"]["changed_files"] == ["src/app.py"]
               and states["bom"]["validation_errors"] == ["learnings.json: L1 references unknown pattern P006"],
               str(states["bom"]))
+
+    # 13. P1/B2: the state hands the model the keys of the existing user candidates, so a repeated
+    # observation reuses its key and the repeat path (occurrences++) works again. Capped, open first.
+    CAP, OBS_MAX = 40, 80
+    SID_ARGS = ["--session-id", "s-wrapup"]  # D10: the candidate list is only given to a wrap-up (it passes a session id)
+
+    def write_queue(mem, rows, raw=None):
+        os.makedirs(os.path.join(mem, "working"), exist_ok=True)
+        with open(os.path.join(mem, "working", "user-candidates.json"), "wb") as f:
+            f.write(raw if raw is not None else json.dumps(rows, ensure_ascii=False).encode("utf-8"))
+
+    def row(i, status="observed", seen=None, obs=None, occ=1, signal="preference"):
+        return {"id": f"UC{i}", "key": f"key-{i:03d}", "observation": obs if obs is not None else f"Beobachtung {i}",
+                "status": status, "signal_type": signal, "confidence": 0.5, "occurrences": occ,
+                "last_seen": seen or f"2026-09-{(i % 28) + 1:02d}", "trust_source": "conversation"}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        mem = os.path.join(tmp, ".agent-memory")
+        os.makedirs(mem)
+        state = json.loads(run([mem] + SID_ARGS, cwd=tmp).stdout)
+        check("candidates: no queue file -> empty list, total 0",
+              state.get("user_candidates") == [] and state.get("user_candidates_total") == 0, str(state.get("user_candidates")))
+
+        write_queue(mem, [row(1, "observed", obs="Kurz", occ=3), row(2, "promoted"), row(3, "inferred", obs="x" * 200),
+                          row(4, "confirmed"), {"key": 5}, "kein objekt", {"id": "UC6", "observation": "ohne key"}])
+        p = run([mem] + SID_ARGS, cwd=tmp)
+        state = json.loads(p.stdout)
+        got = state.get("user_candidates") or []
+        check("candidates: exit 0 and the listed entries carry exactly key, observation, status, occurrences",
+              p.returncode == 0 and isinstance(got, list) and got
+              and all(set(e) == {"key", "observation", "status", "occurrences"} for e in got), str(got)[:300])
+        by = {e["key"]: e for e in got or []}
+        check("candidates: key, status and occurrences are passed through",
+              by.get("key-001") == {"key": "key-001", "observation": "Kurz", "status": "observed", "occurrences": 3}, str(by.get("key-001")))
+        check("candidates: an observation over 80 characters is cut to 80, with an ellipsis",
+              len(by.get("key-003", {}).get("observation", "")) == OBS_MAX and by.get("key-003", {}).get("observation", "").endswith("…"), str(len(by.get("key-003", {}).get("observation", ""))))
+        check("candidates: rows without a key and non-objects are skipped, total counts the usable ones",
+              set(by) == {"key-001", "key-002", "key-003", "key-004"} and state.get("user_candidates_total") == 4,
+              f"{sorted(by)} total={state.get('user_candidates_total')}")
+        order = [e["key"] for e in got]
+        check("candidates: open ones first (a promoted one is last)", order[-1:] == ["key-002"] and "key-004" in order and order.index("key-002") > order.index("key-004"), str(order))
+
+        # cap: 45 open + 15 promoted -> 40, all of them open, the newest open first
+        rows = [row(i, "observed", seen=f"2026-08-{(i % 28) + 1:02d}") for i in range(1, 46)] +                [row(100 + i, "promoted", seen="2026-10-27") for i in range(15)]
+        write_queue(mem, rows)
+        state = json.loads(run([mem] + SID_ARGS, cwd=tmp).stdout)
+        got = state.get("user_candidates", [])
+        # independent oracle: newest last_seen first, ties -> later in the file first
+        newest_open = [r for _pos, r in sorted([(pos, r) for pos, r in enumerate(rows) if r["status"] == "observed"],
+                                               key=lambda t: (t[1]["last_seen"], t[0]), reverse=True)][:CAP]
+        check("candidates: the cap holds (40 of 60), total says 60",
+              len(got) == CAP and state.get("user_candidates_total") == 60, f"len={len(got)} total={state.get('user_candidates_total')}")
+        check("candidates: with 45 open ones only open ones are listed",
+              all(e["status"] == "observed" for e in got), str({e["status"] for e in got}))
+        check("candidates: of the open ones the newest (last_seen) are kept",
+              [e["key"] for e in got] == [r["key"] for r in newest_open], str([e["key"] for e in got][:5]))
+        # cap: 30 open + 30 promoted -> 30 open, then the 10 newest promoted
+        rows = [row(i, "observed") for i in range(1, 31)] +                [row(100 + i, "promoted", seen=f"2026-07-{i + 1:02d}") for i in range(30)]
+        write_queue(mem, rows)
+        got = json.loads(run([mem] + SID_ARGS, cwd=tmp).stdout).get("user_candidates", [])
+        check("candidates: 30 open first, the remaining 10 slots go to the newest promoted ones",
+              len(got) == CAP and [e["status"] for e in got].count("observed") == 30
+              and [e["key"] for e in got][30:] == [f"key-{100 + i:03d}" for i in range(29, 19, -1)],
+              str([e["key"] for e in got][28:]))
+        # mood can never be promoted, so it does not take an "open" slot
+        write_queue(mem, [row(1, "confirmed", signal="mood", seen="2026-10-27"), row(2, "observed", seen="2026-01-01")])
+        got = json.loads(run([mem] + SID_ARGS, cwd=tmp).stdout).get("user_candidates", [])
+        check("candidates: a mood candidate ranks behind the open ones", [e["key"] for e in got] == ["key-002", "key-001"], str(got))
+
+        # the fast-path hash is untouched by the queue (working/ stays out of the state hash)
+        with open(os.path.join(mem, "session-summary.md"), "w", encoding="utf-8") as f:
+            f.write("# Last Session\nso the hash covers something\n")
+        write_queue(mem, [row(1)])
+        h1 = json.loads(run([mem] + SID_ARGS, cwd=tmp).stdout)["current_state_hash"]
+        write_queue(mem, [row(i) for i in range(1, 50)])
+        s2 = json.loads(run([mem] + SID_ARGS, cwd=tmp).stdout)
+        check("candidates: a changed queue leaves current_state_hash alone (bootstrap fast path)",
+              s2["current_state_hash"] == h1 and h1 != hashlib.sha256(b"").hexdigest() and len(s2.get("user_candidates", [])) == CAP,
+              f"{h1[:8]} vs {s2['current_state_hash'][:8]}")
+
+        # fail-soft: damaged queue files never break the state
+        for label, raw in (("broken json", b"{kaputt"), ("a dict instead of a list", b'{"a": 1}'), ("null", b"null"),
+                           ("a BOM in front", b"\xef\xbb\xbf" + json.dumps([row(1)]).encode("utf-8"))):
+            write_queue(mem, None, raw=raw)
+            p = run([mem] + SID_ARGS, cwd=tmp)
+            try:
+                state = json.loads(p.stdout)
+            except ValueError:
+                state = {}
+            want = ["key-001"] if "BOM" in label else []
+            check(f"candidates: {label} -> exit 0, valid JSON, {'key kept' if want else 'empty list'}",
+                  p.returncode == 0 and "user_candidates" in state and [e["key"] for e in state["user_candidates"]] == want, p.stdout[:200] + p.stderr[:200])
+        # a malformed command line still yields the full state shape
+        state = json.loads(run([mem, "--bogus-flag"], cwd=tmp).stdout)
+        check("candidates: the fail-soft fallback state has the new fields too",
+              state.get("user_candidates") == [] and state.get("user_candidates_total") == 0, str(state)[:200])
+
+
+    # 14. D10: the candidate list costs up to ~7 KB per start, but only wrap-up uses it. The bootstrap call carries no
+    # --session-id and must not pay for it; the total still says how many exist, the hash and the fast path stay as they are.
+    with tempfile.TemporaryDirectory() as tmp:
+        mem = os.path.join(tmp, ".agent-memory")
+        os.makedirs(os.path.join(mem, "working"))
+        with open(os.path.join(mem, "session-summary.md"), "w", encoding="utf-8") as f:
+            f.write("# Last Session\nso the hash covers something\n")
+        write_queue(mem, [row(i) for i in range(1, 51)])
+        bare = run([mem], cwd=tmp)
+        withsid = run([mem] + SID_ARGS, cwd=tmp)
+        sb, sw = json.loads(bare.stdout), json.loads(withsid.stdout)
+        check("D10: without --session-id no candidate list (the bootstrap call does not pay for it)",
+              bare.returncode == 0 and sb.get("user_candidates") == [], str(sb.get("user_candidates"))[:120])
+        check("D10: without --session-id the total still says how many candidates exist (50)",
+              sb.get("user_candidates_total") == 50, str(sb.get("user_candidates_total")))
+        check("D10: with --session-id the list is given (capped at 40), total 50",
+              withsid.returncode == 0 and len(sw.get("user_candidates", [])) == CAP and sw.get("user_candidates_total") == 50,
+              f"{len(sw.get('user_candidates', []))} total={sw.get('user_candidates_total')}")
+        check("D10: the state hash is the same with and without the list (fast path unchanged)",
+              sb["current_state_hash"] == sw["current_state_hash"] and sb["current_state_hash"] != "", f"{sb['current_state_hash'][:8]}")
+        check("D10: every other field is identical in both calls",
+              {k: v for k, v in sb.items() if k not in ("user_candidates", "user_candidates_total", "session_id")}
+              == {k: v for k, v in sw.items() if k not in ("user_candidates", "user_candidates_total", "session_id")},
+              "state differs")
+        check("D10: the bare state is smaller than the wrap-up state", len(bare.stdout) + 3000 < len(withsid.stdout),
+              f"{len(bare.stdout)} vs {len(withsid.stdout)}")
+        check("D10: an empty --session-id counts as none", json.loads(run([mem, "--session-id", ""], cwd=tmp).stdout).get("user_candidates") == [])
+
+    # 15. P2: stage 0 knows the central profile (--identity-store; active only with identity/profile.md)
+    with tempfile.TemporaryDirectory() as tmp:
+        mem = os.path.join(tmp, ".agent-memory")
+        os.makedirs(os.path.join(mem, "working"))
+        os.makedirs(os.path.join(mem, "identity"))
+        with open(os.path.join(mem, "working", "user-candidates.json"), "w", encoding="utf-8") as f:
+            json.dump([{"key": "projekt-key", "observation": "aus dem Projekt", "status": "observed"}], f)
+        with open(os.path.join(mem, "identity", "user.md"), "w", encoding="utf-8") as f:
+            f.write("# User Profile\n\n## Preferences\n- Projektzeile\n")
+        central = os.path.join(tmp, "central")
+        os.makedirs(os.path.join(central, "identity"))
+        with open(os.path.join(central, "identity", "profile-candidates.json"), "w", encoding="utf-8") as f:
+            json.dump([{"key": "pc-key", "observation": "aus dem Zentral", "status": "observed"}], f)
+        cs = ["--identity-store", central]
+
+        legacy = json.loads(run([mem, "--session-id", "s1"] + cs, cwd=tmp).stdout)
+        check("P1: without profile.md the central store is inactive, keys come from the project",
+              [c["key"] for c in legacy.get("user_candidates", [])] == ["projekt-key"], str(legacy.get("user_candidates")))
+        profile = os.path.join(central, "identity", "profile.md")
+        with open(profile, "w", encoding="utf-8") as f:
+            f.write("# Profil\n\n## Preferences\n- Zentralzeile\n")
+        active = json.loads(run([mem, "--session-id", "s1"] + cs, cwd=tmp).stdout)
+        check("P1: with an active central profile the keys come from profile-candidates.json",
+              [c["key"] for c in active.get("user_candidates", [])] == ["pc-key"] and active.get("user_candidates_total") == 1,
+              str(active.get("user_candidates")))
+
+        # P2 the central profile.md is part of the state hash; without a central profile the hash is today's
+        check("P2: an active central profile changes the state hash",
+              active["current_state_hash"] != legacy["current_state_hash"], legacy["current_state_hash"][:8])
+        with open(profile, "a", encoding="utf-8") as f:
+            f.write("- Noch eine Zentralzeile\n")
+        changed = json.loads(run([mem] + cs, cwd=tmp).stdout)
+        check("P2: a change to the central profile.md changes the state hash",
+              changed["current_state_hash"] not in (active["current_state_hash"], legacy["current_state_hash"]))
+        os.remove(profile)
+        back = json.loads(run([mem] + cs, cwd=tmp).stdout)
+        check("P2: without a central profile the hash is the project-only value again",
+              back["current_state_hash"] == legacy["current_state_hash"])
+        h = hashlib.sha256()
+        with open(os.path.join(mem, "identity", "user.md"), "rb") as f:
+            h.update(b"identity/user.md" + b"\0" + f.read() + b"\0")
+        check("P2: the project-only hash is exactly the STATE_FILES rule (regression value)",
+              back["current_state_hash"] == h.hexdigest(), f"{back['current_state_hash'][:8]} vs {h.hexdigest()[:8]}")
+
+        # P3 a broken central queue is fail-soft: empty list, a warning, exit 0
+        with open(profile, "w", encoding="utf-8") as f:
+            f.write("# Profil\n")
+        with open(os.path.join(central, "identity", "profile-candidates.json"), "w", encoding="utf-8") as f:
+            f.write("{kaputt")
+        p = run([mem, "--session-id", "s1"] + cs, cwd=tmp)
+        broken = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else {}
+        check("P3: broken central queue -> exit 0, empty candidate list, warning on stderr",
+              p.returncode == 0 and broken.get("user_candidates") == [] and "profile-candidates.json" in p.stderr,
+              f"rc={p.returncode} {p.stderr[:160]}")
+
+    # 16. P2 (Gesamtpruefung R2): Stufe 0 liefert dem Bootstrap Zahl und Beispiel der promotebaren Kandidaten und das
+    # letzte Identitaets-Datum aus der RICHTIGEN Queue - der Bootstrap muss die 357-KB-Queue nicht selbst lesen
+    with tempfile.TemporaryDirectory() as tmp:
+        mem = os.path.join(tmp, ".agent-memory")
+        os.makedirs(os.path.join(mem, "working"))
+        with open(os.path.join(mem, "working", "user-candidates.json"), "w", encoding="utf-8") as f:
+            json.dump([{"id": "UC1", "key": "p", "status": "observed", "last_seen": "2026-09-01",
+                        "trust_source": "conversation"}], f)
+        central = os.path.join(tmp, "central")
+        os.makedirs(os.path.join(central, "identity"))
+        with open(os.path.join(central, "identity", "profile-candidates.json"), "w", encoding="utf-8") as f:
+            json.dump([{"id": "PC1", "key": "ja", "status": "confirmed", "last_seen": "2026-10-20", "trust_source": "conversation"},
+                       {"id": "PC2", "key": "inf", "status": "inferred", "occurrences": 2, "confidence": 0.7,
+                        "last_seen": "2026-10-25", "trust_source": "conversation"},
+                       {"id": "PC3", "key": "nein", "status": "inferred", "occurrences": 1, "confidence": 0.9,
+                        "last_seen": "2026-10-27", "trust_source": "conversation"},
+                       {"id": "PC4", "key": "laune", "status": "confirmed", "signal_type": "mood", "trust_source": "conversation"},
+                       {"id": "PC5", "key": "datei", "status": "confirmed", "trust_source": "file"},
+                       {"id": "PC6", "key": "fertig", "status": "promoted", "last_seen": "2026-10-28", "trust_source": "conversation"}], f)
+        with open(os.path.join(central, "identity", "profile.md"), "w", encoding="utf-8") as f:
+            f.write("# Profil\n")
+        st = json.loads(run([mem, "--identity-store", central], cwd=tmp).stdout)
+        idn = st.get("identity") or {}
+        check("P4: central identity summary (target, promotable 2, example, newest last_seen)",
+              idn.get("target") == "central" and idn.get("promotable") == 2 and idn.get("promotable_example") == "PC1: ja"
+              and idn.get("last_seen") == "2026-10-28", str(idn))
+        os.remove(os.path.join(central, "identity", "profile.md"))
+        st = json.loads(run([mem, "--identity-store", central], cwd=tmp).stdout)
+        idn = st.get("identity") or {}
+        check("P4: without a central profile the summary comes from the project queue",
+              idn.get("target") == "project" and idn.get("promotable") == 0 and idn.get("last_seen") == "2026-09-01", str(idn))
 
     n = len(FAILURES)
     print(f"=== {('ALL PASSED' if n == 0 else str(n) + ' FAILURE(S)')} ===")

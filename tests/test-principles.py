@@ -25,10 +25,14 @@ APPLY = os.path.join(SCRIPTS, "apply_wrapup.py")
 PROJ = os.path.join(SCRIPTS, "memory_index_projection.py")
 LIFE = os.path.join(SCRIPTS, "learnings_lifecycle.py")
 sys.path.insert(0, SCRIPTS)
-ENV = dict(os.environ, PYTHONIOENCODING="utf-8",
-           AGENTIC_OS_SNAPSHOT_DIR=tempfile.mkdtemp(prefix="princ-snaps-"))
+from _isolated_home import process_env  # noqa: E402
+
+# Subprozesse laufen mit frischem Temp-Home statt mit dem echten Home (P0, tests/_isolated_home.py)
+ENV, ISO_HOME = process_env(PYTHONIOENCODING="utf-8")
 BEGIN = "<!-- bridge:claude-native:begin"
 END = "<!-- bridge:claude-native:end -->"
+# D11: every pointer card carries `plain` (plain German for the owner, 1..600 characters), stored on the pointer
+PLAIN = "In Windows-Skripten immer den Programmpfad vorher suchen und die Textcodierung ausdruecklich auf UTF-8 setzen."
 
 TESTS = PASSED = ERRORS = 0
 try:
@@ -117,7 +121,7 @@ print("--- principles plan section")
 members_before = json.load(open(os.path.join(mem, "learnings", "learnings.json"), encoding="utf-8"))
 plan = {"date": "2026-10-08", "principles": [
     {"summary": "Windows-Subprocess: Binary per shutil.which aufloesen, Encoding explizit utf-8.",
-     "anchor": f"{rules}#Windows-Subprocess", "members": ["L1", "L2"], "tags": ["windows"]}]}
+     "anchor": f"{rules}#Windows-Subprocess", "members": ["L1", "L2"], "tags": ["windows"], "plain": PLAIN}]}
 rc, out = run([APPLY, mem], json.dumps(plan))
 rows = json.load(open(os.path.join(mem, "learnings", "learnings.json"), encoding="utf-8"))
 ptr = [r for r in rows if r.get("kind") == "principle"]
@@ -128,21 +132,23 @@ check(p.get("id") == "L9" and p.get("anchor", "").endswith("#Windows-Subprocess"
       f"pointer: next L-id, anchor, members in derived_from, importance = max member ({p})")
 check("review_after" not in p and p.get("summary", "").startswith("Windows-Subprocess"),
       "pointer: summary set, no review_after")
+check(p.get("plain") == PLAIN, f"pointer: the plain-language text is stored on the pointer ({p.get('plain')!r})")
 check([r for r in rows if r["id"] in ("L1", "L2")] == [r for r in members_before if r["id"] in ("L1", "L2")],
       "members stay unchanged (compared with the rows before the write)")
 rc, out = run([APPLY, mem], json.dumps({"date": "2026-10-09", "principles": [
     {"summary": "Windows-Subprocess: Binary per shutil.which aufloesen, Encoding explizit utf-8.",
-     "anchor": f"{rules}#Windows-Subprocess", "members": ["L2", "L3"]}]}))
+     "anchor": f"{rules}#Windows-Subprocess", "members": ["L2", "L3"], "plain": PLAIN + " Neu gefasst."}]}))
 rows = json.load(open(os.path.join(mem, "learnings", "learnings.json"), encoding="utf-8"))
 ptr = [r for r in rows if r.get("kind") == "principle"]
 check(rc == 0 and len(ptr) == 1 and ptr[0]["derived_from"] == ["L1", "L2", "L3"]
       and out["tally"]["principles_updated"] == 1,
       "same anchor again: members merged into the existing pointer, no second row")
-for bad, why in (({"summary": "x", "anchor": f"{rules}#Windows-Subprocess", "members": ["L404"]}, "unknown local member"),
-                 ({"summary": "x", "anchor": "", "members": ["L1"]}, "empty anchor"),
-                 ({"summary": "", "anchor": f"{rules}#Windows-Subprocess", "members": ["L1"]}, "empty summary"),
-                 ({"summary": "x", "anchor": f"{rules}#Windows-Subprocess", "members": []}, "no members"),
-                 ({"summary": "x", "anchor": f"{rules}#Nicht da", "members": ["L1"]}, "anchor does not resolve")):
+check(ptr[0].get("plain") == PLAIN + " Neu gefasst.", "same anchor again: the plain-language text is updated with the summary")
+for bad, why in (({"summary": "x", "anchor": f"{rules}#Windows-Subprocess", "members": ["L404"], "plain": PLAIN}, "unknown local member"),
+                 ({"summary": "x", "anchor": "", "members": ["L1"], "plain": PLAIN}, "empty anchor"),
+                 ({"summary": "", "anchor": f"{rules}#Windows-Subprocess", "members": ["L1"], "plain": PLAIN}, "empty summary"),
+                 ({"summary": "x", "anchor": f"{rules}#Windows-Subprocess", "members": [], "plain": PLAIN}, "no members"),
+                 ({"summary": "x", "anchor": f"{rules}#Nicht da", "members": ["L1"], "plain": PLAIN}, "anchor does not resolve")):
     before = sha(os.path.join(mem, "learnings", "learnings.json"))
     rc, out = run([APPLY, mem], json.dumps({"principles": [bad]}))
     check(rc == 2 and sha(os.path.join(mem, "learnings", "learnings.json")) == before,
@@ -154,11 +160,11 @@ rows += [row(f"L{100 + i}", f"Fuellzeile {i} mit eigenem Text {i * 13}", 3) for 
 put(os.path.join(mem, "learnings", "learnings.json"), rows)
 before = sha(os.path.join(mem, "learnings", "learnings.json"))
 rc, out = run([APPLY, mem], json.dumps({"principles": [
-    {"summary": "x", "anchor": f"{rules}#Windows-Subprocess", "members": ["L50"]}]}))
+    {"summary": "x", "anchor": f"{rules}#Windows-Subprocess", "members": ["L50"], "plain": PLAIN}]}))
 check(rc == 2, "a superseded learning is refused as member")
 rc, out = run([APPLY, mem], json.dumps({"iterations": [{"type": "feature", "title": "darf nicht"}],
                                         "principles": [{"summary": "x", "anchor": f"{rules}#Windows-Subprocess",
-                                                        "members": [f"L{100 + i}" for i in range(28)]}]}))
+                                                        "members": [f"L{100 + i}" for i in range(28)], "plain": PLAIN}]}))
 check(rc == 2 and not os.path.exists(os.path.join(mem, "iterations", "iteration-log.md"))
       and sha(os.path.join(mem, "learnings", "learnings.json")) == before,
       "merge over 30 members is refused before the iteration log is written")
@@ -167,11 +173,39 @@ check(rc == 2 and not os.path.exists(os.path.join(mem, "iterations", "iteration-
 for qid in ("dome-dynamics/L31", "native:dco/x.md:ab12cd34", "L1:x", "nummerlos"):
     before = sha(os.path.join(mem, "learnings", "learnings.json"))
     rc, out = run([APPLY, mem], json.dumps({"principles": [
-        {"summary": "Trust", "anchor": f"{rules}#^r-trust", "members": ["L1", qid]}]}))
+        {"summary": "Trust", "anchor": f"{rules}#^r-trust", "members": ["L1", qid], "plain": PLAIN}]}))
     err = str(out.get("error") or "")
     check(rc == 2 and "qualified" in err and qid in err and "rule_class" in err
           and sha(os.path.join(mem, "learnings", "learnings.json")) == before,
           f"qualified member {qid!r} refused with a clear message, before the first byte ({rc}, {err[:90]})")
+
+# D11: no plain, no pointer - the owner reads the card in plain words, so the card must carry them
+tmp_p, mem_p, rules_p = setup()
+learn_p = os.path.join(mem_p, "learnings", "learnings.json")
+good = {"summary": "Windows-Subprocess", "anchor": f"{rules_p}#Windows-Subprocess", "members": ["L1", "L2"], "plain": PLAIN}
+for label, entry in (("plain fehlt", {k: v for k, v in good.items() if k != "plain"}), ("plain leer", dict(good, plain="")),
+                     ("plain nur Whitespace", dict(good, plain=" \n ")), ("plain kein String", dict(good, plain=7)),
+                     ("plain zu lang (601 Zeichen)", dict(good, plain="x" * 601)),
+                     ("plain zu lang (Woerter, nach dem Zusammenfassen)", dict(good, plain="wort " * 130))):
+    before = sha(learn_p)
+    rc, out = run([APPLY, mem_p], json.dumps({"iterations": [{"title": "darf nicht geschrieben werden"}], "principles": [entry]}))
+    check(rc == 2 and "plain" in str(out.get("error")).lower() and sha(learn_p) == before
+          and not os.path.exists(os.path.join(mem_p, "iterations", "iteration-log.md")),
+          f"principles, {label}: plan rejected before the first byte ({rc}, {str(out.get('error'))[:80]})")
+rc, out = run([APPLY, mem_p], json.dumps({"principles": [dict(good, plain="y" * 600)]}))
+check(rc == 0, f"principles: exactly 600 characters of plain are accepted ({rc}, {out.get('error')})")
+rows_p = json.load(open(learn_p, encoding="utf-8"))
+check([r.get("plain") for r in rows_p if r.get("kind") == "principle"] == ["y" * 600],
+      "principles: plain is stored on the pointer row")
+check(all("plain" not in r for r in rows_p if r.get("kind") != "principle"), "principles: the member rows get no plain")
+# the entry is checked as a whole: the second of two entries without plain still rejects the first one
+tmp_p, mem_p, rules_p = setup()
+learn_p = os.path.join(mem_p, "learnings", "learnings.json")
+before = sha(learn_p)
+rc, out = run([APPLY, mem_p], json.dumps({"principles": [
+    {"summary": "A", "anchor": f"{rules_p}#Windows-Subprocess", "members": ["L1"], "plain": PLAIN},
+    {"summary": "B", "anchor": f"{rules_p}#Verifikation vor Aktion", "members": ["L3"]}]}))
+check(rc == 2 and sha(learn_p) == before, "principles: one entry without plain rejects the whole plan, the valid one is not written either")
 
 # ============================================================ 3. projection
 print("--- MEMORY.md projection (block first)")
@@ -255,7 +289,7 @@ check(top.get("anchor", "").endswith("#Windows-Subprocess") and top.get("score",
 check(props.get("L3", {}).get("matches", [{}])[0].get("anchor", "").endswith("#Verifikation vor Aktion"),
       "L3 matches the verification section")
 run([APPLY, mem], json.dumps({"principles": [{"summary": "Windows", "anchor": f"{rules}#Windows-Subprocess",
-                                               "members": ["L1"]}]}))
+                                               "members": ["L1"], "plain": PLAIN}]}))
 rc, out = run([LIFE, "propose", mem, "--catalog", rules, "--min-importance", "4", "--min-age-days", "0"])
 check("L1" not in {x["id"] for x in out.get("proposals", [])}, "a pointer member is not proposed again")
 rc, out = run([LIFE, "report", mem, "--min-importance", "4", "--min-age-days", "0"])

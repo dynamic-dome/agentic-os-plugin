@@ -4,6 +4,59 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-28] Release v5.9.1 — Öffentliche Fassung bereinigt
+PATCH, keine Funktionsänderung. Der Leck-Sweep vor der Veröffentlichung von 5.9.0 (R20, vier Leser und vier
+Gegenprüfer über alle 37 geänderten Dateien) fand keinen Blocker, aber Stellen, die nicht in die öffentliche Fassung
+gehören. Bereinigt:
+- **Zitate:** wörtliche Owner-Zitate in Changelog, wrap-up Step 3d, `commands/maintain.md` und `apply_wrapup.py`
+  durch neutrale Beschreibungen ersetzt.
+- **Beispiele und Testdaten:** Fixtures, die echten Profil- und soul-Einträgen nachgebildet waren, durch erfundene
+  ersetzt (`tests/test-identity-central.py`, `tests/test-migrate-identity.py`, `tests/test-session-start-identity.sh`,
+  `tests/test-identity-b2.py`, `tests/test-extract-patterns.py`); konkrete Bestandszahlen in den Docstrings von
+  `identity_store.py` und `migrate_identity.py` verallgemeinert. Die Tests prüfen dasselbe wie vorher.
+- **Pfade und interne Angaben:** Verweise auf private Werkzeuge und Ablagen, ein Branch-Name, private Commit-Hashes
+  und ein Beispielordner (`wrapup-schemas.md`) entfernt oder neutralisiert.
+
+## [2026-10-28] Release v5.9.0 — Zentrales Profil (P2), Profil-Qualität (P1/B2), Testisolation
+MINOR. Push und Publish bleiben beim Owner (Owner-Entscheid 28.10.: P2 erscheint allein als 5.9.0). Die echte
+Migration der Profile ist **kein Teil des Release**: Sie läuft erst nach der Installation von 5.9.0 und nach eigener
+Owner-Freigabe.
+
+- **Zentrales Profil (P2, B1 Release A):** ein Profil für alle Projekte in `~/.agent-memory/identity/` (`profile.md`,
+  `profile-candidates.json`, `profile-changelog.json`, eigenes Lock `profile.lock`, Projektion
+  `profile-briefing.txt`). Es ist genau dann aktiv, wenn `profile.md` existiert; die Migration schreibt diese Datei
+  zuletzt, Umbenennen ist der Rückweg. `scripts/identity_store.py` löst den Ort erst beim Aufruf auf
+  (`--identity-store`, `AGENTIC_OS_IDENTITY_STORE`, Home-Store) und sperrt einen Temp-Store, der nur über das Home
+  ins Zentral schreiben würde (nur für Pläne mit Identitätsdaten). Im Zentralmodus schreiben die Identitäts-Applier
+  von `apply_wrapup.py` dorthin: Ids `PCn`, `origin` an jeder Zeile und jedem Audit-Eintrag, Reihenfolge
+  Changelog → `profile.md` → Queue, Lock Projekt vor Zentral, Id-Reservierung aus dem Changelog nach einem Abbruch.
+- **Was 5.9.0 ohne Migration ändert:** Alle Identitäts-Schreibvorgänge bleiben in den Projektdateien. Das Briefing
+  ändert sich aber: Die Zeile `User:` kommt aus der Projektion `identity/briefing-lines.txt` (zitat-bestätigte und
+  oft bestätigte Aussagen zuerst, ohne Platzhalter, gekürzt) statt `head -4` der ältesten Zeilen, und die Zeile
+  `Identity:` zeigt keine soul.md-Vorlagenzeilen mehr. session-bootstrap nimmt seine Identitäts-Gates aus Stufe 0
+  (`identity.*`).
+- **Sofort-Fixes DCO #10148:** Der Stub `*Keine offenen Kandidaten.*` verschwindet, sobald ein soul-Vorschlag kommt;
+  soul-Vorschläge außerhalb `trust_source: conversation` werden übersprungen; die soul.md-Vorlage hat eine Quelle
+  (`scripts/soul-template.txt`) und steht auf `Language: de (switch to en if user writes in English)`.
+- **Migrationswerkzeug `scripts/migrate_identity.py`** (`plan`, `backup`, `apply`, `verify`, `soul`): verlustfrei 1:1,
+  nichts zusammengeführt (Owner 28.10.), Zitierungen `(UCn, …)` auf die neue `PCn` abgebildet (auch in
+  Fortsetzungszeilen), Key-Kollisionen umbenannt, Altbestand ohne Zitat als `confirmed_by: legacy` markiert;
+  `apply` idempotent und nach Abbruch an jeder Stelle konvergent, `verify` zählt unabhängig aus den Backup-Bytes nach.
+  Probe auf einer Kopie aller 91 Stores: 239 Zeilen, 50 Fortsetzungen, 477 Kandidaten, 231 Changelog-Einträge,
+  verify OK, Verlustprüfung gegen eine eingefrorene Kopie: 0 Verstöße.
+- **Profil-Qualität (P1/B2, seit 5.8.0 auf `main`):** `confirmed` nur mit wörtlichem, im Transkript verifiziertem
+  Zitat; Zweitnennung nur aus einer anderen Sitzung; Plan-Sektion `user_md_supersede`; verlustfreie Promotion;
+  Wiederkehr-Sperre für widerrufene Aussagen (Beweisstufe Zitat); Klartext-Pflicht `plain` an Owner-Vorlagen.
+- **Testisolation (P0):** gemeinsamer Helfer `tests/_isolated_home.py` (Temp-Home, env-Pflicht per AST geprüft);
+  **DCO #10149:** `extract_patterns.py` prüft und rendert vollständig, bevor es schreibt.
+- **Prüfungen:** Codex-Verifier Teil A (2 Runden, 6 + 2 Befunde) und Teil B (2 Runden, 17 + 4 Befunde), alle mit
+  einem vorher roten Test behoben; unabhängige Gesamtprüfung (5 Befunde behoben); Gegenproben mit Mutanten für
+  jede Schutzstelle; volle Suite über den Isolations-Runner grün.
+- **Korrektur:** Eine Commit-Nachricht der B2-Prüfrunde 3 nennt 20 statt 18 rote Tests in einem Abschnitt;
+  Commit-Nachrichten werden nicht umgeschrieben.
+- **Bekannt, nicht in diesem Release:** Supersede-Warnung nennt bei migrierten `UCn` nicht die neue `PCn`; `verify`
+  prüft die Briefing-Projektion nicht; `maintain` und `memory-audit` prüfen die Zentraldateien nicht.
+
 ## [2026-10-25] Release v5.8.0 — Korrekturweg, Regel-Klasse-Tor (auch für Principles), Windows-Robustheit
 MINOR, **lokal vorbereitet** im Bündel AOS3-1 (Version-Bump in `.claude-plugin/plugin.json`, `CLAUDE.md`, `docs/PROJECT.md`).
 **Kein Tag, kein Push, kein Marketplace-Publish:** `python release/release.py pruefen 5.8.0` (setzt den Tag), Push und

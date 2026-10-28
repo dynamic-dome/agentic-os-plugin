@@ -206,6 +206,54 @@ fi
 
 echo ""
 
+# Run identity-quality tests (P1/B2: quote duty for confirmed, user_md_supersede, plain duty)
+echo ">>> Running identity-quality (B2) tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-identity-b2.py"; then
+    echo ">>> Identity-quality tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Identity-quality tests: SKIPPED (no python found)"
+else
+    echo ">>> Identity-quality tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run central-profile tests (P2 Release A: central path, guards, central lock, central mode, briefing)
+echo ">>> Running central-profile (P2) tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-identity-central.py"; then
+    echo ">>> Central-profile tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Central-profile tests: SKIPPED (no python found)"
+else
+    echo ">>> Central-profile tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run identity migration tests (P2 Teil B: plan/backup/apply/verify of migrate_identity.py)
+echo ">>> Running identity-migration (P2) tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-migrate-identity.py"; then
+    echo ">>> Identity-migration tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Identity-migration tests: SKIPPED (no python found)"
+else
+    echo ">>> Identity-migration tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
 # Run headless wrap-up core tests (T-028: harvest, handoff, wikinote, apply --headless)
 echo ">>> Running wrapup-core headless tests..."
 PY_BIN=""
@@ -297,6 +345,22 @@ elif [ -z "$PY_BIN" ]; then
     echo ">>> Rule-release tests: SKIPPED (no python found)"
 else
     echo ">>> Rule-release tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run isolated-home helper tests (P0: test subprocesses never see the real home)
+echo ">>> Running isolated-home helper tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-isolated-home.py"; then
+    echo ">>> Isolated-home helper tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Isolated-home helper tests: SKIPPED (no python found)"
+else
+    echo ">>> Isolated-home helper tests: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 
@@ -475,6 +539,17 @@ if bash "$SCRIPT_DIR/test-session-start-briefing.sh"; then
     echo ">>> Session-start briefing tests: ALL PASSED"
 else
     echo ">>> Session-start briefing tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run session-start identity tests (P2: User line from the profile projection, central before project)
+echo ">>> Running session-start identity tests..."
+if bash "$SCRIPT_DIR/test-session-start-identity.sh"; then
+    echo ">>> Session-start identity tests: ALL PASSED"
+else
+    echo ">>> Session-start identity tests: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 

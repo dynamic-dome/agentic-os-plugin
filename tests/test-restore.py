@@ -31,8 +31,11 @@ SWEEP = os.path.join(SCRIPTS, "review_sweep.py")
 SNAPSHOT = os.path.join(SCRIPTS, "store_snapshot.py")
 sys.path.insert(0, SCRIPTS)
 
-SNAP_DIR = tempfile.mkdtemp(prefix="restore-test-snaps-")
-ENV = dict(os.environ, AGENTIC_OS_SNAPSHOT_DIR=SNAP_DIR, PYTHONIOENCODING="utf-8")
+from _isolated_home import process_env  # noqa: E402
+
+# Subprozesse laufen mit frischem Temp-Home statt mit dem echten Home (P0, tests/_isolated_home.py)
+ENV, ISO_HOME = process_env(PYTHONIOENCODING="utf-8")
+SNAP_DIR = ENV["AGENTIC_OS_SNAPSHOT_DIR"]  # liegt im Temp-Home, wird mit ihm entfernt
 
 TESTS = PASSED = ERRORS = 0
 
@@ -169,7 +172,7 @@ with store_lock.store_lock(mem, timeout=1):
 HOLD = ("import sys, time; sys.path.insert(0, sys.argv[1]); import store_lock\n"
         "with store_lock.store_lock(sys.argv[2]):\n"
         "    print('held', flush=True); time.sleep(60)\n")
-holder = subprocess.Popen([sys.executable, "-c", HOLD, SCRIPTS, mem], stdout=subprocess.PIPE, text=True)
+holder = subprocess.Popen([sys.executable, "-c", HOLD, SCRIPTS, mem], stdout=subprocess.PIPE, text=True, env=ENV)
 holder.stdout.readline()
 try:
     with store_lock.store_lock(mem, timeout=0.3):
