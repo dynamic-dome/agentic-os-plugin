@@ -552,7 +552,9 @@ if iq is not None:
     check(found and os.path.basename(found) == "sess-unit.jsonl",
           "B6 resolve_transcript loest erst beim Aufruf auf und folgt der HOME-Umleitung")
     home_now = os.path.normcase(os.path.expanduser("~"))
-    check(not [n for n, v in vars(iq).items() if isinstance(v, str) and home_now in os.path.normcase(v)],
+    # __file__/__cached__ name where the module lies, not a resolved home path (the repo itself may sit under home)
+    check(not [n for n, v in vars(iq).items()
+               if not n.startswith("__") and isinstance(v, str) and home_now in os.path.normcase(v)],
           "B7 kein Modulwert mit einem Home-Pfad (alles wird erst beim Aufruf aufgeloest)")
 
 drop_home_transcript()

@@ -4,6 +4,49 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-10-29] Release v5.10.0 — Zeiger-Anzeige repariert, Sicherungen im Zeiger-Schreiber (P3 Stufe A), P2-Kleinbefunde
+MINOR. Stufe A des P3-Fahrplans (`docs/superpowers/plans/2026-10-29-p3-schlank-fahrplan.md`): erst Fehler und
+Sicherungen, kein Datenlauf. Push und Publish bleiben beim Owner.
+
+- **Zeiger-Anzeige (Fehler, der schon wirkte):** `bridge_projection.py` blendete die Mitglieder ALLER Regel-Zeiger aus,
+  zeigte aber nur 6 Zeilen; Zeiger und Learnings teilten sich diesen Cap. In der AGENTS.md dieses Repos fehlten so 4 der
+  8 Zeiger samt ihren Mitgliedern. Jetzt haben Zeiger einen eigenen Abschnitt und Cap (10), stehen mit Anker und
+  „+n Belege“ vor den Learnings, und nur die Mitglieder ANGEZEIGTER Zeiger werden ausgeblendet. Beide Projektionen
+  vergeben den Zeiger-Cap nach Relevanz (lebende Mitglieder, dann jüngstes Mitglied) statt nach (importance, date), bei
+  dem alle Zeiger gleichauf lagen; ein Zeiger in eine immer geladene Regeldatei (`~/.claude/CLAUDE.md`, weitere über
+  `always_loaded` in `~/.claude/agentic-os.local.json`) kommt zuletzt, und schneidet ihn der Cap ab, bleiben seine
+  Mitglieder still gefaltet. Zeiger über dem Cap meldet eine Zeile „(n weitere Regel-Zeiger …)“. Neue Funktion
+  `shown(mem)` in beiden Projektionen: genau die gerenderte Auswahl, für Messungen (erreichbarkeit_eval K3/K4).
+- **Sicherungen im Zeiger-Schreiber `apply_wrapup.py`**, jede vor dem ersten Byte und mit Test „bei Ablehnung nichts
+  geschrieben“: Plan-Sektion `principle_retire` (Rückweg per `ids` oder Lauf-Tag `condense:<datum>`; per Tag wird ein
+  unter dem Tag angelegter Zeiger stillgelegt, eine Mischung in einen älteren Zeiger aus `merges[]` zurückgenommen, eine
+  neuere fremde Mischung darüber sperrt); Idempotenz (unverändert erneut gesendet: kein `last_relevant`, kein Zähler,
+  kein Schreiben); Mischen nur innerhalb einer Regel (`rid:`-Tag, Tags werden gemischt); Hold-Liste `held_rules` in
+  `~/.claude/agentic-os.local.json`; `member_sha` je Mitglied, unter dem Lock geprüft; `--snapshot` unter dem Lock;
+  `--lint` meldet Zeiger-Mängel (Anker ohne Fragment, Mitglied nicht lokal, fehlend, nicht lebend oder selbst Zeiger,
+  geteilter Anker). `principles` und `principle_retire` in einem Plan werden abgelehnt, ebenso jedes davon zusammen
+  mit `restore` und ein Zeiger über ein Mitglied, das derselbe Plan korrigiert.
+- **maintain Step 5c** ruft nach dem Schreiben beide Projektionen auf (die AGENTS.md-Projektion fehlte).
+- **Täglicher Anker-Check (Rest von T-035):** `learnings_lifecycle.py report` nennt `lost_anchors`; der Tageslauf liest das.
+- **Stabile Regel-Ankerseite:** obsidian-sync schreibt nie `wiki/concepts/agent-regeln.md` (Guard), denn Zeiger zeigen
+  auf deren `^r-`Block-Ids.
+- **P2-Kleinbefunde (T-050):** Die Supersede-Warnung nennt bei einer migrierten `UCn`-Zeile die neue `PCn`-Id;
+  `migrate_identity.py verify` prüft die Briefing-Projektion; neuer rein lesender `identity_store.py check`, den
+  `/agentic-os:maintain` Step 2 und `memory-audit` für die Zentraldateien aufrufen.
+- **Testisolation:** `tests/eval/eval_signals.py` startete `preprocess_state.py` mit dem echten Home und las damit das
+  seit 29.10. aktive Zentralprofil (nur lesend); dessen `profile.md` ging in den Zustands-Hash ein, die Fast-Path-Fixture
+  war in jedem nicht isolierten Lauf rot (`release.py pruefen`). Jetzt Temp-Home über `_isolated_home.process_env`, und
+  die Datei steht in der AST-Pflichtprüfung von `test-isolated-home.py`.
+- **Enthalten seit 5.9.1 (lokal committet):** Bridge-Ablehnung lässt eine Owner-Freigabe unberührt (DCO #10166).
+- **Prüfungen:** jede neue Sicherung zuerst rot gegen den alten Code; Codex-Verifier Runde 1 über den Diff (FAIL,
+  4 major + 2 minor, alle an der Quelle bestätigt und mit vorher rotem Test behoben: Mischung im selben Plan ohne
+  Audit, `restore` im selben Plan an der Vorabprüfung vorbei, gehaltene Regel über eine Karte ohne `rid:`, Korrektur
+  setzt die Freigabe eines Mitglieds nach der Prüfung zurück, mehrdeutige Herkunft bei der PC-Id, `shown()` ohne
+  Abgleichtest); Runde 2 (FAIL, 2 major, beide Varianten der Korrektur-Lücke: Id mit Leerzeichen, Mitglied, das der
+  Ziel-Zeiger schon hält; behoben, die Prüfung läuft jetzt über die gemischte Mitgliederliste), damit sind die zwei
+  Runden ausgeschöpft, die Behebung ist über Tests und Mutanten belegt; Gegenprobe mit 22 Mutanten am Schreiber und
+  2 an `shown()`, alle rot; volle Suite über den Isolations-Runner.
+
 ## [2026-10-28] Release v5.9.1 — Öffentliche Fassung bereinigt
 PATCH, keine Funktionsänderung. Der Leck-Sweep vor der Veröffentlichung von 5.9.0 (R20, vier Leser und vier
 Gegenprüfer über alle 37 geänderten Dateien) fand keinen Blocker, aber Stellen, die nicht in die öffentliche Fassung

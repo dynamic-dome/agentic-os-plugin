@@ -196,6 +196,28 @@ def main():
     code, out = run(mem, {"date": "2026-10-26", "rule_releases": [OWNER]})
     check(code == 2, "a released rule cannot be released again (state is not 'explained')")
 
+    print("== after the release the bridge verdict is about the projection only (DCO #10166)")
+    released = rows(mem)["L2"]["release"]
+    code, out = run(mem, {"date": "2026-10-27", "bridge_decisions": [{"id": "L2", "status": "rejected",
+                          "note": "steht schon per regel_sync in den Regeln", "plain": PLAIN}]})
+    r = rows(mem)["L2"]
+    check(code == 0 and r["bridge_status"] == "rejected" and r["release"] == released,
+          "agent keeps an owner-released rule out of the bridge; the release stays untouched")
+    code, out = run(mem, {"date": "2026-10-27", "bridge_decisions": [{"id": "L2", "status": "approved", "note": "doch projizieren", "plain": PLAIN}]})
+    r = rows(mem)["L2"]
+    check(code == 0 and r["bridge_status"] == "approved" and r["release"] == released,
+          "...and can take that back: approved is allowed once the owner released the rule")
+    code, out = run(mem, {"date": "2026-10-28", "rule_releases": [{"id": "L2", "by": "owner", "status": "rejected", "note": "ziehe zurueck"}]})
+    r = rows(mem)["L2"]
+    check(code == 0 and r["release"]["status"] == "rejected" and r["release"]["rejected_by"] == "owner"
+          and r["release"]["released_by"] == "owner" and r["release"]["two_sentences"] == OWNER["two_sentences"],
+          "withdrawing the release is the owner's, via rule_releases; the release trail stays on the row")
+    for verdict in ("rejected", "approved"):
+        before = json.dumps(getj(mem, "learnings/learnings.json"))
+        code, out = run(mem, {"date": "2026-10-28", "bridge_decisions": [{"id": "L2", "status": verdict, "note": "anderer Grund", "plain": PLAIN}]})
+        check(code == 2 and json.dumps(getj(mem, "learnings/learnings.json")) == before,
+              f"agent {verdict} on an owner-rejected rule: refused, the owner's reason is not overwritten")
+
     print("== owner can reject at any stage")
     mem, _ = with_rule()
     code, out = run(mem, {"rule_releases": [{"id": "L2", "by": "owner", "status": "rejected", "note": "verstehe ich nicht"}]})

@@ -244,10 +244,14 @@ check("(Anker fehlt — prüfen)" in read(md), "a lost anchor is flagged in the 
 
 # round 2: folding only for SHOWN pointers; line limit with a long anchor; '#' in a file name
 import memory_index_projection as mip  # noqa: E402
+# P3-A: the cap goes by live members - pointers 0..10 hold two (not approved) members, the twelfth only M11
 ptrs = [{"id": f"L{900 + i}", "kind": "principle", "summary": f"Regel {i}", "anchor": rules,
-         "derived_from": [f"M{i}"], "importance": 3, "date": "2026-10-01"} for i in range(12)]
+         "derived_from": [f"M{i}", f"N{i}"] if i < 11 else ["M11"], "importance": 3, "date": "2026-10-01"}
+        for i in range(12)]
 appr = [{"id": "M11", "text": "Mitglied des elften Zeigers", "importance": 3, "date": "2026-10-01",
          "bridge_status": "approved"}]
+appr += [{"id": f"{x}{i}", "text": f"Mitglied {x}{i}", "importance": 3, "date": "2026-10-01"}
+         for i in range(11) for x in ("M", "N")]
 put(os.path.join(tmp, "m2", ".agent-memory", "learnings", "learnings.json"), ptrs + appr)
 _p, shown = mip.load_entries(os.path.join(tmp, "m2", ".agent-memory"))
 check(any(e["id"] == "M11" for e in shown), "a member of a pointer beyond the display cap stays visible")
@@ -270,8 +274,8 @@ put(os.path.join(tmp, "m3", ".agent-memory", "learnings", "learnings.json"), [
     {"id": "L1", "text": "Mitglied", "importance": 4, "date": "2026-10-01", "bridge_status": "approved"},
     {"id": "L9", "kind": "principle", "summary": "Regel", "text": "Regel -> a", "anchor": rules,
      "derived_from": ["L1"], "importance": 4, "date": "2026-10-02", "bridge_status": "approved"}])
-check([e["id"] for e in bp.load_approved(os.path.join(tmp, "m3", ".agent-memory"))] == ["L9"],
-      "AGENTS.md projection folds pointer members")
+check([e["id"] for e in bp.shown(os.path.join(tmp, "m3", ".agent-memory"))] == ["L9"],
+      "AGENTS.md projection folds pointer members (the pointer is shown, its member is not)")
 
 # ============================================================ 4. lifecycle propose / report
 print("--- learnings_lifecycle.py")
@@ -295,8 +299,255 @@ check("L1" not in {x["id"] for x in out.get("proposals", [])}, "a pointer member
 rc, out = run([LIFE, "report", mem, "--min-importance", "4", "--min-age-days", "0"])
 check(rc == 0 and out.get("eligible") == 3 and out.get("anchored") == 1 and out.get("pointers") == 1,
       f"report counts eligible / anchored / pointers ({out})")
+check(out.get("lost_anchors") == [], f"report: no lost anchor while the rule section exists ({out.get('lost_anchors')})")
+put(rules, "# Regeln\n\nalles umgebaut\n")
+rc, out = run([LIFE, "report", mem, "--min-importance", "4", "--min-age-days", "0"])
+check(rc == 0 and out.get("lost_anchors") == ["L9"], f"report: the daily anchor check names a lost anchor ({out})")
 rc, out = run([LIFE, "propose", mem, "--catalog", rules, "--min-age-days", "30", "--today", "2026-08-15"])
 check(rc == 0 and not out.get("proposals"), "min-age-days keeps young learnings out")
+
+# ============================================================ 5. writer safeguards (P3-A)
+print("--- writer safeguards (P3-A)")
+
+
+def rows_of(mem):
+    return json.load(open(os.path.join(mem, "learnings", "learnings.json"), encoding="utf-8"))
+
+
+def by(mem, lid):
+    return next((r for r in rows_of(mem) if r.get("id") == lid), None)
+
+
+def refused(mem, plan, why, extra=()):
+    """L94: a rejected plan writes nothing - not the store, not the iteration log written before it."""
+    learn = os.path.join(mem, "learnings", "learnings.json")
+    before = sha(learn)
+    plan = dict(plan, iterations=[{"title": "darf nicht geschrieben werden"}])
+    rc, out = run([APPLY, mem] + list(extra), json.dumps(plan))
+    check(rc == 2 and sha(learn) == before and not os.path.exists(os.path.join(mem, "iterations", "iteration-log.md")),
+          f"refused before the first byte: {why} ({rc}, {str(out.get('error'))[:110]})")
+    return out
+
+
+def written(out):
+    """files_written names learnings.json: an identical rewrite keeps the hash, so the hash alone proves nothing."""
+    return any("learnings" in str(f) for f in out.get("files_written", []))
+
+
+def card(rules, frag, members, **kw):
+    return dict({"summary": f"Regel {frag}", "anchor": f"{rules}#{frag}", "members": members, "plain": PLAIN}, **kw)
+
+
+# 5a. idempotency: the same pointer sent again changes nothing
+tmp, mem, rules = setup()
+learn = os.path.join(mem, "learnings", "learnings.json")
+first = card(rules, "Windows-Subprocess", ["L1", "L2"], tags=["windows"])
+rc, out = run([APPLY, mem], json.dumps({"date": "2026-10-08", "principles": [first]}))
+before = sha(learn)
+rc, out = run([APPLY, mem], json.dumps({"date": "2026-11-01", "principles": [first]}))
+check(rc == 0 and sha(learn) == before and out["tally"]["principles_updated"] == 0 and not written(out)
+      and out["tally"]["principles_unchanged"] == 1 and by(mem, "L9")["last_relevant"] == "2026-10-08",
+      f"idempotent: unchanged pointer again -> no last_relevant, not counted, file untouched ({out.get('tally', {}).get('principles_unchanged')})")
+rc, out = run([APPLY, mem], json.dumps({"date": "2026-11-02", "principles": [dict(first, members=["L3"])]}))
+p9 = by(mem, "L9")
+check(rc == 0 and out["tally"]["principles_updated"] == 1 and p9["derived_from"] == ["L1", "L2", "L3"]
+      and p9["last_relevant"] == "2026-11-02" and p9.get("merges", [{}])[-1].get("added_members") == ["L3"],
+      f"a real change still merges, counts and leaves a merges[] entry ({p9.get('merges')})")
+
+# 5b. rid: tags - merge only within one rule; tags are merged
+tmp, mem, rules = setup()
+rc, out = run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1"], tags=["rid:R03"])]}))
+refused(mem, {"principles": [card(rules, "Windows-Subprocess", ["L2"], tags=["rid:R39"])]},
+        "a different rid: on the same anchor (rules would be mixed)")
+refused(mem, {"principles": [card(rules, "Verifikation vor Aktion", ["L3"], tags=["rid:R25", "rid:R09"])]},
+        "two rid: tags on one pointer")
+rc, out = run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L2"],
+                                                             tags=["rid:R03", "condense:2026-11-03"])]}))
+p9 = by(mem, "L9")
+check(rc == 0 and p9["derived_from"] == ["L1", "L2"] and p9["tags"] == ["rid:R03", "condense:2026-11-03"],
+      f"same rid: merges, tags are merged ({p9.get('tags')})")
+tmp2, mem2, rules2 = setup()
+run([APPLY, mem2], json.dumps({"principles": [card(rules2, "Windows-Subprocess", ["L1"])]}))
+rc, out = run([APPLY, mem2], json.dumps({"principles": [card(rules2, "Windows-Subprocess", ["L2"], tags=["rid:R03"])]}))
+check(rc == 0 and by(mem2, "L9")["tags"] == ["rid:R03"], "a legacy pointer without rid: adopts the rule id")
+
+# 5c. held_rules in ~/.claude/agentic-os.local.json (rid or anchor)
+tmp, mem, rules = setup()
+put(os.path.join(ISO_HOME, ".claude", "agentic-os.local.json"),
+    {"held_rules": ["R11", f"{rules}#Verifikation vor Aktion", 7]})
+try:
+    refused(mem, {"principles": [card(rules, "Windows-Subprocess", ["L1"], tags=["rid:R11"])]}, "held rule id")
+    refused(mem, {"principles": [card(rules, "Verifikation vor Aktion", ["L3"])]}, "held anchor")
+    rc, out = run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1"], tags=["rid:R03"])]}))
+    check(rc == 0, f"a rule not on the hold list passes ({out.get('error')})")
+finally:
+    os.remove(os.path.join(ISO_HOME, ".claude", "agentic-os.local.json"))
+
+# 5d. member_sha: checked under the lock, one changed member rejects the whole plan
+import apply_wrapup as aw  # noqa: E402
+tmp, mem, rules = setup()
+l1, l2 = by(mem, "L1"), by(mem, "L2")
+good = card(rules, "Windows-Subprocess", ["L1", "L2"], member_sha={"L1": aw.member_sha(l1), "L2": aw.member_sha(l2)[:12]})
+stale = dict(good, member_sha={"L1": aw.member_sha(l1), "L2": aw.member_sha(dict(l2, text="alter Wortlaut"))})
+refused(mem, {"principles": [card(rules, "Verifikation vor Aktion", ["L3"]), stale]}, "member_sha of a changed member")
+refused(mem, {"principles": [dict(good, member_sha={"L1": aw.member_sha(l1)})]}, "member_sha missing a member")
+refused(mem, {"principles": [dict(good, member_sha={"L1": "xyz", "L2": aw.member_sha(l2)})]}, "member_sha not hex")
+rc, out = run([APPLY, mem], json.dumps({"principles": [good]}))
+check(rc == 0 and by(mem, "L9") is not None, f"matching member_sha (full or 12-char prefix) is accepted ({out.get('error')})")
+
+# 5e. principle_retire by ids
+tmp, mem, rules = setup()
+learn = os.path.join(mem, "learnings", "learnings.json")
+run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1", "L2"])]}))
+for bad, why in (({"ids": ["L404"], "reason": "x"}, "unknown id"), ({"ids": ["L1"], "reason": "x"}, "id is no pointer"),
+                 ({"ids": ["L9"], "tag": "condense:2026-11-01", "reason": "x"}, "ids and tag"),
+                 ({"reason": "x"}, "neither ids nor tag"), ({"ids": ["L9"], "reason": " "}, "empty reason"),
+                 ({"tag": "windows", "reason": "x"}, "tag is no condense:<date> tag")):
+    refused(mem, {"principle_retire": [bad]}, f"principle_retire, {why}")
+refused(mem, {"principle_retire": [{"ids": ["L9"], "reason": "x"}],
+              "principles": [card(rules, "Verifikation vor Aktion", ["L3"])]}, "principles and principle_retire in one plan")
+rc, out = run([APPLY, mem], json.dumps({"principle_retire": [{"ids": ["L9"], "reason": "falscher  Anker"}]}))
+check(rc == 0 and by(mem, "L9")["superseded_by"] == "obsolete:falscher Anker" and out["tally"]["principles_retired"] == ["L9"]
+      and by(mem, "L1") == [r for r in rows_of(mem) if r["id"] == "L1"][0],
+      f"retire by id: superseded_by = obsolete:<reason>, the row stays (D-021) ({out.get('error')})")
+md = os.path.join(tmp, "memory", "MEMORY.md")
+subprocess.run([sys.executable, PROJ, mem, "--memory-md", md], capture_output=True, env=ENV)
+check("[L9]" not in read(md) and "[L1]" in read(md), "retired pointer leaves the block, its members are listed again")
+before = sha(learn)
+rc, out = run([APPLY, mem], json.dumps({"principle_retire": [{"ids": ["L9"], "reason": "falscher Anker"}]}))
+check(rc == 0 and sha(learn) == before and out["tally"]["principle_retire_skipped"] == 1 and not written(out),
+      "retire by id a second time: skipped, nothing written")
+
+# 5f. principle_retire by tag: created pointers are retired, merged ones restored as they were
+tmp, mem, rules = setup()
+learn = os.path.join(mem, "learnings", "learnings.json")
+run([APPLY, mem], json.dumps({"date": "2026-10-01", "principles": [card(rules, "Windows-Subprocess", ["L1"], tags=["windows"])]}))
+old = by(mem, "L9")
+T = "condense:2026-11-05"
+rc, out = run([APPLY, mem], json.dumps({"date": "2026-11-05", "principles": [
+    card(rules, "Windows-Subprocess", ["L2"], tags=[T], summary="Neu gefasst", plain=PLAIN + " Neu."),
+    card(rules, "Verifikation vor Aktion", ["L3"], tags=[T])]}))
+check(rc == 0 and by(mem, "L9")["derived_from"] == ["L1", "L2"] and by(mem, "L10") is not None,
+      f"condense run: one merge, one new pointer ({out.get('error')})")
+rc, out = run([APPLY, mem], json.dumps({"principle_retire": [{"tag": T, "reason": "Lauf zurueck"}]}))
+p9, p10 = by(mem, "L9"), by(mem, "L10")
+check(rc == 0 and out["tally"]["principles_retired"] == ["L10"] and out["tally"]["principles_unmerged"] == ["L9"],
+      f"retire by tag: created -> retired, merged -> unmerged ({out.get('tally', {}).get('principles_retired')}, {out.get('error')})")
+check(p10["superseded_by"] == "obsolete:Lauf zurueck", "retire by tag: the created pointer is superseded")
+check(all(p9.get(k) == old.get(k) for k in ("derived_from", "summary", "plain", "tags", "text", "importance"))
+      and not p9.get("superseded_by") and p9.get("merges") == []
+      and p9.get("unmerges", [{}])[0].get("removed_members") == ["L2"],
+      f"retire by tag: the merged pointer is back as it was, with an unmerges audit ({p9})")
+before = sha(learn)
+rc, out = run([APPLY, mem], json.dumps({"principle_retire": [{"tag": T, "reason": "Lauf zurueck"}]}))
+check(rc == 0 and sha(learn) == before and not written(out), "retire by tag a second time: nothing written")
+# a newer change under another tag on top blocks the unmerge
+tmp, mem, rules = setup()
+run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1"])]}))
+run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L2"], tags=["condense:2026-11-05"])]}))
+run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L3"], tags=["condense:2026-11-06"])]}))
+refused(mem, {"principle_retire": [{"tag": "condense:2026-11-05", "reason": "x"}]}, "unmerge under a newer foreign merge")
+rc, out = run([APPLY, mem], json.dumps({"principle_retire": [{"tag": "condense:2026-11-06", "reason": "x"}]}))
+check(rc == 0 and by(mem, "L9")["derived_from"] == ["L1", "L2"], "the newest merge can be taken back first")
+
+# 5g. --snapshot: under the lock, after the plan check
+tmp, mem, rules = setup()
+snaps = ENV["AGENTIC_OS_SNAPSHOT_DIR"]   # the subprocesses' snapshot dir, inside the temp home
+
+
+def snap_count():
+    return sum(len(fs) for _d, _s, fs in os.walk(snaps))
+
+
+n0 = snap_count()
+refused(mem, {"principles": [card(rules, "Gibt es nicht", ["L1"])]}, "--snapshot with a rejected plan", ["--snapshot"])
+check(snap_count() == n0, "--snapshot: a rejected plan takes no snapshot")
+rc, out = run([APPLY, mem, "--snapshot", "--dry-run"], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1"])]}))
+check(rc == 0 and snap_count() == n0 and "snapshot" not in out, "--snapshot --dry-run: no snapshot")
+rc, out = run([APPLY, mem, "--snapshot"], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1"])]}))
+check(rc == 0 and os.path.isfile(os.path.join(str(out.get("snapshot")), "learnings", "learnings.json"))
+      and str(out.get("snapshot")).startswith(snaps),
+      f"--snapshot: byte copy before the write, path in the result ({out.get('snapshot')})")
+snap_rows = json.load(open(os.path.join(out["snapshot"], "learnings", "learnings.json"), encoding="utf-8"))
+check(not any(r.get("kind") == "principle" for r in snap_rows), "--snapshot: the copy is the state before the write")
+
+# 5h. --lint reports pointer defects
+tmp, mem, rules = setup()
+rows = rows_of(mem)
+rows += [row("L60", "abgeloest", 3, superseded_by="fixed:x"),
+         {"id": "L61", "kind": "principle", "date": "2026-10-01", "text": "a", "summary": "a", "anchor": rules,
+          "importance": 3, "tags": [], "superseded_by": None, "derived_from": ["L1", "dco/L5", "L404", "L60", "L62"]},
+         {"id": "L62", "kind": "principle", "date": "2026-10-01", "text": "b", "summary": "b", "anchor": rules,
+          "importance": 3, "tags": [], "superseded_by": None, "derived_from": ["L2"]}]
+put(os.path.join(mem, "learnings", "learnings.json"), rows)
+rc, out = run([APPLY, mem, "--lint"])
+errs = {x["id"]: " | ".join(x["errors"]) for x in out.get("lint", [])}
+e61 = errs.get("L61", "")
+check(rc == 0 and "anchor without fragment" in e61 and "'dco/L5' is not a local id" in e61
+      and "L404 is not in this store" in e61 and "L60 is not live" in e61 and "L62 is itself a pointer" in e61
+      and "anchor shared with L62" in e61 and "anchor shared with L61" in errs.get("L62", ""),
+      f"--lint: fragment, foreign/missing/dead/pointer member, shared anchor ({errs})")
+
+# 5i. Codex-Verifier P3-A (2026-10-29), each red against the first version
+print("--- Codex-Verifier P3-A")
+# P3-A-01: created and merged under another tag in ONE plan - retiring the second tag only undoes its merge
+tmp, mem, rules = setup()
+rc, out = run([APPLY, mem], json.dumps({"principles": [
+    card(rules, "Windows-Subprocess", ["L1"], tags=["rid:R03", "condense:A"], summary="Fassung A"),
+    card(rules, "Windows-Subprocess", ["L2"], tags=["rid:R03", "condense:B"], summary="Fassung B")]}))
+rc, out = run([APPLY, mem], json.dumps({"principle_retire": [{"tag": "condense:B", "reason": "zurueck"}]}))
+p9 = by(mem, "L9") or {}
+check(rc == 0 and not p9.get("superseded_by") and p9.get("derived_from") == ["L1"] and p9.get("summary") == "Fassung A"
+      and p9.get("tags") == ["rid:R03", "condense:A"],
+      f"P3-A-01 same-plan merge under tag B: retire B restores the pointer as created under A ({rc}, {out.get('error')}, {p9})")
+tmp, mem, rules = setup()
+run([APPLY, mem], json.dumps({"principles": [
+    card(rules, "Windows-Subprocess", ["L1"], tags=["condense:A"]), card(rules, "Windows-Subprocess", ["L2"], tags=["condense:B"])]}))
+refused(mem, {"principle_retire": [{"tag": "condense:A", "reason": "x"}]},
+        "P3-A-01 retire of the creating tag under a same-plan merge of another tag")
+
+# P3-A-02: restore in the same plan adds rows validate_principles / principle_retire never saw
+tmp, mem, rules = setup()
+restore = {"source": "test", "learnings": [row("L70", "zurueckgeholt", 3)]}
+refused(mem, {"restore": restore, "principles": [card(rules, "Windows-Subprocess", ["L1"])]},
+        "P3-A-02 restore and principles in one plan")
+tmp, mem, rules = setup()
+run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1"])]}))
+refused(mem, {"restore": restore, "principle_retire": [{"ids": ["L9"], "reason": "x"}]},
+        "P3-A-02 restore and principle_retire in one plan")
+
+# P3-A-03: a held rid on the TARGET pointer also holds a card without rid:
+tmp, mem, rules = setup()
+run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1"], tags=["rid:R11"])]}))
+put(os.path.join(ISO_HOME, ".claude", "agentic-os.local.json"), {"held_rules": ["R11"]})
+try:
+    refused(mem, {"principles": [card(rules, "Windows-Subprocess", ["L2"])]},
+            "P3-A-03 card without rid: into a pointer whose rid is held")
+finally:
+    os.remove(os.path.join(ISO_HOME, ".claude", "agentic-os.local.json"))
+
+# P3-A-04: a correction in the same plan resets a member's release after validate_principles saw it released
+tmp, mem, rules = setup()
+rows = rows_of(mem)
+for r in rows:
+    if r["id"] == "L1":
+        r.update(rule_class=True, release={"status": "released", "released_at": "2026-10-01"})
+put(os.path.join(mem, "learnings", "learnings.json"), rows)
+refused(mem, {"corrections": {"learnings": [{"id": "L1", "reason": "Tippfehler",
+                                             "text": "subprocess.run findet npm nicht ohne shutil.which() unter Windows"}]},
+              "principles": [card(rules, "Windows-Subprocess", ["L1"])]},
+        "P3-A-04 correction of a member and principles in one plan")
+# Codex round 2: the id with spaces (the corrections applier strips it) and a member the pointer already holds
+refused(mem, {"corrections": {"learnings": [{"id": " L1 ", "reason": "Tippfehler",
+                                             "text": "subprocess.run findet npm nicht ohne shutil.which() unter Windows"}]},
+              "principles": [card(rules, "Windows-Subprocess", ["L1"])]},
+        "P3-A-04-R2-01 correction id with spaces")
+run([APPLY, mem], json.dumps({"principles": [card(rules, "Windows-Subprocess", ["L1"])]}))
+check(by(mem, "L9") is not None and by(mem, "L9")["derived_from"] == ["L1"], "P3-A-04-R2-02 setup: pointer L9 over L1")
+refused(mem, {"corrections": {"learnings": [{"id": "L1", "reason": "Tippfehler",
+                                             "text": "subprocess.run findet npm nicht ohne shutil.which() unter Windows"}]},
+              "principles": [card(rules, "Windows-Subprocess", ["L2"], summary="neu gefasst")]},
+        "P3-A-04-R2-02 correction of a member the target pointer already holds")
 
 print(f"=== Results: {PASSED}/{TESTS} passed, {ERRORS} failures ===")
 sys.exit(1 if ERRORS else 0)

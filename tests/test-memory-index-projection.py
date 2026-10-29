@@ -292,6 +292,62 @@ def main():
           results["bom"][0] == 0 and b"[L1]" in results["bom"][1] and results["bom"] == results["plain"],
           repr(results["bom"][1][:120]))
 
+    # 10. rule pointers (P3-A): POINTER_CAP by relevance (live members, newest member), not (importance, date)
+    with tempfile.TemporaryDirectory() as tmp:
+        rules = os.path.join(tmp, "regeln.md")
+        with open(rules, "w", encoding="utf-8") as f:
+            f.write("# Regeln\n")
+        rows = []
+        for i in range(12):
+            members = [f"L{i}x{k}" for k in range(12 - i)]   # P0: 12 live members ... P11: 1
+            rows += [learning(m, "2026-09-01", f"Mitglied {m}") for m in members]
+            rows.append({"id": f"P{i}", "date": "2026-10-0%d" % (1 + i % 9), "kind": "principle",
+                         "text": f"Regel {i}", "summary": f"Regel {i}", "anchor": rules,
+                         "importance": 5 if i >= 10 else 3, "tags": [], "superseded_by": None,
+                         "derived_from": members, "bridge_status": "approved"})
+        mem, md = setup(tmp, rows, memory_body="")
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        txt = read(md)
+        lines = [l for l in txt[txt.index(BEGIN):txt.index(END)].split("\n") if l.startswith("- [")]
+        shown = [l.split("]")[0][3:] for l in lines if "★" in l]
+        check("pointers: 10 shown, by live members (P10/P11 have importance 5 but 1-2 members)",
+              shown == [f"P{i}" for i in range(10)], str(shown))
+        check("pointers: overflow line for the hidden ones",
+              "(2 weitere Regel-Zeiger: .agent-memory/learnings/learnings.json)" in txt, txt[:600])
+        listed = {l.split("]")[0][3:] for l in lines if "★" not in l}
+        check("pointers: members of hidden pointers stay visible, shown ones are folded",
+              listed == {"L10x0", "L10x1", "L11x0"}, str(sorted(listed)))
+        before = txt
+        run([mem, "--memory-md", md], cwd=tmp)
+        check("pointers: second run byte-identical", read(md) == before)
+        sys.path.insert(0, os.path.join(PLUGIN_ROOT, "scripts"))
+        import memory_index_projection as mip_mod
+        rendered = [l.split("]")[0][3:] for l in lines]
+        check("shown() is exactly the rendered selection, in block order (Codex P3-A-05)",
+              [e["id"] for e in mip_mod.shown(mem)] == rendered, f"{[e['id'] for e in mip_mod.shown(mem)]} vs {rendered}")
+
+    # 10b. newest member breaks a tie in live members; superseded members do not count
+    with tempfile.TemporaryDirectory() as tmp:
+        sys.path.insert(0, os.path.join(PLUGIN_ROOT, "scripts"))
+        import memory_index_projection as mip
+        rules = os.path.join(tmp, "regeln.md")
+        with open(rules, "w", encoding="utf-8") as f:
+            f.write("# Regeln\n")
+        rows = [learning("A1", "2026-09-01", "alt"), learning("A2", "2026-09-02", "alt 2"),
+                learning("B1", "2026-10-20", "neu"), learning("B2", "2026-09-01", "neu 2"),
+                learning("C1", "2026-10-25", "neu"), learning("C2", "2026-10-25", "weg", superseded="fixed:x"),
+                learning("C3", "2026-10-25", "weg 2", superseded="fixed:y")]
+        for pid, members in (("PA", ["A1", "A2"]), ("PB", ["B1", "B2"]), ("PC", ["C1", "C2", "C3"])):
+            rows.append({"id": pid, "date": "2026-10-01", "kind": "principle", "text": pid, "summary": pid,
+                         "anchor": rules, "importance": 3, "tags": [], "superseded_by": None,
+                         "derived_from": members, "bridge_status": "approved"})
+        mem, _md = setup(tmp, rows)
+        pointers, _approved = mip.load_entries(mem)
+        check("pointers: tie on live members -> newest member first; superseded members do not count",
+              [p["id"] for p in pointers] == ["PB", "PA", "PC"], str([p["id"] for p in pointers]))
+        check("shown(): pointers first, then the listed learnings",
+              [e["id"] for e in mip.shown(mem)][:3] == ["PB", "PA", "PC"], str(mip.shown(mem)))
+
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")
     return 1 if FAILURES else 0

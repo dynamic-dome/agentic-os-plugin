@@ -30,7 +30,8 @@ import tempfile
 # Load-limit rule (200 lines / 25 000 bytes) has one home: the native audit;
 # the short-form rule (150 / 200 chars) one in projection_text (shared with AGENTS.md).
 from native_memory_audit import count_lines, load_level
-from projection_text import BOM, POINTER, gated_pointer, anchor_ok, entry_line, pointer_line, read_raw, with_eol
+from projection_text import (BOM, POINTER, gated_pointer, anchor_ok, entry_line, pointer_line, pointer_overflow,
+                             read_raw, select_pointers, with_eol)
 from projection_text import strip_block as _strip_block
 
 BEGIN = ("<!-- bridge:claude-native:begin — generiert von agentic-os "
@@ -55,7 +56,9 @@ def native_memory_md(project_root, home=None):
 
 
 def load_entries(mem_dir):
-    """-> (pointers, approved) or None when learnings.json is unreadable."""
+    """-> (pointers, approved) or None when learnings.json is unreadable. `pointers` is in render
+    order (relevance, P3-A) and complete - the block shows the first POINTER_CAP; `approved` is
+    already without the members of shown pointers. `shown()` is the exact rendered selection."""
     path = os.path.join(mem_dir, "learnings", "learnings.json")
     if not os.path.isfile(path):
         return [], []
@@ -70,9 +73,9 @@ def load_entries(mem_dir):
     by_id = {str(e.get("id")): e for e in entries}
     # a pointer over an unreleased rule-class learning is not shown (gate, DCO #10057)
     pointers = [e for e in entries if e.get("kind") == "principle" and not gated_pointer(e, by_id)]
-    pointers.sort(key=lambda e: (_imp(e), str(e.get("date", ""))), reverse=True)
-    # fold only members of pointers that are actually SHOWN (Codex round 2)
-    folded = {m for p in pointers[:POINTER_CAP] for m in (p.get("derived_from") or []) if isinstance(m, str)}
+    # fold only members of pointers that are actually SHOWN (Codex round 2); the cap goes by relevance (P3-A)
+    shown, folded, _hidden = select_pointers(pointers, by_id, POINTER_CAP)
+    pointers = shown + [p for p in pointers if p not in shown]
     approved = [e for e in entries if e.get("kind") != "principle"
                 and e.get("bridge_status") == "approved" and str(e.get("id")) not in folded]
     # E14: importance before date (the 20 newest used to win, half of them codex tips)
@@ -99,11 +102,23 @@ def load_approved(mem_dir):
     return None if loaded is None else loaded[1]
 
 
+def shown(mem_dir):
+    """The rows the block renders, in block order (pointers first), or None when learnings.json is
+    unreadable. One selection for the projection and for measurements (erreichbarkeit_eval K3)."""
+    loaded = load_entries(mem_dir)
+    if loaded is None:
+        return None
+    pointers, approved = loaded
+    return list(pointers[:POINTER_CAP]) + list(approved[:CAP])
+
+
 def render_block(approved, pointers=()):
     lines = [BEGIN, HEADING, POINTER]
     for p in list(pointers)[:POINTER_CAP]:
         members = [m for m in (p.get("derived_from") or []) if isinstance(m, str)]
         lines.append(pointer_line(p, len(members), anchor_ok(p.get("anchor"))))
+    if len(pointers) > POINTER_CAP:
+        lines.append(pointer_overflow(len(pointers) - POINTER_CAP))
     for e in approved[:CAP]:
         lines.append(entry_line(e))
     overflow = len(approved) - CAP

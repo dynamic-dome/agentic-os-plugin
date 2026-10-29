@@ -454,6 +454,19 @@ rc, rep, txt = verify_(plan_p, bak, central)
 v = " ".join(rep.get("verstoesse", []))
 check(rc == 1 and "UC3" in v and "UC2" in v, f"V6 veraenderte occurrences und falsches legacy: Exit 1 (rc={rc}, {v[:200]})")
 
+# V7 (T-050) die Briefing-Projektion: veraendert oder geloescht -> verify meldet es
+home, plan_p, bak, central = migrated("v7")
+brief = os.path.join(central, "identity", "profile-briefing.txt")
+with open(brief, "rb") as fh:
+    write_bytes(brief, fh.read() + b"- untergeschobene Zeile\n")
+rc, rep, txt = verify_(plan_p, bak, central)
+check(rc == 1 and any("profile-briefing.txt" in v for v in rep.get("verstoesse", [])),
+      f"V7 veraenderte Briefing-Projektion: Exit 1 (rc={rc}, {str(rep.get('verstoesse'))[:150]})")
+os.remove(brief)
+rc, rep, txt = verify_(plan_p, bak, central)
+check(rc == 1 and any("profile-briefing.txt" in v and "fehlt" in v for v in rep.get("verstoesse", [])),
+      f"V7 fehlende Briefing-Projektion: Exit 1 (rc={rc}, {str(rep.get('verstoesse'))[:150]})")
+
 print("--- W: Codex-Befunde Teil B (F01-F17)")
 
 

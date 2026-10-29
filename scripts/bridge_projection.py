@@ -25,8 +25,8 @@ import tempfile
 from datetime import datetime, timezone
 
 # Same short-form rule as the MEMORY.md block (150 chars, line <= 200).
-from projection_text import (gated_pointer, BOM, LINE_LIMIT, POINTER, assemble, bounded_line, entry_line,
-                             read_raw, shorten)
+from projection_text import (gated_pointer, BOM, LINE_LIMIT, POINTER, anchor_ok, assemble, bounded_line, entry_line,
+                             pointer_line, pointer_overflow, read_raw, select_pointers, shorten)
 from projection_text import strip_block as _strip_block
 
 END = "<!-- bridge:end -->"
@@ -43,38 +43,62 @@ def begin_line(today=None):
     return (f"{BEGIN_PREFIX} — generiert von agentic-os bridge_projection am "
             f"{day}, NICHT von Hand editieren -->")
 CAP = 6
+POINTER_CAP = 10   # rule pointers have their own cap (P3-A): they used to share CAP with the learnings
 TASK_CAP = 5
 
 
-def load_approved(mem_dir):
-    """Approved, non-superseded learnings, newest first. None = store invalid."""
+def _imp(e):
+    v = e.get("importance", 0)
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
+def load_entries(mem_dir):
+    """-> (pointers, approved) or None when the store is invalid. `pointers` are the approved, live
+    rule pointers (kind "principle", 5.4.0) in render order (relevance, P3-A), complete - the block
+    shows the first POINTER_CAP. `approved` are the other approved learnings, newest first, without
+    the members of SHOWN pointers: a member of a pointer the cap leaves out stays visible itself
+    (P3-A - before, every pointer folded its members while only 6 lines were shown)."""
     path = os.path.join(mem_dir, "learnings", "learnings.json")
     if not os.path.isfile(path):
-        return []
+        return [], []
     try:
         with open(path, "r", encoding="utf-8-sig") as f:  # a BOM is not corruption
             data = json.load(f)
     except (OSError, ValueError) as exc:
         print(f"bridge: learnings.json unreadable: {exc}", file=sys.stderr)
         return None
-    entries = data if isinstance(data, list) else data.get("learnings", [])
-    # members of a rule pointer (kind "principle", 5.4.0) are covered by the pointer
-    by_id = {str(e.get("id")): e for e in entries if isinstance(e, dict)}
+    entries = [e for e in (data if isinstance(data, list) else data.get("learnings", [])) if isinstance(e, dict)]
+    by_id = {str(e.get("id")): e for e in entries}
+
+    def projectable(e):
+        return (e.get("bridge_status") == "approved" and not e.get("superseded_by")
+                and e.get("source_agent", "claude") != "codex")   # loop guard (hub spec E3)
+
     # a pointer over an unreleased rule-class learning is not projected (gate, DCO #10057)
-    gated = {str(e.get("id")) for e in entries if isinstance(e, dict) and e.get("kind") == "principle"
-             and gated_pointer(e, by_id)}
-    folded = {m for e in entries if isinstance(e, dict) and e.get("kind") == "principle"
-              and not e.get("superseded_by") and str(e.get("id")) not in gated
-              for m in (e.get("derived_from") or []) if isinstance(m, str)}
-    approved = [e for e in entries if isinstance(e, dict)
-                and e.get("bridge_status") == "approved"
-                and str(e.get("id")) not in gated
-                and not e.get("superseded_by")
-                and str(e.get("id")) not in folded
-                and e.get("source_agent", "claude") != "codex"]   # loop guard (hub spec E3)
-    approved.sort(key=lambda e: (str(e.get("date", "")),
-                                 int(e.get("importance", 0))), reverse=True)
-    return approved
+    pointers = [e for e in entries if e.get("kind") == "principle" and projectable(e)
+                and not gated_pointer(e, by_id)]
+    shown_ptrs, folded, _hidden = select_pointers(pointers, by_id, POINTER_CAP)
+    pointers = shown_ptrs + [p for p in pointers if p not in shown_ptrs]
+    approved = [e for e in entries if e.get("kind") != "principle" and projectable(e)
+                and str(e.get("id")) not in folded]
+    approved.sort(key=lambda e: (str(e.get("date", "")), _imp(e)), reverse=True)
+    return pointers, approved
+
+
+def load_approved(mem_dir):
+    """Approved, non-superseded learnings (no pointers), newest first. None = store invalid."""
+    loaded = load_entries(mem_dir)
+    return None if loaded is None else loaded[1]
+
+
+def shown(mem_dir):
+    """The rows the block renders, in block order (pointers first), or None when the store is
+    invalid. One selection for the projection and for measurements (erreichbarkeit_eval K4)."""
+    loaded = load_entries(mem_dir)
+    if loaded is None:
+        return None
+    pointers, approved = loaded
+    return list(pointers[:POINTER_CAP]) + list(approved[:CAP])
 
 
 def load_open_tasks(mem_dir):
@@ -112,7 +136,7 @@ def project_label(mem_dir):
     return os.path.basename(os.path.dirname(os.path.abspath(mem_dir)))
 
 
-def render_block(approved, tasks, label):
+def render_block(approved, tasks, label, pointers=()):
     lines = [begin_line()]
     if tasks:
         heading = "## Bridge: Offene Tasks ({})"
@@ -122,9 +146,15 @@ def render_block(approved, tasks, label):
         extra = len(tasks) - TASK_CAP
         if extra > 0:
             lines.append(f"({extra} weitere: context/open-tasks.json)")
-    if approved:
+    pointers = list(pointers)
+    if approved or pointers:
         lines.append("## Bridge: Learnings von Claude (kuratiert)")
         lines.append(POINTER)
+        for p in pointers[:POINTER_CAP]:
+            members = [m for m in (p.get("derived_from") or []) if isinstance(m, str)]
+            lines.append(pointer_line(p, len(members), anchor_ok(p.get("anchor"))))
+        if len(pointers) > POINTER_CAP:
+            lines.append(pointer_overflow(len(pointers) - POINTER_CAP))
         for e in approved[:CAP]:
             lines.append(entry_line(e))
         overflow = len(approved) - CAP
@@ -163,16 +193,17 @@ def main(argv):
     except SystemExit:
         return 2
 
-    approved = load_approved(args.mem_dir)
-    if approved is None:
+    loaded = load_entries(args.mem_dir)
+    if loaded is None:
         return 1
+    pointers, approved = loaded
     tasks = load_open_tasks(args.mem_dir)
 
     exists = os.path.isfile(args.agents_md)
     bom, current, eol = read_raw(args.agents_md) if exists else (False, "", "\n")
     on_disk = (BOM if bom else "") + current
 
-    if not approved and not tasks:
+    if not approved and not pointers and not tasks:
         if exists and BEGIN_PREFIX in current:
             write_atomic(args.agents_md, (BOM if bom else "") + strip_block(current))
             print(f"bridge: 0 approved/0 tasks — block removed from "
@@ -181,7 +212,7 @@ def main(argv):
             print("bridge: no approved learnings or open tasks, nothing to do")
         return 0
 
-    block = render_block(approved, tasks, project_label(args.mem_dir))
+    block = render_block(approved, tasks, project_label(args.mem_dir), pointers)
     new = assemble(bom, strip_block(current) if exists else "", block, eol)
     if exists and new == on_disk:
         print(f"bridge: {len(approved)} approved, {len(tasks)} tasks — "
@@ -189,6 +220,8 @@ def main(argv):
         return 0
     write_atomic(args.agents_md, new)
     caps = []
+    if len(pointers) > POINTER_CAP:
+        caps.append(f"pointers capped at {POINTER_CAP}")
     if len(approved) > CAP:
         caps.append(f"learnings capped at {CAP}")
     if len(tasks) > TASK_CAP:

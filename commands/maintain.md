@@ -82,6 +82,13 @@ row and id survives. Only if the owner confirms the content is unrecoverable: ke
 `current-session.json`) and say in the report that ids held only by the `.bak` can be issued
 again. Count repairs for the report.
 
+The central profile (P2) is checked too: `python "${CLAUDE_PLUGIN_ROOT}/scripts/identity_store.py" check`
+(read-only, JSON `{active, store, problems}`). With `active: true`, `profile-candidates.json` and
+`profile-changelog.json` get the same parse-and-repair treatment as above (it is ONE profile for all
+projects: repair only with the owner's OK and under no running wrap-up); an unreadable `profile.md` is
+shown to the owner, never rewritten here; a missing or stale `profile-briefing.txt` is only reported -
+the next wrap-up with identity data writes it again.
+
 ## Step 3: Report what the thresholds flagged (only on exit 10)
 
 (no-archive) Every flagged store file is **reported, never cut**: name file, count and
@@ -212,23 +219,30 @@ MEMORY.md projection shows FIRST. Members stay unchanged — they keep the concr
 4. One `[j/n]` per card. Only on `j`: make the wiki edit (if any), then write the pointers:
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <plan.json>   # {"principles": [{summary, anchor, members, plain, tags}]}
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --snapshot --plan <plan.json>   # {"principles": [{summary, anchor, members, plain, tags}]}
 python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" .agent-memory --project-root .
+python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_projection.py" .agent-memory --agents-md AGENTS.md
 ```
 
+   Both projections run: MEMORY.md (Claude) and AGENTS.md (Codex) show the pointers first, each under its own
+   cap by relevance (live members, then the newest member); a pointer the cap leaves out keeps its members
+   visible. `--snapshot` takes a byte copy of the store under the lock before the first write.
    The applier refuses a card without `plain` (empty, not a string or over 600 characters: the whole plan, before
    the first byte), an anchor that does not resolve, an unknown local member, a qualified member and a
-   pointer as member; it stores `plain` on the pointer row; the same anchor again merges members instead of adding a row. It
-   also refuses a member that is a rule-class learning not yet `released` (wrap-up Step 3f:
-   second-model explanation, then the owner): the owner's `j` on a pointer card does not
-   replace that gate (DCO #10057).
+   pointer as member; it stores `plain` on the pointer row; the same anchor again merges members instead of adding a row
+   (only within one rule: a `rid:<id>` tag that differs from the pointer's is refused; sent unchanged, nothing is
+   written). It also refuses a rule on the hold list (`held_rules` in `~/.claude/agentic-os.local.json`), a card whose
+   `member_sha` no longer matches a member's text, and a member that is a rule-class learning not yet `released`
+   (wrap-up Step 3f: second-model explanation, then the owner): the owner's `j` on a pointer card does not
+   replace that gate (DCO #10057). Way back: plan section `principle_retire` (`{"ids": [...]}` or
+   `{"tag": "condense:<date>"}`, plus `reason`), then both projections again.
 5. Gaps and facts go into the report, nothing is written for them.
 
 ## Step 6: Report
 
 ```
 Memory Maintenance:
-  JSON Integrity: {n}/{total} valid ({n_repaired} repaired)
+  JSON Integrity: {n}/{total} valid ({n_repaired} repaired); central profile: {inactive | ok | n problems}
   Thresholds: {ok | n exceeded → reported, nothing moved: <file count/limit, …>}
   Dirty markers GC (preview): {n_would_remove} would be removed, 0 removed
   Patterns (report): {n_stale} stale, {n_low_conf} low-confidence, 0 moved

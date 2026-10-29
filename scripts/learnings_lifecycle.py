@@ -11,7 +11,9 @@ mechanical half and writes nothing:
            decides at the gate, the `principles` plan section of
            apply_wrapup.py writes the pointer (/agentic-os:maintain Step 5c).
   report   eligible / anchored / pointers - the share that is already a member
-           of a pointer (plan target: >= 60 % after the first run).
+           of a pointer (plan target: >= 60 % after the first run) - and
+           lost_anchors: live pointers whose anchor no longer resolves (the
+           daily anchor check of the Tageslauf reads this list).
 
 Eligible: not superseded, not a pointer, not a codex tip, importance >= N
 (default 4), older than D days (default 30), not yet a member of a pointer.
@@ -39,6 +41,8 @@ import os
 import re
 import sys
 from collections import Counter
+
+from projection_text import anchor_ok
 
 LOCAL_CONFIG = os.path.join(os.path.expanduser("~"), ".claude", "agentic-os.local.json")
 TOKEN = re.compile(r"[a-zäöüß0-9]+")
@@ -172,9 +176,12 @@ def cmd_report(a, rows, today):
     pool = eligible(rows, a.min_importance, a.min_age_days, today)
     taken = members_of_pointers(rows)
     anchored = sum(1 for r in pool if str(r.get("id")) in taken)
-    pointers = sum(1 for r in rows if r.get("kind") == "principle" and not r.get("superseded_by"))
-    print(json.dumps({"ok": True, "eligible": len(pool), "anchored": anchored, "pointers": pointers,
-                      "share": round(anchored / len(pool), 3) if pool else None}, ensure_ascii=False))
+    live = [r for r in rows if r.get("kind") == "principle" and not r.get("superseded_by")]
+    # daily anchor check (P3-A, T-035): a pointer whose rule file or fragment is gone points at nothing
+    lost = [str(r.get("id")) for r in live if not anchor_ok(r.get("anchor"))]
+    print(json.dumps({"ok": True, "eligible": len(pool), "anchored": anchored, "pointers": len(live),
+                      "share": round(anchored / len(pool), 3) if pool else None, "lost_anchors": lost},
+                     ensure_ascii=False))
     return 0
 
 

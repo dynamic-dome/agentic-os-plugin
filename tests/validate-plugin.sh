@@ -1353,6 +1353,26 @@ if echo "$MT_5C" | grep -q "(condense)" && echo "$MT_5C" | grep -q "learnings_li
 else
     fail "maintain Step 5c: condense procedure missing script, writer, gate or new-rule threshold"
 fi
+# P3-A: after writing pointers BOTH projections run - the AGENTS.md one was missing, so Codex kept the old block.
+if echo "$MT_5C" | grep -q "memory_index_projection.py" && echo "$MT_5C" | grep -q "bridge_projection.py\" .agent-memory --agents-md" \
+   && echo "$MT_5C" | grep -q "principle_retire"; then
+    pass "maintain Step 5c: both projections after the write, principle_retire as the way back"
+else
+    fail "maintain Step 5c: bridge_projection.py call or principle_retire way back missing"
+fi
+# P3-A: the stable rule-anchor page is off limits for obsidian-sync (pointers point at its ^r- block ids).
+if sed -n '/^## Guards/,$p' "$PLUGIN_ROOT/skills/obsidian-sync/SKILL.md" | grep -q "Never write .wiki/concepts/agent-regeln.md"; then
+    pass "obsidian-sync Guards: wiki/concepts/agent-regeln.md is never written (stable rule anchors)"
+else
+    fail "obsidian-sync Guards: no lock for the stable rule-anchor page wiki/concepts/agent-regeln.md"
+fi
+# T-050: maintain Step 2 and memory-audit look at the central profile files too (identity_store.py check, read-only).
+MT_2="$(sed -n '/^## Step 2:/,/^## Step 3:/p' "$PLUGIN_ROOT/commands/maintain.md" 2>/dev/null)"
+if echo "$MT_2" | grep -q "identity_store.py\" check" && grep -q "identity_store.py\" check" "$PLUGIN_ROOT/commands/memory-audit.md"; then
+    pass "maintain Step 2 and memory-audit run identity_store.py check on the central profile"
+else
+    fail "maintain Step 2 or memory-audit does not check the central profile files (identity_store.py check)"
+fi
 
 echo ""
 echo "=== Results: $PASSED/$TESTS passed, $ERRORS failures ==="

@@ -364,7 +364,9 @@ SPAWN_FUNCS = ("run", "Popen", "check_output", "check_call", "call")
 ENV_BLIND = (("subprocess", "getoutput"), ("subprocess", "getstatusoutput"), ("os", "system"), ("os", "popen"))
 CHECKED_FILES = ("test-apply-wrapup.py", "test-corrections.py", "test-rule-release.py", "test-principles.py",
                  "test-restore.py", "test-wrapup-core.py", "test-identity-b2.py", "test-preprocess-state.py",
-                 "test-identity-central.py", "test-migrate-identity.py")
+                 "test-identity-central.py", "test-migrate-identity.py",
+                 # read the real central profile through the home until 5.10.0 (fast-path fixture red outside isolation)
+                 os.path.join("eval", "eval_signals.py"))
 
 
 def _is_blind(kind) -> bool:

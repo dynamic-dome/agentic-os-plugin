@@ -454,6 +454,72 @@ check(rc == 0 and "not in profile.md" in warn and snapshot(mem) == pb and snapsh
       f"C8 Zeile nur im Projekt: uebersprungen, Warnung 'not in profile.md', nichts geschrieben (rc={rc}, "
       f"{str(out.get('error'))[:60]}, {warn[:120]})")
 
+# C8b (T-050): dieselbe Lage per line_id einer migrierten Zeile - die Warnung nennt die neue PC-Id aus der Zentral-Queue
+mem = make_project()
+store = make_profile(queue=[{"id": "PC7", "key": "projektzeile", "origin": {"projekt": ids.project_key(mem, ISO_HOME),
+                                                                             "id": "UC3"}},
+                            {"id": "PC8", "key": "fremd", "origin": {"projekt": "anderes-projekt", "id": "UC3"}}])
+pb, cb = snapshot(mem), snapshot(store)
+sup8b = dict(sup8, line_id="UC3")
+del sup8b["match"]
+rc, out = run(mem, {"date": DATE, "user_md_supersede": [sup8b]}, "--identity-store", store)
+warn = " ".join(out.get("warnings") or out["tally"]["warnings"] or [])
+check(rc == 0 and "not in profile.md" in warn and "line_id PC7" in warn and "PC8" not in warn
+      and snapshot(mem) == pb and snapshot(store) == cb,
+      f"C8b migrierte UC-Id: uebersprungen, Warnung nennt PC7 (nicht die Zeile eines anderen Projekts), nichts geschrieben "
+      f"(rc={rc}, {str(out.get('error'))[:60]}, {warn[:160]})")
+rc, out = run(make_project(), {"date": DATE, "user_md_supersede": [sup8b]}, "--identity-store", make_profile())
+warn = " ".join(out.get("warnings") or out["tally"]["warnings"] or [])
+check(rc == 0 and "not in profile.md" in warn and "line_id PC" not in warn,
+      f"C8b ohne Herkunft in der Queue: Warnung wie bisher, ohne erfundene Id ({warn[:120]})")
+
+# C8b2 (Codex T-050-01): two central rows with the SAME origin are ambiguous - no id is recommended
+mem = make_project()
+origin = {"projekt": ids.project_key(mem, ISO_HOME), "id": "UC3"}
+store = make_profile(queue=[{"id": "PC7", "key": "a", "origin": origin}, {"id": "PC8", "key": "b", "origin": origin}])
+rc, out = run(mem, {"date": DATE, "user_md_supersede": [sup8b]}, "--identity-store", store)
+warn = " ".join(out.get("warnings") or out["tally"]["warnings"] or [])
+check(rc == 0 and "not in profile.md" in warn and "line_id PC" not in warn,
+      f"C8b2 mehrdeutige Herkunft (PC7 und PC8): keine Id empfohlen ({warn[:160]})")
+
+# C8c (T-050) `identity_store.py check`: rein lesender Gesundheitsblick auf die Zentraldateien (maintain Step 2, memory-audit)
+CHECK = os.path.join(SCRIPTS, "identity_store.py")
+
+
+def check_run(store):
+    proc = subprocess.run([sys.executable, CHECK, "check", "--identity-store", store], capture_output=True, text=True,
+                          encoding="utf-8", env=ENV)
+    try:
+        return proc.returncode, json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return proc.returncode, {"_stdout": proc.stdout, "_stderr": proc.stderr}
+
+
+inactive_store = make_dir("central-inaktiv-")
+rc, rep = check_run(inactive_store)
+check(rc == 0 and rep.get("active") is False and rep.get("problems") == [], f"C8c kein profile.md: inaktiv, nichts gemeldet ({rep})")
+store = make_profile()
+rc, out = run(make_project(), {"date": DATE, "user_candidates": [cand("check")]}, "--identity-store", store)
+before = snapshot(store)
+rc, rep = check_run(store)
+check(rc == 0 and rep.get("active") is True and rep.get("problems") == [] and snapshot(store) == before,
+      f"C8c sauberes Zentral nach einem Lauf: keine Befunde, nichts geschrieben ({rep.get('problems')})")
+with open(os.path.join(store, ids.PROFILE_BRIEFING), "a", encoding="utf-8") as fh:
+    fh.write("- untergeschoben\n")
+rc, rep = check_run(store)
+check(any("profile-briefing.txt" in p and "projection" in p for p in rep.get("problems", [])),
+      f"C8c veraltete Projektion wird gemeldet ({rep.get('problems')})")
+write(os.path.join(store, ids.PROFILE_QUEUE), "{kaputt")
+os.remove(os.path.join(store, ids.PROFILE_BRIEFING))
+rc, rep = check_run(store)
+probs = " | ".join(rep.get("problems", []))
+check(rc == 0 and "profile-candidates.json: not valid JSON" in probs and "profile-briefing.txt: missing" in probs,
+      f"C8c kaputte Queue und fehlende Projektion werden gemeldet, Exit 0 ({probs})")
+with open(os.path.join(store, ids.PROFILE_MD), "wb") as fh:
+    fh.write(b"# Profil\n- kaputt \xff\n")
+rc, rep = check_run(store)
+check(any("profile.md: unreadable" in p for p in rep.get("problems", [])), f"C8c profile.md kein UTF-8 ({rep.get('problems')})")
+
 # C9 zwei Projekte nacheinander: beide Kandidaten in der Zentral-Queue, PC1 und PC2 (Lost-Update-Probe ohne Last)
 store = make_profile()
 mem_a, mem_b = make_project(), make_project()

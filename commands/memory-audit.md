@@ -49,6 +49,11 @@ Report age-based risks (the dimension the manual audit got wrong from old data):
    `profile.md`, and the project's `user.md` stays a stub by design.
 4. **soul candidates pending** — if `identity/soul-candidates.md` has open candidates → note
    "N soul candidates awaiting the [j/n] gate at next session start".
+5. **central profile files** — run `python "${CLAUDE_PLUGIN_ROOT}/scripts/identity_store.py" check`
+   (read-only). `active: false` → skip. Otherwise flag every line of `problems` verbatim: an unreadable
+   `profile.md`, a queue or changelog that is no JSON list, a missing or stale `profile-briefing.txt`
+   (the briefing then shows other lines than the profile holds). The audit only reports; the repair is
+   `/agentic-os:maintain` Step 2.
 
 ## Step 3: Provenance / Schema consistency
 

@@ -52,7 +52,8 @@ model is stateless, so cost is the sum of context length over calls).
                            "plain": "...", "quote": "the user's literal words", "by": "agent",
                            "trust_source": "conversation" } ],
   "principles":      [ { "summary": "...", "anchor": "<file>#<heading>", "members": ["L12", "L40"],
-                         "plain": "...", "tags": [] } ],
+                         "plain": "...", "tags": [], "member_sha": null } ],
+  "principle_retire": [ { "ids": ["L90"], "reason": "..." } ],
   "soul_candidates": [ { "proposal": "...", "evidence": [] } ],
   "open_tasks":      { "add": [ { "title": "...", "source": "wrap-up", "cross_project": false } ],
                        "close": ["T-001"] },
@@ -286,7 +287,24 @@ wording with a verified quote makes the next review close the candidate as a dup
 `principles` (Step 5c of `/agentic-os:maintain`) needs `plain` per entry (D11): the pointer card the owner
 reads, plain German, 1..600 characters, stored on the pointer row as `plain`; a missing, empty,
 non-string or too long one rejects the whole plan before the first byte, a merge into an existing
-pointer updates it.
+pointer updates it. P3-A safeguards, all checked before the first byte: at most one `rid:<id>` tag per entry, and a
+merge into a pointer that carries a different `rid:` is refused (tags are merged otherwise; a pointer without one
+adopts it); a rule on the hold list (`held_rules` in `~/.claude/agentic-os.local.json`: `R11`, `rid:R11` or an
+anchor) is refused, also when only the target pointer carries the held `rid:`; a member that the same plan corrects
+(`corrections.learnings`) is refused (correction first, pointer in a second plan); `restore` together with
+`principles` or `principle_retire` is refused (restore first); `member_sha` (optional, `{member id: sha256 of its text, full or >= 12 hex chars}`, exactly the
+entry's members; `apply_wrapup.member_sha(row)`) rejects the whole plan when one member changed since the plan was
+built. An entry sent unchanged writes nothing (no `last_relevant`, `tally.principles_unchanged`); every other change
+to an existing pointer (also one created earlier in the same plan) appends `merges[]` = `{date, tag (its condense:<date> tag or null), added_members,
+old_summary, old_plain, old_tags, old_text}`. `principle_retire` (way back, never in the same plan as
+`principles`): each entry takes `ids` (pointer ids) or `tag` (`condense:<date>`) plus `reason` (1..200 characters).
+By id a live pointer gets `superseded_by = obsolete:<reason>`, an already retired one is skipped. By tag a pointer
+created under the tag is retired and a pointer the tag only merged into is restored from that `merges[]` entry
+(members, summary, plain, tags, text; audit in `unmerges[]`); a newer change under another tag on top refuses the
+plan. Tally: `principles_retired`, `principles_unmerged`, `principle_retire_skipped`. `--snapshot` takes a store
+snapshot under the lock after the plan check (not on `--dry-run`, path in `snapshot`); `--lint` also reports
+pointers: anchor without fragment, member not local, not in the store, not live or itself a pointer, anchor
+shared with another live pointer.
 
 `rule_class` on a learning (flag or tag `regel`/`rule`/`verfassung`/`constitution`), `rule_explanations`
 and `rule_releases` (Step 3f, 5.8.0, owner decision F4) form the mixed form of the learnings gate. A

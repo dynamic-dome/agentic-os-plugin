@@ -18,6 +18,7 @@ Contract:
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from collections.abc import Mapping
@@ -108,3 +109,70 @@ def project_key(mem: str, home: str) -> str:
     if _under(parent, home):
         return os.path.relpath(os.path.realpath(parent), os.path.realpath(home)).replace(os.sep, "/")
     return os.path.normpath(parent)
+
+
+def check_central(store: str) -> dict:
+    """Read-only health check of the central profile (T-050, for /agentic-os:maintain Step 2 and memory-audit):
+    profile.md decodes as UTF-8, queue and changelog are JSON lists, and the briefing projection exists and is the
+    one of profile.md and the queue. Never repairs anything - it only names what it found."""
+    if not central_active(store):
+        return {"active": False, "store": store, "problems": []}
+    problems = []
+
+    def read(rel):
+        try:
+            with open(os.path.join(store, *rel.split("/")), "rb") as fh:
+                return fh.read().decode("utf-8-sig")
+        except FileNotFoundError:
+            problems.append(f"{rel}: missing")
+        except (OSError, UnicodeDecodeError) as exc:
+            problems.append(f"{rel}: unreadable ({exc})")
+        return None
+
+    md = read(PROFILE_MD)
+    queue = None
+    for rel in (PROFILE_QUEUE, PROFILE_CHANGELOG):
+        text = read(rel)
+        if text is None:
+            continue
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            problems.append(f"{rel}: not valid JSON ({exc})")
+            continue
+        if not isinstance(data, list):
+            problems.append(f"{rel}: not a JSON list")
+        elif rel == PROFILE_QUEUE:
+            queue = data
+    brief = read(PROFILE_BRIEFING)
+    if md is not None and queue is not None and brief is not None:
+        import identity_briefing  # late: identity_briefing is a sibling module, not needed for the store lookup
+        want = "".join(line + "\n" for line in identity_briefing.select_lines(md, queue))
+        if brief != want:
+            problems.append(f"{PROFILE_BRIEFING}: not the projection of profile.md and the queue "
+                            f"(the next wrap-up with identity data rewrites it)")
+    return {"active": True, "store": store, "problems": problems}
+
+
+def main(argv=None) -> int:
+    """`python identity_store.py check [--identity-store DIR]` -> JSON {active, store, problems}; exit 0 (a report)."""
+    import argparse
+    import sys
+    ap = argparse.ArgumentParser(prog="identity_store.py")
+    ap.add_argument("command", choices=["check"])
+    ap.add_argument("--identity-store", default=None)
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit:
+        return 2
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+    store, source = resolve_store(args.identity_store, os.environ)
+    print(json.dumps(dict(check_central(store), source=source), ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

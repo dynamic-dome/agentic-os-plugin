@@ -7,6 +7,7 @@ the full text stays in learnings.json. One home for the rule, so the two
 projections cannot drift apart.
 """
 
+import json
 import os
 
 SUMMARY_CHARS = 150
@@ -166,6 +167,60 @@ def gated_pointer(ptr, by_id):
                 and (row.get("release") or {}).get("status") != "released"):
             return True
     return False
+
+
+def local_config():
+    """~/.claude/agentic-os.local.json as a dict ({} when missing or unreadable). Resolved at call
+    time, never at import: tests redirect the home per process (tests/_isolated_home.py)."""
+    path = os.path.join(os.path.expanduser("~"), ".claude", "agentic-os.local.json")
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def always_loaded_files():
+    """Rule files every session loads anyway: the user CLAUDE.md, plus `always_loaded` from the local
+    config (paths stay out of the code - export hygiene). A pointer into one of them repeats a rule the
+    agent already has in context."""
+    paths = ["~/.claude/CLAUDE.md"] + [p for p in (local_config().get("always_loaded") or []) if isinstance(p, str)]
+    return {os.path.normcase(os.path.abspath(os.path.expanduser(p))) for p in paths}
+
+
+def is_always_loaded(ptr, files=None):
+    path, _frag = split_anchor(ptr.get("anchor"))
+    if not path:
+        return False
+    return os.path.normcase(os.path.abspath(path)) in (always_loaded_files() if files is None else files)
+
+
+def select_pointers(pointers, by_id, cap, files=None):
+    """-> (shown, folded ids, hidden count). P3-A: the cap goes by relevance - live members, then the
+    newest member - not by (importance, date), which every pointer ties on. A pointer into an
+    always-loaded rule file ranks last; when the cap leaves it out, its members still stay folded
+    (silently), because the rule itself is in context anyway. Members of any other pointer that is not
+    shown stay visible as plain entries - a pointer must never hide what it does not show."""
+    files = always_loaded_files() if files is None else files
+
+    def members(p):
+        return [m for m in (p.get("derived_from") or []) if isinstance(m, str)]
+
+    def rank(p):
+        live = [by_id[m] for m in members(p) if isinstance(by_id.get(m), dict) and not by_id[m].get("superseded_by")]
+        newest = max((str(r.get("date") or "") for r in live), default="")
+        return (not is_always_loaded(p, files), len(live), newest, str(p.get("date") or ""), str(p.get("id")))
+
+    ordered = sorted(pointers, key=rank, reverse=True)
+    shown = ordered[:cap]
+    folded = {m for p in shown for m in members(p)}
+    folded |= {m for p in ordered[cap:] if is_always_loaded(p, files) for m in members(p)}
+    return shown, folded, len(ordered) - len(shown)
+
+
+def pointer_overflow(hidden):
+    return f"({hidden} weitere Regel-Zeiger: .agent-memory/learnings/learnings.json)"
 
 
 def anchor_display(anchor):

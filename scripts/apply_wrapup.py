@@ -83,6 +83,7 @@ import argparse
 import contextlib
 import datetime as _dt
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -150,7 +151,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from projection_text import SUMMARY_CHARS as SUMMARY_MAX  # noqa: E402
-from projection_text import anchor_ok, split_anchor  # noqa: E402
+from projection_text import anchor_ok, local_config, split_anchor  # noqa: E402
 import store_lock  # noqa: E402
 import store_snapshot  # noqa: E402
 import harvest_state  # noqa: E402
@@ -278,7 +279,8 @@ def preflight_readable(mem: str, plan: dict | None = None, paths=None) -> None:
         _check_utf8(mem, "iterations/iteration-log.md")
     if plan.get("decisions"):
         archived_rows(mem, "context/decisions.json")
-    if plan.get("learnings") or (plan.get("restore") or {}).get("learnings") or plan.get("principles"):
+    if (plan.get("learnings") or (plan.get("restore") or {}).get("learnings") or plan.get("principles")
+            or plan.get("principle_retire")):
         archived_rows(mem, "learnings/learnings.json")
     if spec.get("add"):
         archived_rows(mem, "context/open-tasks.json")
@@ -492,16 +494,43 @@ def supersede_errors(row: dict, by_id: dict) -> list:
     return []
 
 
+def pointer_errors(ptr: dict, by_id: dict, anchors: dict) -> list:
+    """--lint for a live pointer (P3-A): what the condense run must not make worse."""
+    errs = []
+    if not split_anchor(ptr.get("anchor"))[1]:
+        errs.append("pointer: anchor without fragment")
+    for m in (ptr.get("derived_from") or []):
+        row = by_id.get(m) if isinstance(m, str) else None
+        if not isinstance(m, str) or not _LOCAL_MEMBER.match(m):
+            errs.append(f"pointer: member {m!r} is not a local id")
+        elif row is None:
+            errs.append(f"pointer: member {m} is not in this store")
+        elif row.get("superseded_by"):
+            errs.append(f"pointer: member {m} is not live")
+        elif row.get("kind") == "principle":
+            errs.append(f"pointer: member {m} is itself a pointer")
+    twins = [i for i in anchors.get(_anchor_key(ptr.get("anchor")), []) if i != str(ptr.get("id"))]
+    if twins:
+        errs.append(f"pointer: anchor shared with {', '.join(twins)}")
+    return errs
+
+
 def lint_learnings(mem: str) -> list:
     """Every live row that breaks the write rules - a report, never a gate."""
     rows = load_json(mem, "learnings/learnings.json", [])
     by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    anchors: dict = {}
+    for r in rows:
+        if isinstance(r, dict) and r.get("kind") == "principle" and not r.get("superseded_by"):
+            anchors.setdefault(_anchor_key(r.get("anchor")), []).append(str(r.get("id")))
     out, seen = [], set()
     for r in rows:
         if not isinstance(r, dict):
             out.append({"id": None, "errors": ["row is not an object"]})
             continue
         errs = field_errors(r) + supersede_errors(r, by_id)
+        if r.get("kind") == "principle" and not r.get("superseded_by"):
+            errs += pointer_errors(r, by_id, anchors)
         if str(r.get("id")) in seen:
             errs.append("duplicate id")
         seen.add(str(r.get("id")))
@@ -558,6 +587,7 @@ def validate_plan(mem, plan, paths=None):
             raise PlanError("open task without 'title'")
 
     validate_principles(mem, plan)
+    validate_principle_retire(mem, plan)
     validate_bridge_decisions(mem, plan)
     validate_corrections(mem, plan, paths)
     validate_rule_gate(mem, plan)
@@ -934,9 +964,14 @@ def validate_bridge_decisions(mem, plan):
             raise PlanError(f"{lid} is a principle pointer - its bridge state belongs to maintain Step 5c")
         if row.get("superseded_by"):
             raise PlanError(f"{lid} is superseded by {row['superseded_by']} - decide the successor")
-        if is_rule_class(row) and it["status"] == "approved":
+        rel = row.get("release") or {}
+        if is_rule_class(row) and it["status"] == "approved" and rel.get("status") != "released":
             raise PlanError(f"{lid} is a rule-class learning - approval only via 'rule_releases' "
                             f"(second-model explanation, then the owner)")
+        if (is_rule_class(row) and it.get("by", "agent") != "owner"
+                and rel.get("status") == "rejected" and rel.get("rejected_by") == "owner"):
+            raise PlanError(f"{lid}: the owner has rejected this rule-class learning - only the owner "
+                            f"changes that verdict ('by': 'owner')")
         if row.get("bridge_status") not in BRIDGE_DECIDABLE:
             raise PlanError(f"{lid} is not a bridge candidate (bridge_status "
                             f"{row.get('bridge_status')!r})")
@@ -968,7 +1003,10 @@ def apply_bridge_decisions(mem, plan, date, dry, touched, tally):
         if row.get("bridge_plain") != plain:  # P1: the owner-facing text lives in its own field
             row["bridge_plain"] = plain       # (bridge_note keeps its '<date> <by>: <note>' shape - review_sweep reads it)
             dirty = True
-        if is_rule_class(row) and status == "rejected" and (row.get("release") or {}).get("status") != "rejected":
+        # A rejection closes an OPEN release gate only. Once the owner released the rule, the
+        # bridge verdict is about the projection alone (e.g. already distributed via regel_sync);
+        # withdrawing the release itself goes through 'rule_releases' (DCO #10166).
+        if is_rule_class(row) and status == "rejected" and (row.get("release") or {}).get("status", "needs_explanation") in RELEASE_OPEN:
             row["release"] = dict(row.get("release") or {}, status="rejected", rejected_by=it.get("by", "agent"),
                                   rejected_at=date)
             dirty = True
@@ -1166,6 +1204,16 @@ def _origin(mem):
     """Central mode: where a row comes from - the project folder of this run's store (identity_store.project_key);
     `id` is the row's old project id, set only by the migration."""
     return {"projekt": identity_store.project_key(mem, os.path.expanduser("~")), "id": None}
+
+
+def _migrated_id(mem, paths, line_id):
+    """The central id (PCn) the migration gave this project's candidate `line_id` (UCn), via `origin` on the
+    central queue row; None when there is none or more than one (no guessing by queue order). Only used to name
+    it in a warning (T-050)."""
+    want = {"projekt": _origin(mem)["projekt"], "id": line_id}
+    hits = {str(row["id"]) for row in load_json(paths.root, paths.queue, [], via="identity")
+            if isinstance(row, dict) and row.get("origin") == want and row.get("id")}
+    return hits.pop() if len(hits) == 1 else None
 
 
 def _legacy_contents(mem):
@@ -1449,8 +1497,10 @@ def _supersede_logged(changelog, line_id, new_text) -> bool:
 def resolve_user_md_supersede(mem, items, paths=None):
     """Validate every entry against the file as it stands and resolve its target line.
     Returns (resolved, skipped, legacy_only): `resolved` = [{index, old, new, item, line_id, tag, quote}] for the
-    lines that would change, `skipped` = entries that are already applied, `legacy_only` = tags of entries whose
-    target stands only in the project's user.md while the central profile is active (P2: skipped with a warning).
+    lines that would change, `skipped` = entries that are already applied, `legacy_only` = (tag, new id) of entries
+    whose target stands only in the project's user.md while the central profile is active (P2: skipped with a
+    warning); `new id` is the PCn the migration gave a UCn line_id of this project, None for a match entry or
+    when the queue has no such origin (T-050).
     Raises PlanError on the first problem.
     The quote is only checked for its FORM here (a non-empty string); whether it is true is decided at apply time."""
     if not isinstance(items, list):
@@ -1535,7 +1585,8 @@ def resolve_user_md_supersede(mem, items, paths=None):
                 if legacy is None:
                     legacy = _legacy_contents(mem)
                 if (old in legacy) if has_match else any(cite.search(c) for c in legacy):
-                    legacy_only.append(tag)  # the model still saw the old project file; not an error of the plan
+                    # the model still saw the old project file; not an error of the plan
+                    legacy_only.append((tag, None if has_match else _migrated_id(mem, paths, line_id)))
                     continue
             raise PlanError(f"user_md_supersede {tag!r}: no such line in {os.path.basename(paths.md)}")
         idx = hits[0]
@@ -1579,11 +1630,13 @@ def apply_user_md_supersede(mem, plan, date, dry, touched, tally, session_id="",
     paths = _id_paths(mem, paths)
     resolved, skipped, legacy_only = resolve_user_md_supersede(mem, items, paths)
     tally["supersede_skipped_unchanged"] += skipped
-    for tag in legacy_only:
+    for tag, new_id in legacy_only:
         tally["supersede_skipped_legacy"] += 1
+        hint = (f"; the migration moved it to profile.md as {new_id} - send the entry again with line_id {new_id}"
+                if new_id else "")
         tally["warnings"].append(f"user_md_supersede {tag!r}: line not in profile.md - it stands only in the "
                                  f"project's user.md, which the central profile replaces; entry skipped, nothing "
-                                 f"written for it")
+                                 f"written for it{hint}")
     if not resolved:
         return
     verdicts, reasons = _verify_identity_quotes([r["quote"] for r in resolved], session_id, transcript, tally)
@@ -1808,16 +1861,69 @@ def _anchor_key(anchor):
     return os.path.normcase(os.path.abspath(path)), frag.strip().lower()
 
 
+# P3-A: a pointer names its rule with one `rid:<id>` tag (rule catalog id, e.g. rid:R25); a run that
+# writes many pointers at once tags them `condense:<date>` so `principle_retire` can take the run back.
+_RID = "rid:"
+_CONDENSE = re.compile(r"^condense:\S+$")
+
+
+def _rids(tags):
+    return [t for t in (tags or []) if isinstance(t, str) and t.startswith(_RID)]
+
+
+def _condense_tag(tags):
+    return next((t for t in (tags or []) if isinstance(t, str) and _CONDENSE.match(t)), None)
+
+
+def member_sha(row) -> str:
+    """sha256 of a member's text, the content a pointer stands on. A plan built from an older state of
+    the store carries it per member (`member_sha`), the applier compares it under the lock."""
+    return hashlib.sha256(str((row or {}).get("text") or "").encode("utf-8")).hexdigest()
+
+
+def held_rules():
+    """-> (held rids, held anchor keys) from `held_rules` in ~/.claude/agentic-os.local.json: rules whose
+    rule-class release is on hold (P3-A). Read at call time; each entry is a rule id (`R11` or `rid:R11`)
+    or an anchor. A broken entry is ignored, never a crash - the list only ever refuses."""
+    rids, anchors = set(), set()
+    for h in (local_config().get("held_rules") or []):
+        if not isinstance(h, str) or not h.strip():
+            continue
+        h = h.strip()
+        if re.fullmatch(r"(rid:)?R\d+", h):
+            rids.add(h if h.startswith(_RID) else _RID + h)
+        else:
+            anchors.add(_anchor_key(h))
+    return rids, anchors
+
+
+def _refuse_with_restore(plan, section):
+    """`restore` runs before the pointer appliers and can add rows (pointers too) their check never saw (P3-A-02)."""
+    if (plan.get("restore") or {}).get("learnings"):
+        raise PlanError(f"'restore' and '{section}' in one plan - restore first (maintain Step 5b), then "
+                        f"'{section}' in a second plan against the restored store")
+
+
 def validate_principles(mem, plan):
     """Pointer shape, before the first byte (D-021 (4)): the rule's wording lives at
     `anchor`, so an anchor that does not resolve TODAY is refused."""
     items = plan.get("principles") or []
     if not items:
         return
+    if plan.get("principle_retire"):
+        raise PlanError("'principles' and 'principle_retire' in one plan - send them as two plans "
+                        "(retire first), each is checked against the store as it stands")
+    _refuse_with_restore(plan, "principles")
+    # ids as the corrections applier resolves them (_correction_common strips them, Codex P3-A-04-R2-01)
+    corrected = {str(c.get("id") or "").strip() for c in ((plan.get("corrections") or {}).get("learnings") or [])
+                 if isinstance(c, dict)} if isinstance(plan.get("corrections"), dict) else set()
     live = {str(r.get("id")): r for r in load_json(mem, "learnings/learnings.json", [])
             if isinstance(r, dict)}
     existing = {_anchor_key(r.get("anchor")): list(r.get("derived_from") or []) for r in live.values()
                 if r.get("kind") == "principle" and not r.get("superseded_by")}
+    existing_rid = {_anchor_key(r.get("anchor")): (_rids(r.get("tags")) or [None])[0] for r in live.values()
+                    if r.get("kind") == "principle" and not r.get("superseded_by")}
+    held_rids, held_anchors = held_rules()
     for it in items:
         if not isinstance(it, dict):
             raise PlanError("principle entry is not an object")
@@ -1829,6 +1935,25 @@ def validate_principles(mem, plan):
             raise PlanError("principle without 'anchor'")
         if not anchor_ok(anchor):
             raise PlanError(f"principle anchor does not resolve: {anchor}")
+        tags = it.get("tags", [])
+        if tags is None:
+            tags = []
+        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+            raise PlanError(f"principle '{anchor}': tags is not a list of strings")
+        rids = _rids(tags)
+        if len(rids) > 1:
+            raise PlanError(f"principle '{anchor}' names {len(rids)} rules ({', '.join(rids)}) - one rid: per pointer")
+        key = _anchor_key(anchor)
+        # the target pointer's own rid counts too: a card without rid: must not grow a held rule (P3-A-03)
+        own = [existing_rid[key]] if existing_rid.get(key) else []
+        held = [r for r in dict.fromkeys(rids + own) if r in held_rids] + (["anchor"] if key in held_anchors else [])
+        if held:
+            raise PlanError(f"principle '{anchor}' is on the hold list (held_rules in agentic-os.local.json: "
+                            f"{', '.join(held)}) - its rule-class release is pending")
+        if rids and existing_rid.get(key) and existing_rid[key] != rids[0]:
+            # one anchor without fragment can carry several rules; a merge across rules would mix them
+            raise PlanError(f"principle '{anchor}' ({rids[0]}) would merge into the pointer of {existing_rid[key]} "
+                            f"on the same anchor - give the rule its own fragment (^r-...)")
         members = it.get("members")
         if not isinstance(members, list) or not members or not all(isinstance(m, str) for m in members):
             raise PlanError(f"principle '{anchor}' needs a non-empty list of member ids")
@@ -1853,13 +1978,33 @@ def validate_principles(mem, plan):
                     f"principle member {m} is a rule-class learning (release state "
                     f"{(live[m].get('release') or {}).get('status', 'needs_explanation')!r}) - it needs the "
                     f"gate first ('rule_explanations', then the owner's 'rule_releases')")
+        shas = it.get("member_sha")
+        if shas is not None:
+            # P3-A: a plan built earlier stands on the members' text as it was then. Checked here, under
+            # the store lock and before the first byte: one changed member rejects the whole plan.
+            if not isinstance(shas, dict) or set(shas) != set(members):
+                raise PlanError(f"principle '{anchor}': member_sha must name exactly its members")
+            for m, want in shas.items():
+                if not isinstance(want, str) or not re.fullmatch(r"[0-9a-f]{12,64}", want):
+                    raise PlanError(f"principle '{anchor}': member_sha of {m} is not a hex sha256 (>= 12 chars)")
+                if not member_sha(live[m]).startswith(want):
+                    raise PlanError(f"principle member {m} changed since the plan was built (member_sha) - "
+                                    f"rebuild the plan from the current store")
         # The merge with an existing pointer is bounded HERE, before any applier
         # writes - not in apply_principles after the iteration log (Codex round 2).
-        key = _anchor_key(anchor)
         merged = list(dict.fromkeys(existing.get(key, []) + members))
         if len(merged) > DERIVED_MAX:
             raise PlanError(f"principle '{anchor}' would hold {len(merged)} members (max {DERIVED_MAX})")
+        hit = [m for m in merged if m in corrected]
+        if hit:
+            # the correction runs first and can reset a rule-class release this check still saw (P3-A-04), for a
+            # new member and for one the pointer already holds (R2-02); the pointer also stands on the members'
+            # text - one plan for the text, the next for the pointer
+            raise PlanError(f"principle '{anchor}': member {', '.join(hit)} is corrected in the same plan - send the "
+                            f"correction first, the pointer in a second plan")
         existing[key] = merged
+        if rids and not existing_rid.get(key):
+            existing_rid[key] = rids[0]
 
 
 def apply_principles(mem, plan, date, dry, touched, tally):
@@ -1880,43 +2025,165 @@ def apply_principles(mem, plan, date, dry, touched, tally):
     by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
     pointers = {_anchor_key(r.get("anchor")): r for r in rows
                 if isinstance(r, dict) and r.get("kind") == "principle" and not r.get("superseded_by")}
-    added, changed = [], 0
+    added, changed, unchanged = [], 0, 0
     for it in items:
         members = list(dict.fromkeys(it["members"]))
         summary = " ".join(str(it["summary"]).split())
+        plain = clean_plain(it.get("plain"), f"principle {it['anchor']!r}")
+        tags = list(dict.fromkeys(it.get("tags") or []))
         key = _anchor_key(it["anchor"])
         ptr = pointers.get(key)
         if ptr is not None:
-            merged = list(dict.fromkeys(list(ptr.get("derived_from") or []) + members))
+            old_members, old_tags = list(ptr.get("derived_from") or []), list(ptr.get("tags") or [])
+            merged = list(dict.fromkeys(old_members + members))
             if len(merged) > DERIVED_MAX:
                 raise PlanError(f"pointer {ptr.get('id')} would hold {len(merged)} members (max {DERIVED_MAX})")
-            ptr["derived_from"], ptr["summary"] = merged, summary
-            ptr["plain"] = clean_plain(it.get("plain"), f"principle {it['anchor']!r}")
+            new_tags = list(dict.fromkeys(old_tags + tags))
+            imp = _pointer_importance(merged, by_id)
+            if (merged == old_members and ptr.get("summary") == summary and ptr.get("plain") == plain
+                    and new_tags == old_tags and ptr.get("importance") == imp):
+                # P3-A: the same pointer sent again changes nothing - no last_relevant, no counter
+                unchanged += 1
+                continue
+            # audit of every change to an existing pointer, so principle_retire can take a run back - also for one
+            # created earlier in THIS plan: without it a second tag's merge would look like the creating tag (P3-A-01)
+            ptr.setdefault("merges", []).append({
+                "date": date, "tag": _condense_tag(tags),
+                "added_members": [m for m in merged if m not in old_members],
+                "old_summary": ptr.get("summary"), "old_plain": ptr.get("plain"),
+                "old_tags": old_tags, "old_text": ptr.get("text")})
+            if ptr not in added:
+                changed += 1
+            ptr["derived_from"], ptr["summary"], ptr["plain"], ptr["tags"] = merged, summary, plain, new_tags
             ptr["text"] = f"{summary} → {it['anchor']}"
             ptr["last_relevant"] = date
-            members = merged
+            ptr["importance"] = imp
         else:
             ptr = {"id": next_id(rows + added, "L", reserved=archive), "date": date, "kind": "principle",
                    "text": f"{summary} → {it['anchor']}", "summary": summary,
-                   "anchor": str(it["anchor"]).strip(), "importance": 3,
-                   "plain": clean_plain(it.get("plain"), f"principle {it['anchor']!r}"),
-                   "tags": list(it.get("tags") or []), "layer": "long-term", "superseded_by": None,
+                   "anchor": str(it["anchor"]).strip(), "importance": _pointer_importance(members, by_id),
+                   "plain": plain, "tags": tags, "layer": "long-term", "superseded_by": None,
                    "last_relevant": date, "derived_from": members, "bridge_status": "approved"}
             added.append(ptr)
             pointers[key] = ptr
-        imps = [by_id[m].get("importance") for m in members if m in by_id]
-        imps = [i for i in imps if isinstance(i, int) and not isinstance(i, bool) and 1 <= i <= 5]
-        ptr["importance"] = max(imps) if imps else 3
         if len(summary) > SUMMARY_MAX:
             tally["warnings"].append(f"{ptr['id']}: summary {len(summary)} Zeichen > {SUMMARY_MAX}")
-        if ptr not in added:
-            changed += 1
+    tally["principles_added"] = len(added)
+    tally["principles_updated"] = changed
+    tally["principles_unchanged"] = unchanged
+    tally["principle_ids"] = [str(p["id"]) for p in added]
+    if not added and not changed:
+        return  # idempotent: a plan that changes nothing writes nothing
     rows.extend(added)
     write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
     render_learnings_md(mem, rows, dry, touched)
-    tally["principles_added"] = len(added)
-    tally["principles_updated"] = changed
-    tally["principle_ids"] = [str(p["id"]) for p in added]
+
+
+def _pointer_importance(members, by_id):
+    imps = [by_id[m].get("importance") for m in members if m in by_id]
+    imps = [i for i in imps if isinstance(i, int) and not isinstance(i, bool) and 1 <= i <= 5]
+    return max(imps) if imps else 3
+
+
+def _retire_actions(rows, spec):
+    """-> [(pointer, "retire" | "unmerge" | "skip")] for one principle_retire entry; PlanError when the
+    entry cannot be taken back cleanly. By tag: a pointer CREATED under the tag is retired, a pointer the
+    tag only merged into gets that merge undone (members, summary, plain, tags back), so a condense run
+    leaves older pointers as they were. A newer merge under another tag on top blocks both - undo that first."""
+    tag = spec.get("tag")
+    out = []
+    if spec.get("ids") is not None:
+        by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+        for pid in spec["ids"]:
+            row = by_id.get(pid)
+            if row is None or row.get("kind") != "principle":
+                raise PlanError(f"principle_retire: {pid} is not a pointer of this store")
+            out.append((row, "skip" if row.get("superseded_by") else "retire"))
+        return out
+    for row in rows:
+        if not isinstance(row, dict) or row.get("kind") != "principle" or row.get("superseded_by"):
+            continue
+        merges = row.get("merges") or []
+        hits = [i for i, m in enumerate(merges) if isinstance(m, dict) and m.get("tag") == tag]
+        created = tag in ((merges[hits[0]].get("old_tags") or []) if hits else (row.get("tags") or []))
+        if not hits and not created:
+            continue
+        first = 0 if created else hits[0]
+        foreign = [m.get("tag") for m in merges[first:] if isinstance(m, dict) and m.get("tag") != tag]
+        if foreign:
+            raise PlanError(f"principle_retire {tag}: pointer {row.get('id')} has a newer change "
+                            f"({foreign[-1] or 'without condense tag'}) - take that back first")
+        out.append((row, "retire" if created else "unmerge"))
+    return out
+
+
+def validate_principle_retire(mem, plan):
+    """Plan section `principle_retire` (P3-A): the way back for pointers, checked before the first byte."""
+    items = plan.get("principle_retire")
+    if items is None:
+        return
+    if not isinstance(items, list) or not items:
+        raise PlanError("principle_retire must be a non-empty list")
+    _refuse_with_restore(plan, "principle_retire")
+    rows = load_json(mem, "learnings/learnings.json", [])
+    for it in items:
+        if not isinstance(it, dict):
+            raise PlanError("principle_retire entry is not an object")
+        reason = " ".join(str(it.get("reason") or "").split()) if isinstance(it.get("reason"), str) else ""
+        if not reason or len(reason) > 200:
+            raise PlanError("principle_retire needs a 'reason' (1..200 characters)")
+        has_ids, has_tag = it.get("ids") is not None, it.get("tag") is not None
+        if has_ids == has_tag:
+            raise PlanError("principle_retire takes either 'ids' or 'tag', not both and not neither")
+        if has_ids and (not isinstance(it["ids"], list) or not it["ids"]
+                        or not all(isinstance(i, str) and i for i in it["ids"])):
+            raise PlanError("principle_retire 'ids' must be a non-empty list of pointer ids")
+        if has_tag and not (isinstance(it["tag"], str) and _CONDENSE.match(it["tag"])):
+            raise PlanError(f"principle_retire 'tag' must be a condense:<date> tag, got {it['tag']!r}")
+        _retire_actions(rows, it)
+
+
+def apply_principle_retire(mem, plan, date, dry, touched, tally):
+    """Retire sets superseded_by = obsolete:<reason> (D-021: nothing is deleted, the members are plain
+    learnings again); an unmerge restores the pointer as it stood before the tagged merge. A second run
+    finds nothing live under the tag and changes nothing."""
+    items = plan.get("principle_retire") or []
+    if not items:
+        return
+    rows = load_json(mem, "learnings/learnings.json", [])
+    by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    retired, unmerged, skipped = [], [], 0
+    for it in items:
+        reason = " ".join(str(it["reason"]).split())
+        for row, action in _retire_actions(rows, it):
+            if action == "skip":
+                skipped += 1
+            elif action == "retire":
+                row["superseded_by"] = f"obsolete:{reason}"
+                retired.append(str(row.get("id")))
+            else:
+                merges = row["merges"]
+                cut = next(i for i, m in enumerate(merges) if isinstance(m, dict) and m.get("tag") == it["tag"])
+                first, removed = merges[cut], {m for x in merges[cut:] for m in (x.get("added_members") or [])}
+                row["derived_from"] = [m for m in (row.get("derived_from") or []) if m not in removed]
+                for field in ("summary", "plain", "tags", "text"):
+                    if first.get(f"old_{field}") is None:
+                        row.pop(field, None)   # a legacy pointer had no such field
+                    else:
+                        row[field] = first[f"old_{field}"]
+                row["importance"] = _pointer_importance(row["derived_from"], by_id)
+                row["merges"] = merges[:cut]
+                row.setdefault("unmerges", []).append({"date": date, "tag": it["tag"], "reason": reason,
+                                                       "removed_members": sorted(removed)})
+                unmerged.append(str(row.get("id")))
+    tally["principles_retired"], tally["principles_unmerged"] = retired, unmerged
+    tally["principle_retire_skipped"] = skipped
+    if not retired and not unmerged:
+        if not skipped:
+            tally["warnings"].append("principle_retire: no live pointer matched - nothing to take back")
+        return
+    write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
+    render_learnings_md(mem, rows, dry, touched)
 
 
 # Stamps maintain put on archived rows; they describe the archive, not the entry.
@@ -2836,7 +3103,8 @@ def new_tally() -> dict:
         "decisions_corrected": 0, "user_lines_corrected": 0,
         "correction_ids": [], "corrections_projection_needed": False,
         "restored": 0, "restored_ids": [], "restore_skipped_live": 0, "restore_dropped": [],
-        "principles_added": 0, "principles_updated": 0, "principle_ids": [],
+        "principles_added": 0, "principles_updated": 0, "principles_unchanged": 0, "principle_ids": [],
+        "principles_retired": [], "principles_unmerged": [], "principle_retire_skipped": 0,
         "candidates_new": 0, "candidates_updated": 0, "candidates_promoted": 0,
         "candidates_rejected_trust": 0, "promotion_blocked_trust": 0,
         "promotion_skipped_duplicate": 0,
@@ -2875,6 +3143,9 @@ def main() -> int:
                     help="only regenerate learnings.md from learnings.json (no plan, no marker)")
     ap.add_argument("--propose-encoding-corrections", action="store_true",
                     help="print the corrections plan that repairs Mojibake in tasks, learnings, decisions and user.md lines (read-only)")
+    ap.add_argument("--snapshot", action="store_true",
+                    help="byte copy of the store (store_snapshot.py) under the lock, after the plan check and "
+                         "before the first write; not on --dry-run")
     ap.add_argument("--lint", action="store_true",
                     help="report live learning rows that break the write rules (read-only)")
     ap.add_argument("--lock-timeout", type=float, default=store_lock.TIMEOUT_SECONDS,
@@ -2947,6 +3218,7 @@ def main() -> int:
 
     tally = new_tally()
     touched: list = []
+    snapshot = None
     try:
         paths = identity_store.select_paths(args.mem, args.identity_store, os.environ)
     except identity_store.GuardError as e:
@@ -2973,6 +3245,9 @@ def main() -> int:
         with guard, central_guard:
             preflight_readable(args.mem, plan, paths)  # before the FIRST write, not per applier
             validate_plan(args.mem, plan, paths)
+            if args.snapshot and not args.dry_run:
+                # P3-A: under the lock, so the copy is the state the plan was checked against
+                snapshot = store_snapshot.take(args.mem)["snapshot"]
             apply_iterations(args.mem, plan, date, args.dry_run, touched, tally)
             apply_decisions(args.mem, plan, date, args.dry_run, touched, tally)
             apply_restore(args.mem, plan, date, args.dry_run, touched, tally)
@@ -2982,6 +3257,7 @@ def main() -> int:
                                     paths=paths)
             apply_corrections(args.mem, plan, date, args.dry_run, touched, tally, session_id, paths=paths)
             apply_learnings(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_principle_retire(args.mem, plan, date, args.dry_run, touched, tally)
             apply_principles(args.mem, plan, date, args.dry_run, touched, tally)
             apply_bridge_decisions(args.mem, plan, date, args.dry_run, touched, tally)
             apply_rule_explanations(args.mem, plan, date, args.dry_run, touched, tally)
@@ -3031,6 +3307,8 @@ def main() -> int:
         "tally": tally,
         "identity_status_line": identity_line,
     }
+    if snapshot:
+        result["snapshot"] = snapshot
     queue = tally["rule_class_open"]
     if queue["needs_explanation"] or queue["explained"] or any(
             k in plan for k in ("rule_explanations", "rule_releases")):

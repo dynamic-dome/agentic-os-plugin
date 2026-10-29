@@ -26,6 +26,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(HERE))
 SCRIPTS = os.path.join(PLUGIN_ROOT, "scripts")
 FIXROOT = os.path.join(HERE, "fixtures")
+sys.path.insert(0, os.path.dirname(HERE))
+from _isolated_home import process_env  # noqa: E402
+
+# The scripts resolve the central profile via the home (P2): with the real one active, its profile.md entered the
+# state hash and the fast-path fixture failed in every non-isolated run (release.py). A fresh temp home instead.
+ENV, HOME = process_env(PYTHONIOENCODING="utf-8")
 
 TESTS = 0
 FAILS = 0
@@ -59,7 +65,7 @@ def run_preprocess(mem):
     """Return the parsed preprocess_state.py state object (no --session-id)."""
     proc = subprocess.run(
         [sys.executable, os.path.join(SCRIPTS, "preprocess_state.py"), mem],
-        capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+        capture_output=True, encoding="utf-8", errors="replace", timeout=30, env=ENV,
     )
     return json.loads(proc.stdout)
 
@@ -73,7 +79,7 @@ def gc_eligible_count(mem):
     """Run gc_dirty_markers.py dry-run; return number of GC-eligible markers."""
     proc = subprocess.run(
         [sys.executable, os.path.join(SCRIPTS, "gc_dirty_markers.py"), mem],
-        capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+        capture_output=True, encoding="utf-8", errors="replace", timeout=30, env=ENV,
     )
     for line in proc.stdout.splitlines():
         line = line.strip()

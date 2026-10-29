@@ -276,4 +276,8 @@ Step 1 or Step 2 instead — never nothing.
 - Only the **main agent** may invoke this skill. Subagents must NOT call obsidian-sync.
 - This skill writes to `~/wiki/` which is OUTSIDE the current project directory. This is intentional and expected.
 - Never delete or overwrite existing wiki pages. Only append or create new.
+- **Never write `wiki/concepts/agent-regeln.md`** (stable rule anchors, P3-A): rule pointers in the stores point at
+  its `^r-` block ids, so a rewrite or a renamed id loses their anchor. Step 5 goes to the rolling synthesis only;
+  a learning that belongs to one of these rules stays there or is reported - the page itself changes only as an
+  owner-reviewed wiki edit.
 - All wiki writes use `[[wiki/...]]` link format per the wiki's CLAUDE.md conventions.

@@ -635,6 +635,7 @@ def verify_migration(plan: dict, backup_dir: str, backup: dict, store: str) -> d
     E3 the candidates are the source candidates (same fields; only id, key suffix "@<projekt>", origin and Q14's
        confirmed_by "legacy" differ), every central id is a unique PCn and every key unique (F08, F09);
     E4 every source changelog entry stands in the central changelog with its origin;
+    the briefing projection exists and equals the one of profile.md and the queue (T-050);
     and every source file is byte-equal to the backup (D-021), and no store appeared since the plan (F11)."""
     import identity_store
     bad, counts = [], collections.Counter()
@@ -652,6 +653,14 @@ def verify_migration(plan: dict, backup_dir: str, backup: dict, store: str) -> d
     queue = read_central(identity_store.PROFILE_QUEUE, True)
     changelog = read_central(identity_store.PROFILE_CHANGELOG, True)
     ledger = read_central(identity_store.MIGRATION_LEDGER, True) or {}
+    # the briefing projection the hook shows must be the one of the profile and queue on disk (T-050)
+    import identity_briefing
+    briefing = read_central(identity_store.PROFILE_BRIEFING, False)
+    want = "".join(line + "\n" for line in identity_briefing.select_lines(
+        profile, queue if isinstance(queue, list) else []))
+    if os.path.isfile(os.path.join(store, *identity_store.PROFILE_BRIEFING.split("/"))) and briefing != want:
+        bad.append(f"{identity_store.PROFILE_BRIEFING} ist nicht die Projektion von profile.md und Queue "
+                   f"(neu erzeugen: ein Wrap-up mit Identitaetsdaten schreibt sie)")
 
     # no store appeared or vanished since the plan (F11)
     gaps: list = []

@@ -73,6 +73,123 @@ def read(path):
         return f.read()
 
 
+def pointer(pid, members, anchor, date="2026-10-07", importance=4):
+    """A rule pointer row (kind "principle", 5.4.0) as apply_wrapup writes it."""
+    return {"id": pid, "date": date, "kind": "principle", "text": f"Regel {pid} -> {anchor}",
+            "summary": f"Regel {pid}", "anchor": anchor, "importance": importance, "tags": [],
+            "layer": "long-term", "superseded_by": None, "last_relevant": date,
+            "derived_from": list(members), "bridge_status": "approved"}
+
+
+def block_lines(content):
+    body = content[content.index(BEGIN):content.index(END)]
+    return [l for l in body.split("\n") if l.startswith("- [")]
+
+
+def pointer_tests():
+    """P3-A: pointers get their own section and cap; only members of SHOWN pointers are folded."""
+    print("--- rule pointers (P3-A)")
+    with tempfile.TemporaryDirectory() as tmp:
+        rules = os.path.join(tmp, "regeln.md")
+        with open(rules, "w", encoding="utf-8") as f:
+            f.write("# Regeln\n" + "".join(f"- Regel {i} ^r-r{i}\n" for i in range(20)))
+
+        # 1. more than 10 pointers: 10 shown by relevance, overflow line, members of hidden ones stay visible
+        rows, ptrs = [], []
+        for i in range(12):
+            n = 12 - i   # P0 has 12 members ... P11 has 1: relevance = number of live members
+            members = [f"L{i}x{k}" for k in range(n)]
+            rows += [learning(m, "2026-09-01", f"Mitglied {m} von Regel {i}", bridge="approved") for m in members]
+            ptrs.append(pointer(f"P{i}", members, f"{rules}#^r-r{i}", importance=5 if i == 11 else 3))
+        mem, agents = setup(tmp, rows + ptrs, "# AGENTS\n")
+        p = run([mem, "--agents-md", agents], cwd=tmp)
+        content = read(agents)
+        lines = block_lines(content)
+        shown = [l.split("]")[0][3:] for l in lines if "★" in l]
+        check("pointers: 10 shown under their own cap", len(shown) == 10, str(shown))
+        check("pointers: ordered by live members, not by importance (P11 has importance 5, 1 member)",
+              shown == [f"P{i}" for i in range(10)], str(shown))
+        check("pointers: overflow line names the 2 hidden pointers",
+              "(2 weitere Regel-Zeiger: .agent-memory/learnings/learnings.json)" in content, content[-400:])
+        check("pointers: line carries anchor and '+n Belege'",
+              any(l.startswith("- [P0] ★ ") and "→ regeln.md#^r-r0" in l and "(+12 Belege)" in l for l in lines),
+              str(lines[:2]))
+        listed = {l.split("]")[0][3:] for l in lines if "★" not in l}
+        check("pointers: members of shown pointers are folded",
+              not any(m.startswith(("L0x", "L9x")) for m in listed), str(sorted(listed)))
+        check("pointers: members of the hidden pointers stay visible",
+              listed == {"L10x0", "L10x1", "L11x0"}, str(sorted(listed)))
+        check("pointers: exit 0 and the cap is reported", p.returncode == 0 and "pointers capped at 10" in p.stdout,
+              p.stdout + p.stderr[:200])
+        sys.path.insert(0, os.path.join(PLUGIN_ROOT, "scripts"))
+        import bridge_projection as bp_mod
+        rendered = [l.split("]")[0][3:] for l in lines]
+        check("shown() is exactly the rendered selection, in block order (Codex P3-A-05)",
+              [e["id"] for e in bp_mod.shown(mem)] == rendered, f"{[e['id'] for e in bp_mod.shown(mem)]} vs {rendered}")
+
+    # 2. several pointers at CAP=6: pointers do not eat the learnings' cap
+    with tempfile.TemporaryDirectory() as tmp:
+        rules = os.path.join(tmp, "regeln.md")
+        with open(rules, "w", encoding="utf-8") as f:
+            f.write("# Regeln\n")
+        ptrs = [pointer(f"P{i}", [f"M{i}"], rules) for i in range(8)]
+        members = [learning(f"M{i}", "2026-09-01", f"Mitglied {i}", bridge="approved") for i in range(8)]
+        plain = [learning(f"L{i}", f"2026-09-{10 + i:02d}", f"Einzel-Learning {i}", bridge="approved") for i in range(7)]
+        mem, agents = setup(tmp, ptrs + members + plain, "# AGENTS\n")
+        run([mem, "--agents-md", agents], cwd=tmp)
+        content = read(agents)
+        lines = block_lines(content)
+        check("CAP=6: all 8 pointers shown", sum(1 for l in lines if "★" in l) == 8, str(lines))
+        check("CAP=6: still 6 plain learnings plus the overflow line",
+              sum(1 for l in lines if "★" not in l) == 6 and "(1 ältere: learnings.json)" in content, str(lines))
+        check("CAP=6: no member listed next to its shown pointer", not any(l.startswith("- [M") for l in lines),
+              str(lines))
+        check("CAP=6: pointers come before the plain learnings",
+              max(i for i, l in enumerate(lines) if "★" in l) < min(i for i, l in enumerate(lines) if "★" not in l))
+        before = content
+        p = run([mem, "--agents-md", agents], cwd=tmp)
+        check("pointers: second run byte-identical", read(agents) == before and "up to date" in p.stdout, p.stdout)
+
+    # 3. one UID in two rules
+    with tempfile.TemporaryDirectory() as tmp:
+        rules = os.path.join(tmp, "regeln.md")
+        with open(rules, "w", encoding="utf-8") as f:
+            f.write("# Regeln\n")
+        shared = learning("L1", "2026-09-01", "gehoert zu zwei Regeln", bridge="approved")
+        mem, agents = setup(tmp, [shared, learning("L2", "2026-09-02", "nur Regel A", bridge="approved"),
+                                  pointer("PA", ["L1", "L2"], rules), pointer("PB", ["L1"], rules)], "# AGENTS\n")
+        run([mem, "--agents-md", agents], cwd=tmp)
+        lines = block_lines(read(agents))
+        check("UID in two shown rules: not listed itself, both pointers count it",
+              not any(l.startswith("- [L1]") for l in lines)
+              and any(l.startswith("- [PA]") and "(+2 Belege)" in l for l in lines)
+              and any(l.startswith("- [PB]") and "(+1 Beleg)" in l for l in lines), str(lines))
+    sys.path.insert(0, os.path.join(PLUGIN_ROOT, "scripts"))
+    import bridge_projection as bp
+    import projection_text as pt
+    rules = os.path.join(PLUGIN_ROOT, "README.md")
+    by_id = {f"M{i}": learning(f"M{i}", "2026-09-01", "x", bridge="approved") for i in range(12)}
+    ptrs = [pointer(f"P{i}", [f"M{i}"], rules) for i in range(11)] + [pointer("PX", ["M11"], rules, date="2026-01-01")]
+    ptrs[0]["derived_from"] = ["M0", "M11"]   # M11 is in P0 (2 members, ranks first) and in PX
+    shown, folded, hidden = pt.select_pointers(ptrs, by_id, 10, files=set())
+    check("UID in a shown and a hidden rule: folded once by the shown one",
+          "M11" in folded and "PX" not in [p["id"] for p in shown] and hidden == 2, str([p["id"] for p in shown]))
+
+    # 4. always-loaded rule files rank last; cut by the cap, their members stay folded silently
+    loaded = {os.path.normcase(os.path.abspath(rules))}
+    other = os.path.join(PLUGIN_ROOT, "CLAUDE.md")
+    ptrs = [pointer("PL", ["M0", "M1", "M2"], rules)] + [pointer(f"Q{i}", [f"M{3 + i}"], other) for i in range(2)]
+    shown, folded, hidden = pt.select_pointers(ptrs, by_id, 2, files=loaded)
+    check("always-loaded: ranks last despite most members, its members stay folded",
+          sorted(p["id"] for p in shown) == ["Q0", "Q1"] and {"M0", "M1", "M2"} <= folded and hidden == 1,
+          f"{[p['id'] for p in shown]} {sorted(folded)}")
+    shown, folded, hidden = pt.select_pointers(ptrs, by_id, 5, files=loaded)
+    check("always-loaded: shown last when the cap leaves room", [p["id"] for p in shown][-1] == "PL" and len(shown) == 3,
+          str([p["id"] for p in shown]))
+    check("shown(): the exact rendered selection, pointers first",
+          callable(getattr(bp, "shown", None)))
+
+
 def main():
     print("=== bridge_projection.py tests ===")
     check("script exists", os.path.isfile(SCRIPT))
@@ -414,6 +531,8 @@ def main():
                   and "Offene Tasks (bomproj)" in content,
                   f"rc={p.returncode} err={p.stderr[:200]} {content[-200:]!r}")
     check("BOM store: AGENTS.md identical to the BOM-less result", outs["bom"] == outs["plain"])
+
+    pointer_tests()
 
     n = len(FAILURES)
     print(f"=== {n} failure(s) ===" if n else "=== all tests passed ===")
