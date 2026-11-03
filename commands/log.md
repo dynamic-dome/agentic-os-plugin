@@ -88,5 +88,4 @@ anti-pattern candidate for pattern-extractor.
 - Do NOT write `iteration-log.md`, `errors.json` or `current-session.json` with Write/Edit
 - Do NOT modify `patterns.json` (`scripts/extract_patterns.py`) or `decisions.json`
   (`context-keeper` via the `decisions` plan section)
-- Do NOT push to global memory (`/agentic-os:sync-context`)
 - Do NOT count individual file saves as attempts

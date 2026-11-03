@@ -21,10 +21,8 @@ MEM_DIRS=(
   context
   iterations
   patterns
-  quality
   learnings
   generated-skills
-  knowledge
   working
 )
 
@@ -34,8 +32,6 @@ MEM_JSON_ARRAY=(
   context/open-tasks.json
   iterations/errors.json
   patterns/patterns.json
-  quality/test-results.json
-  quality/code-reviews.json
   learnings/learnings.json
   working/user-candidates.json
   identity/user-changelog.json
@@ -48,27 +44,14 @@ MEM_JSON_ARRAY=(
 # user.md is written only while absent, but a first init always finds it absent, so it is listed.
 # context/project-context.md is NOT here: each consumer writes it itself (see end of the function).
 MEM_INIT_FILES=(
-  quality/quality-score.json
   working/current-session.json
   iterations/iteration-log.md
   patterns/patterns.md
   learnings/learnings.md
   identity/soul-candidates.md
-  knowledge/notebook-registry.md
   session-summary.md
   identity/soul.md
   identity/user.md
-)
-
-# Tags/signals that are NEVER promoted into the global cross-project layer
-# (privacy / memory-poisoning guard). The sync-context Push pre-filter (4.A) drops any
-# entry carrying one of these tags BEFORE the promotion gate, so denied facts never
-# reach ~/.claude-memory/global/. Read by is_denied() in scripts/global-schema.sh.
-# This array creates no files — it is a sourceable constant, not part of the store schema.
-MEM_GLOBAL_DENY_TAGS=(
-  credentials secret token api_key api-key password
-  personal pii email phone address
-  client-name internal-only private
 )
 
 # create_memory_structure <memory_dir>
@@ -87,11 +70,6 @@ create_memory_structure() {
     [ -f "$MEMORY_DIR/$f" ] || echo "[]" > "$MEMORY_DIR/$f"
   done
 
-  # quality-score.json — structured default
-  [ -f "$MEMORY_DIR/quality/quality-score.json" ] || cat > "$MEMORY_DIR/quality/quality-score.json" << 'EOFILE'
-{"last_updated": null, "test_health": {"current_score": null, "trend": "unknown"}, "code_quality": {"current_score": null, "trend": "unknown"}}
-EOFILE
-
   # working/current-session.json — volatile working memory
   if [ ! -f "$MEMORY_DIR/working/current-session.json" ]; then
     local WM_DATE
@@ -109,9 +87,6 @@ EOFILE
   # identity signals here; session-bootstrap surfaces them for a [j/n] gate. NEVER auto-written
   # into soul.md without explicit user confirmation (trust boundary: conversation-only).
   [ -f "$MEMORY_DIR/identity/soul-candidates.md" ] || printf '# Soul Candidates\n\n*Keine offenen Kandidaten.*\n' > "$MEMORY_DIR/identity/soul-candidates.md"
-
-  # knowledge/notebook-registry.md
-  [ -f "$MEMORY_DIR/knowledge/notebook-registry.md" ] || printf '# NotebookLM Knowledge Base Registry\n\n*No notebooks registered yet. Add entries here as you create NotebookLM knowledge bases.*\n\n## Active Notebooks\n\n(none)\n\n## When to consult NotebookLM\n- For expert knowledge on topics covered by a notebook\n- When best practices or reference material is needed\n- When uncertain about the right approach\n' > "$MEMORY_DIR/knowledge/notebook-registry.md"
 
   # session-summary.md
   [ -f "$MEMORY_DIR/session-summary.md" ] || cat > "$MEMORY_DIR/session-summary.md" << 'EOFILE'

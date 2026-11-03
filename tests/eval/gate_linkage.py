@@ -62,9 +62,8 @@ BOOTSTRAP_GATES = [
         ["downgrade"],                                   # action: one-line note
     ]},
     {"name": "soul-candidate-gate", "clauses": [
-        ["soul-candidates.md"],                          # trigger: candidate queue
-        ["explicit `j`"],                                # trigger: user confirmation
-        ["user-changelog.json"],                         # action: audit trail
+        ["Soul candidate gate — retired"],               # 5.11.0: gate retired, no [j/n]
+        ["never write `soul.md`"],                       # action: read-only without exception
     ]},
     {"name": "user-candidate-gate", "clauses": [
         ["user-candidates.json"],                        # trigger: candidate queue
@@ -197,8 +196,8 @@ WRAPUP_GATES = [
     ]},
     {"name": "soul-growth", "clauses": [
         ["(soul-growth)"],                               # marker
-        ["soul-candidates.md"],                          # action: propose only
-        ["Never write `soul.md`"],                       # action: Stufe-B guard
+        ["Retired in 5.11.0"],                           # 5.11.0: no soul candidates planned
+        ["never write `soul.md` here"],                  # action: soul.md stays read-only
     ]},
     {"name": "identity-visible", "clauses": [
         ["(identity-visible)"],                          # marker

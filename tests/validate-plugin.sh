@@ -192,19 +192,17 @@ else
 fi
 
 
-# 8. sync-context command has error handling guidance
+# 8. the decommissioned global layer (sync-context, global_decay, global-schema, migrate-global-schema-4A)
+#    left the active plugin in 5.11.0 (moved to _archived/, revive via git mv). It must not come back by accident.
 echo ""
-echo "-- sync-context error handling --"
-SYNC_SKILL="$PLUGIN_ROOT/commands/sync-context.md"
-if [ -f "$SYNC_SKILL" ]; then
-    if grep -qi "error\|corrupt\|fail\|missing\|not exist\|does not exist\|fallback" "$SYNC_SKILL"; then
-        pass "sync-context: has error handling guidance"
+echo "-- global layer archived (sync-context + global scripts must not exist in the active tree) --"
+for GL_FILE in commands/sync-context.md scripts/global_decay.py scripts/global-schema.sh scripts/migrate-global-schema-4A.sh; do
+    if [ -e "$PLUGIN_ROOT/$GL_FILE" ]; then
+        fail "$GL_FILE exists in the active tree — the global layer is decommissioned (G-05) and archived under _archived/"
     else
-        fail "sync-context: missing error handling guidance (what to do when files are corrupt or missing)"
+        pass "$GL_FILE: not in the active tree (archived)"
     fi
-else
-    fail "sync-context: commands/sync-context.md not found"
-fi
+done
 
 # 9. session-start.sh has file size guard before stats counting
 echo ""
@@ -362,22 +360,8 @@ if [ "$NB_FAIL" -eq 0 ]; then
 fi
 
 
-# 35. sync-context command must not reference AskUserQuestion (nonexistent Claude Code tool)
-#     AskUserQuestion is not a real tool in Claude Code. When the skill instructs the agent
-#     to "Use AskUserQuestion", execution fails or the agent hallucinates the tool.
-#     The correct approach is to output a question as plain text and wait for user response.
-echo ""
-echo "-- sync-context no phantom AskUserQuestion tool --"
-SYNC_SKILL="$PLUGIN_ROOT/commands/sync-context.md"
-if [ -f "$SYNC_SKILL" ]; then
-    if grep -q "AskUserQuestion" "$SYNC_SKILL"; then
-        fail "sync-context: references 'AskUserQuestion' which is not a real Claude Code tool — replace with plain text question output"
-    else
-        pass "sync-context: does not reference nonexistent AskUserQuestion tool"
-    fi
-else
-    fail "sync-context: commands/sync-context.md not found"
-fi
+# 35. (removed in 5.11.0: the sync-context command is archived; its AskUserQuestion check went with it.
+#     Test 8 now guards that the command stays out of the active tree.)
 
 
 
@@ -404,31 +388,29 @@ else
 fi
 
 
-# 38. auto-init must create knowledge/notebook-registry.md
-#     session-bootstrap health check verifies knowledge/notebook-registry.md exists.
-#     If auto-init skips this file, bootstrap always warns about a missing file after
-#     a fresh auto-init, producing spurious health alerts.
-#     FUNCTIONAL check (not grep): the file may be created by the hook inline OR by the
-#     sourced mem-schema.sh — we verify it actually appears, regardless of where defined.
+# 38. auto-init must NOT create the empty stubs quality/ and knowledge/notebook-registry.md (5.11.0)
+#     Both had no active writer. Existing stores keep theirs untouched (the hook never deletes), and
+#     wrap-up Step 7 reads the registry only if it is present. FUNCTIONAL check on a fresh dir.
 echo ""
-echo "-- auto-init creates knowledge/notebook-registry.md (functional) --"
+echo "-- auto-init creates no empty quality/ or knowledge/ stubs (functional) --"
 SESSION_HOOK="$PLUGIN_ROOT/scripts/session-start.sh"
 if [ -f "$SESSION_HOOK" ]; then
     NR_TMP=$(mktemp -d)
     CLAUDE_PROJECT_DIR="$NR_TMP" bash "$SESSION_HOOK" > "$NR_TMP/out.json" 2>/dev/null
     NR_EXIT=$?
-    if [ "$NR_EXIT" -eq 0 ] && [ -f "$NR_TMP/.agent-memory/knowledge/notebook-registry.md" ]; then
-        pass "auto-init creates knowledge/notebook-registry.md (hook exit 0)"
+    if [ "$NR_EXIT" -ne 0 ]; then
+        fail "auto-init: hook exited non-zero ($NR_EXIT)"
+    elif [ -e "$NR_TMP/.agent-memory/quality" ] || [ -e "$NR_TMP/.agent-memory/knowledge" ]; then
+        fail "auto-init created quality/ or knowledge/ — empty stubs without a writer are no longer part of the schema (5.11.0)"
+    elif grep -q "missing: .*quality\|missing: .*notebook-registry" "$NR_TMP/out.json"; then
+        fail "auto-init: the completeness check still expects quality/ or notebook-registry.md"
     else
-        fail "auto-init missing knowledge/notebook-registry.md or hook exited non-zero ($NR_EXIT) — session-bootstrap health check will warn after auto-init"
+        pass "auto-init creates no quality/ or knowledge/ stubs and the completeness check does not expect them (hook exit 0)"
     fi
     rm -rf "$NR_TMP"
 else
     fail "session-start.sh: not found"
 fi
-
-
-
 # 39. status command must reference full subdirectory paths for memory files
 #     status.md tells agents to count entries in bare filenames like "patterns.json",
 #     "errors.json", "decisions.json", "iteration-log.md" — without the subdirectory
@@ -518,23 +500,7 @@ else
 fi
 
 
-# 42. status command must show code-reviews count in statistics
-#     The status command tracks iterations, patterns, errors, and decisions.
-#     code-reviews.json is a key quality metric — omitting it leaves users blind
-#     to how many reviews have been logged. All four tracked quality assets should
-#     appear together for a complete health picture.
-echo ""
-echo "-- status command code-reviews count --"
-STATUS_CMD="$PLUGIN_ROOT/commands/status.md"
-if [ -f "$STATUS_CMD" ]; then
-    if grep -qi "code.review\|reviews" "$STATUS_CMD"; then
-        pass "status: includes code-reviews count in statistics"
-    else
-        fail "status: missing code-reviews count — statistics section tracks iterations/patterns/errors/decisions but omits code-reviews.json, leaving review history invisible to the user"
-    fi
-else
-    fail "status.md not found"
-fi
+# 42. (removed in 5.11.0: status no longer reports quality/code-reviews.json - the legacy quality/ stub is gone)
 
 
 # 43. quality-gate skill removed in v4.0.0 — test removed
@@ -612,25 +578,19 @@ else
 fi
 
 
-# 48. init command notebook-registry.md template must use English
-#     commands/init.md initializes knowledge/notebook-registry.md with a German
-#     template ("Zentrales Register", "Aktive Notebooks", "Stichwörter", etc.).
-#     session-start.sh already uses English for the same file. When users run
-#     /init manually, they get German content — inconsistent with the plugin's
-#     English language convention applied everywhere else.
+# 48. init must not create the notebook registry any more (5.11.0): no template, no "created" line
 echo ""
-echo "-- init command notebook-registry.md template language consistency --"
+echo "-- init command does not create notebook-registry.md --"
 INIT_CMD="$PLUGIN_ROOT/commands/init.md"
 if [ -f "$INIT_CMD" ]; then
-    if grep -q "Zentrales Register\|Aktive Notebooks\|Stichwörter\|aktualisieren\|Wann NotebookLM\|Thema:\|Staerken:" "$INIT_CMD"; then
-        fail "init: notebook-registry.md template contains German strings — must use English for language consistency (cf. session-start.sh uses English)"
+    if grep -q "notebook-registry.md created\|Review .agent-memory/knowledge/notebook-registry.md\|├── knowledge/\|├── quality/" "$INIT_CMD"; then
+        fail "init: still announces quality/ or knowledge/notebook-registry.md as created output"
     else
-        pass "init: notebook-registry.md template uses English (no German placeholder strings)"
+        pass "init: does not announce quality/ or notebook-registry.md as created output"
     fi
 else
     fail "init: commands/init.md not found"
 fi
-
 
 # 49. soul.md init template: ONE source, German default (owner decision, spec 2026-10-27 P2 "die Vorlage wird
 #     auf Language: de gestellt"; DCO #10148). Before P2 this test demanded the opposite ("no Language: de in
@@ -870,7 +830,7 @@ if [ -f "$SS_SCRIPT" ]; then
     TMPDIR_TEST=$(mktemp -d)
     CLAUDE_PROJECT_DIR="$TMPDIR_TEST" bash "$SS_SCRIPT" > /dev/null 2>&1 || true
     MISSING=""
-    for subdir in identity context iterations patterns quality learnings generated-skills knowledge; do
+    for subdir in identity context iterations patterns learnings generated-skills; do
         [ ! -d "$TMPDIR_TEST/.agent-memory/$subdir" ] && MISSING="$MISSING $subdir"
     done
     if [ -z "$MISSING" ]; then
@@ -880,7 +840,7 @@ if [ -f "$SS_SCRIPT" ]; then
     fi
     # Check key files created
     FILES_OK=true
-    for keyfile in session-summary.md identity/soul.md context/project-context.md iterations/errors.json patterns/patterns.json quality/quality-score.json knowledge/notebook-registry.md; do
+    for keyfile in session-summary.md identity/soul.md context/project-context.md iterations/errors.json patterns/patterns.json; do
         [ ! -f "$TMPDIR_TEST/.agent-memory/$keyfile" ] && FILES_OK=false
     done
     if [ "$FILES_OK" = true ]; then
@@ -973,7 +933,7 @@ fi
 #     user-invocable / disable-model-invocation, docs: code.claude.com/docs/en/skills)
 #     — it was silently ignored by the harness. Contract now:
 #     (a) no skill or command may declare the dead user_invocable field;
-#     (b) manual-only behaviour is structural since v5.0.0 (sync-context is a command); skills invoked by wrap-up must NOT declare
+#     (b) manual-only behaviour is structural since v5.0.0 (maintain, log are commands); skills invoked by wrap-up must NOT declare
 #         disable-model-invocation: true — keeps their descriptions out of context
 #         and blocks autonomous invocation mechanically instead of via prose;
 #     (c) skills invoked by other skills via the Skill tool MUST stay
@@ -997,11 +957,11 @@ for CALLED_SKILL in context-keeper pattern-extractor obsidian-sync; do
         pass "skill $CALLED_SKILL: stays model-invocable (required for skill-to-skill delegation)"
     fi
 done
-# (c) the three script-core commands (v5.0.0) are slash-only. A command file is
+# (c) the script-core commands (v5.0.0) are slash-only. A command file is
 #     still resolvable by the Skill tool and its description loads into context;
 #     only `disable-model-invocation: true` makes "manual-only" mechanical
 #     (Codex Verifier finding, 2026-09-08).
-for MANUAL_CMD in maintain log sync-context; do
+for MANUAL_CMD in maintain log; do
     FM=$(awk 'BEGIN{c=0} /^---/{c++; next} c==1{print} c==2{exit}' "$PLUGIN_ROOT/commands/$MANUAL_CMD.md")
     if echo "$FM" | grep -q "^disable-model-invocation: true"; then
         pass "command $MANUAL_CMD: slash-only via disable-model-invocation: true"
@@ -1055,9 +1015,8 @@ else
                    context/decisions.json context/open-tasks.json \
                    iterations/iteration-log.md iterations/errors.json \
                    patterns/patterns.md patterns/patterns.json \
-                   quality/test-results.json quality/code-reviews.json quality/quality-score.json \
                    learnings/learnings.md learnings/learnings.json \
-                   knowledge/notebook-registry.md working/current-session.json \
+                   working/current-session.json \
                    working/user-candidates.json \
                    session-summary.md; do
             [ -f "$SCHEMA_TMP/.agent-memory/$req" ] || MISSING="$MISSING $req"
@@ -1065,6 +1024,10 @@ else
         # The init stub must carry the projection header that maintain 5.2 and
         # memory-audit check — otherwise every fresh store is flagged "regenerate".
         LMD_STUB=$(sed -n 3p "$SCHEMA_TMP/.agent-memory/learnings/learnings.md" 2>/dev/null)
+        # 5.11.0: empty stubs without a writer are NOT part of the schema any more.
+        for gone in quality knowledge; do
+            [ -e "$SCHEMA_TMP/.agent-memory/$gone" ] && MISSING="$MISSING (unexpected:$gone/)"
+        done
         rm -rf "$SCHEMA_TMP"
         if [ -z "$MISSING" ]; then
             pass "mem-schema.sh produces all schema files (full list)"
@@ -1192,14 +1155,11 @@ else
         fail "memory-audit: must report drift (root open-tasks, schema), staleness (learnings layer age, quality last_updated) and provenance/schema consistency"
     fi
 
-    # 4.A: memory-audit must also report the global provenance layer (read-only).
-    if grep -qiE "\(global-provenance-audit\)" "$MA_CMD" \
-       && grep -qiE "scope" "$MA_CMD" && grep -qiE "valid_from" "$MA_CMD" \
-       && grep -qiE "source_projects" "$MA_CMD" \
-       && grep -qiE "promotion-gate violation" "$MA_CMD"; then
-        pass "memory-audit: reports global provenance (scope/valid_from/source_projects, promotion-gate violation)"
+    # 5.11.0: the global layer is archived - memory-audit must no longer audit it.
+    if grep -qiE "\(global-provenance-audit\)|claude-memory/global" "$MA_CMD"; then
+        fail "memory-audit: still audits the archived global layer (global-provenance-audit / ~/.claude-memory/global) - removed in 5.11.0"
     else
-        fail "memory-audit: must report the 4.A global layer (global-provenance-audit) — entries missing scope/valid_from/source_projects and active promotion-gate violations"
+        pass "memory-audit: no audit of the archived global layer (5.11.0)"
     fi
 
     # 4.A: the global audit must stay read-only — allowed_tools may not gain a write tool.

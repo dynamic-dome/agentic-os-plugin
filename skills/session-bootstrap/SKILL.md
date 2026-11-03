@@ -357,22 +357,17 @@ RECOMMENDED NEXT STEPS
 
 ## Step 6.5: Identity Gates + Starvation Check
 
-This step surfaces the identity queues (`working/user-candidates.json`,
-`identity/soul-candidates.md`) and detects a starving pipeline. `soul.md` is never
-written autonomously (Stufe B). Rationale: `references/bootstrap-wrapup-rationale.md`.
+This step surfaces the user candidate queue (`working/user-candidates.json`, or the central
+`profile-candidates.json` via stage 0) and detects a starving pipeline. `soul.md` is never written
+(5.11.0: read-only history). Rationale: `references/bootstrap-wrapup-rationale.md`.
 
-### (a) Soul candidate gate (the single write exception)
+### (a) Soul candidate gate — retired (5.11.0)
 
-1. Read `identity/soul-candidates.md`. Missing or empty stub
-   (`*Keine offenen Kandidaten.*`) → skip silently.
-2. Open candidates → ONE briefing line: `SOUL CANDIDATES: {n} warten — übernehmen? [j/n]`
-3. **Only on an explicit `j`**: merge candidates into `soul.md` in a single write, append
-   a `field: soul` entry to `identity/user-changelog.json` (audit/rollback), reset
-   `soul-candidates.md` to the empty stub.
-4. On `n`/no answer/anything else: do nothing — candidates stay queued.
-
-This confirmed soul.md write is the **only** exception to bootstrap's read-only rule:
-user-triggered, never autonomous, touches only soul.md + changelog + queue.
+Retired with wrap-up Step 6.4 (owner go 2026-11-03): the agent's character lives in the global rules
+`~/.claude/CLAUDE.md`, `soul.md` is read-only history. Do NOT ask a soul `[j/n]` question,
+never write `soul.md` and never write `identity/soul-candidates.md`. Old candidates stay where they are; if the owner wants one of them,
+it becomes a rule change in the owner's global rule source, not a soul.md write. Session-bootstrap is
+read-only again without exception.
 
 ### (b) User candidate fallback gate
 
@@ -422,8 +417,6 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/cost-trace.sh" append --mem .agent-memory \
 ## What NOT to Do
 
 - Do NOT dump full file contents to the user
-- Do NOT write to any files (bootstrap is read-only) — the SINGLE exception is the
-  user-confirmed soul.md write in Step 6.5, which happens only on an explicit `j`
+- Do NOT write to any files (bootstrap is read-only, without exception since 5.11.0 - the soul.md gate is retired)
 - Do NOT scan skill registries or build context matrices (Claude already knows available skills)
 - Do NOT estimate token budgets (unreliable, leads to false warnings)
-- Do NOT call sync-context (removed — no auto-sync on start)

@@ -1,6 +1,6 @@
 ---
 name: maintain
-description: Reports growth and integrity of the .agent-memory/ store - never moves, archives or deletes store entries (D-021). Script core (memory-thresholds.sh, gc_dirty_markers.py preview, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh, global_decay.py); prose only for JSON repair and owner decisions. Run on demand or when wrap-up / the SessionStart briefing print THRESHOLD lines.
+description: Reports growth and integrity of the .agent-memory/ store - never moves, archives or deletes store entries (D-021). Script core (memory-thresholds.sh, gc_dirty_markers.py preview, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh); prose only for JSON repair and owner decisions. Run on demand or when wrap-up / the SessionStart briefing print THRESHOLD lines.
 disable-model-invocation: true
 allowed_tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
 ---
@@ -116,37 +116,6 @@ any `dirty-*.json`.
 - `context/decisions.json`: list `status: "superseded"` entries; they are history and stay.
   Every reader already filters a superseded decision.
 
-## Step 4b: Decay the global layer (global-decay)
-
-Only when `~/.claude-memory/global/` exists. Since 2026-10-05 the layer is decommissioned
-(`STILLGELEGT.md`, G-05): the script then prints `global-decay: skipped (stillgelegt …)`,
-writes nothing and exits 0 — carry that line into the report. This is the **only** place confidence decays —
-never on the read path (session-bootstrap stays read-only). The script owns the rule — run it,
-do not compute or write decayed values by hand:
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/global_decay.py" ~/.claude-memory/global           # preview
-python "${CLAUDE_PLUGIN_ROOT}/scripts/global_decay.py" ~/.claude-memory/global --apply   # write
-```
-
-What it does to the global `patterns.json` / `learnings.json`:
-
-1. **−0.1 per full 90-day step since `last_relevant`, floored at 0.3** (a value already
-   below the floor is never raised). Each step is booked exactly once:
-   `decay_steps_applied` counts the steps already subtracted, `decay_anchor` names the
-   `last_relevant` they were counted from — only the delta is subtracted, so a second run
-   in the same quarter changes nothing. A recall moves `last_relevant`; the anchor then no
-   longer matches and the count restarts.
-2. Decayed `confidence <= 0.3` AND `last_relevant` older than 365 days → set
-   `lifecycle: "archived"` (the pull-lifecycle filter stops serving it).
-3. **Never hard-delete** — archived entries stay for audit, exactly like `superseded` ones.
-
-Carry its first line (`global-decay: … decayed, … archived, … unchanged, … skipped`) into the
-report; `skipped` > 0 means entries whose `last_relevant`, `confidence` or
-`decay_steps_applied` cannot be evaluated (they never decay) — list the ids it prints.
-Exit 1 (unreadable store) writes nothing — report it and continue. `last_relevant` is bumped
-only by a genuine recall, never by this pass and never by a read.
-
 ## Step 5: Consistency
 
 1. `.agent-memory/open-tasks.json` at the ROOT must not exist (canonical:
@@ -247,7 +216,6 @@ Memory Maintenance:
   Dirty markers GC (preview): {n_would_remove} would be removed, 0 removed
   Patterns (report): {n_stale} stale, {n_low_conf} low-confidence, 0 moved
   Superseded decisions (report): {n}, 0 moved
-  Global decay: {n_decayed} decayed, {n_archived} archived | skipped (stillgelegt) | (no global store)
   Native stores: {verbatim **Summary:** line | native audit failed: ...}
   Review sweep: {verbatim one-liner}
   Review charges: {one line per charge}

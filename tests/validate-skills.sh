@@ -279,17 +279,6 @@ if [ -f "$SB_FILE" ]; then
 fi
 
 echo ""
-echo "-- sync-context body language consistency --"
-SC_BODY_FILE="$PLUGIN_ROOT/commands/sync-context.md"
-if [ -f "$SC_BODY_FILE" ]; then
-    if grep -q "holen\|importieren\|teilen\|exportieren\|beides\|was gibt es" "$SC_BODY_FILE"; then
-        fail "sync-context: body contains German intent phrases — all direction-matching phrases must use English for consistency"
-    else
-        pass "sync-context: body uses English (no German direction phrases)"
-    fi
-fi
-
-echo ""
 echo "-- wrap-up: optional NotebookLM sync --"
 WU2_FILE="$SKILLS_DIR/wrap-up/SKILL.md"
 if [ -f "$WU2_FILE" ]; then
@@ -366,15 +355,16 @@ if [ -f "$WU_GROW_FILE" ]; then
 fi
 
 echo ""
-echo "-- wrap-up: soul.md growth — candidate queue (Stufe B, no auto-write) --"
+echo "-- wrap-up: soul.md growth retired (5.11.0), never auto-write --"
 if [ -f "$WU_GROW_FILE" ]; then
-    # Also pin the no-autonomous-write invariant, not just the queue file (Codex MAJOR #3).
+    # 5.11.0: Step 6.4 is retired - it must say so, forbid planning soul candidates and keep the never-write invariant.
     if grep -qiE "\(soul-growth\)" "$WU_GROW_FILE" \
-       && grep -qiE "soul-candidates\.md" "$WU_GROW_FILE" \
+       && grep -qiE "Retired in 5\.11\.0" "$WU_GROW_FILE" \
+       && grep -qiE "Do NOT plan .soul_candidates." "$WU_GROW_FILE" \
        && grep -qiE "[Nn]ever write .?soul\.md|[Nn]ever auto-write|NEVER auto-written|not write .?soul\.md here" "$WU_GROW_FILE"; then
-        pass "wrap-up: soul.md growth present — appends to soul-candidates.md, never auto-writes soul.md"
+        pass "wrap-up: soul.md growth retired — no soul candidates planned, soul.md never written"
     else
-        fail "wrap-up: soul.md growth missing — must append to identity/soul-candidates.md AND state the never-write-soul.md-directly invariant"
+        fail "wrap-up: Step 6.4 must state the retirement (5.11.0), forbid planning soul_candidates and keep the never-write-soul.md invariant"
     fi
 fi
 
@@ -580,14 +570,14 @@ if [ -f "$WU_GROW_FILE" ]; then
 fi
 
 echo ""
-echo "-- session-bootstrap: soul.md candidate gate ([j/n], confirmed-write only) --"
+echo "-- session-bootstrap: soul.md candidate gate retired (5.11.0, read-only without exception) --"
 if [ -f "$SB_GROW_FILE" ]; then
-    if grep -qiE "soul-candidates\.md" "$SB_GROW_FILE" \
-       && grep -qiE "\[j/n\]|j/n" "$SB_GROW_FILE" \
-       && grep -qiE "only (on|after) (confirm|user|explicit)|confirmed.*write|nur bei" "$SB_GROW_FILE"; then
-        pass "session-bootstrap: soul candidate gate present — [j/n], soul.md write only on explicit confirmation"
+    if grep -qiE "Soul candidate gate — retired" "$SB_GROW_FILE" \
+       && grep -qiE "never write .soul\.md." "$SB_GROW_FILE" \
+       && ! grep -qiE "SOUL CANDIDATES: \{n\} warten" "$SB_GROW_FILE"; then
+        pass "session-bootstrap: soul gate retired — no [j/n] question, soul.md never written"
     else
-        fail "session-bootstrap: soul candidate gate missing — must surface soul-candidates.md with a [j/n] gate and write soul.md ONLY on explicit user confirmation (the single read-only exception)"
+        fail "session-bootstrap: Step 6.5(a) must be retired (5.11.0): no SOUL CANDIDATES question, never write soul.md"
     fi
 fi
 
@@ -622,107 +612,16 @@ if [ -f "$PE_SCHEMA_FILE" ]; then
     fi
 fi
 
-# --- sync-context recency supersession (Audit-Hebel #4, 2026-06-03) ---
-# Conflicting facts in the same scope must be resolved by recency (write-time supersession),
-# NOT by confidence alone — a stale high-confidence fact must not beat a newer one (Mem0
-# interference). Max one `active` per (fact_type, scope); the older one becomes `superseded`
-# (never deleted). Confidence-merge for NON-conflicting same-fact entries stays.
-SC_SUP_FILE="$PLUGIN_ROOT/commands/sync-context.md"
-
-echo ""
-echo "-- sync-context: recency supersession on conflict (not confidence-only) --"
-if [ -f "$SC_SUP_FILE" ]; then
-    if grep -qiE "\(recency-supersession\)" "$SC_SUP_FILE" \
-       && grep -qiE "supersed" "$SC_SUP_FILE" \
-       && grep -qiE "max(imum)? (one|1) active|one active per|never delete" "$SC_SUP_FILE" \
-       && grep -qiE "recency|newer.*wins|timestamp|last_seen.*wins" "$SC_SUP_FILE" \
-       && grep -qiE "confidence (only|does not|only ranks)|ranks .*non-conflicting|non-conflicting.*merge" "$SC_SUP_FILE"; then
-        pass "sync-context: recency supersession present — conflicts by recency (superseded not deleted), confidence-merge kept for non-conflicts"
-    else
-        fail "sync-context: recency supersession missing — same-scope CONFLICTS must be resolved by recency (write-time supersession: max 1 active per scope, older -> superseded, never deleted), not by confidence alone (stale-high-confidence interference)"
-    fi
-fi
-
-# --- sync-context 4.A privacy pre-filter (must run BEFORE the gate) ---
-# A denied tag (credentials/pii/secret) or signal_type "mood" must be dropped from the
-# push set BEFORE the confidence threshold / promotion gate — privacy cannot be bought
-# back by a high confidence or occurrence count.
-echo ""
-echo "-- sync-context: privacy pre-filter precedes the gate --"
-if [ -f "$SC_SUP_FILE" ]; then
-    if grep -qiE "\(privacy-filter\)" "$SC_SUP_FILE" \
-       && grep -qiE "MEM_GLOBAL_DENY_TAGS|is_denied" "$SC_SUP_FILE" \
-       && grep -qiE "Denied \(privacy\)" "$SC_SUP_FILE" \
-       && grep -qiE "BEFORE the (threshold|gate)|runs BEFORE|checked first" "$SC_SUP_FILE"; then
-        pass "sync-context: privacy pre-filter present and ordered before the gate"
-    else
-        fail "sync-context: privacy pre-filter missing or not ordered — denied tags / signal_type mood must be dropped BEFORE the confidence/promotion gate (Denied (privacy)), reading MEM_GLOBAL_DENY_TAGS via is_denied"
-    fi
-fi
-
-# --- sync-context 4.A global provenance schema on push ---
-# Every entry written to the global store carries the G-<type>-<n> provenance contract:
-# scope (conflict key), valid_from, source_evidence, lifecycle.
-echo ""
-echo "-- sync-context: global provenance schema stamped on push --"
-if [ -f "$SC_SUP_FILE" ]; then
-    if grep -qiE "\(provenance-schema\)" "$SC_SUP_FILE" \
-       && grep -qiE "G-<?fact_type>?-|G-pattern-" "$SC_SUP_FILE" \
-       && grep -qiE "valid_from" "$SC_SUP_FILE" \
-       && grep -qiE "source_evidence" "$SC_SUP_FILE" \
-       && grep -qiE "scope.*compute_scope|compute_scope\(fact_type" "$SC_SUP_FILE"; then
-        pass "sync-context: global provenance schema present (G-<type>-<n>, scope, valid_from, source_evidence)"
-    else
-        fail "sync-context: global provenance schema missing — push must stamp G-<fact_type>-<n> id, scope=compute_scope(fact_type,tags), valid_from, source_evidence, lifecycle on every global entry"
-    fi
-fi
-
-# --- sync-context 4.A promotion gate (local -> global) ---
-# Three hard conditions to promote to active: confidence>=0.6 AND occurrences>=3 AND
-# |source_projects|>=2. Failing the gate keeps the entry as candidate (never active).
-echo ""
-echo "-- sync-context: promotion gate (conf>=0.6 ∧ occ>=3 ∧ projects>=2) --"
-if [ -f "$SC_SUP_FILE" ]; then
-    if grep -qiE "\(promotion-gate\)" "$SC_SUP_FILE" \
-       && grep -qiE "passes_promotion_gate" "$SC_SUP_FILE" \
-       && grep -qiE "occurrences >= 3" "$SC_SUP_FILE" \
-       && grep -qiE "source_projects\` ?>= 2|source_projects\| ?>= 2|\|source_projects\| >= 2" "$SC_SUP_FILE" \
-       && grep -qiE "lifecycle: ?candidate|stays .candidate" "$SC_SUP_FILE"; then
-        pass "sync-context: promotion gate present — 3 conditions, fail keeps candidate"
-    else
-        fail "sync-context: promotion gate missing — promotion to active needs confidence>=0.6 AND occurrences>=3 AND |source_projects|>=2 (passes_promotion_gate); failing keeps lifecycle:candidate"
-    fi
-fi
-
-# --- sync-context 4.A pull lifecycle filter ---
-# Pull serves ONLY lifecycle:active; candidate/superseded/archived are never pulled.
-echo ""
-echo "-- sync-context: pull serves only lifecycle:active --"
-if [ -f "$SC_SUP_FILE" ]; then
-    if grep -qiE "\(pull-lifecycle-filter\)" "$SC_SUP_FILE" \
-       && grep -qiE "lifecycle: ?active" "$SC_SUP_FILE" \
-       && grep -qiE "[Ss]kip .*(candidate|superseded|archived)" "$SC_SUP_FILE"; then
-        pass "sync-context: pull lifecycle filter present — only active served"
-    else
-        fail "sync-context: pull lifecycle filter missing — Pull must serve ONLY lifecycle:active and skip candidate/superseded/archived"
-    fi
-fi
-
-# --- /agentic-os:maintain 4.A global decay ---
-# -0.1 per 90 days without recall, floor 0.3, lifecycle:archived (never hard-delete).
+# --- 5.11.0: the global layer (sync-context, global decay, global schema) is archived ---
+# maintain must no longer carry Step 4b / global_decay; the tests of the removed pieces went to _archived/.
 MM_FILE="$PLUGIN_ROOT/commands/maintain.md"
 echo ""
-echo "-- maintain: global confidence decay (floor 0.3, archive not delete) --"
+echo "-- maintain: no global-layer step left (5.11.0) --"
 if [ -f "$MM_FILE" ]; then
-    if grep -qiE "\(global-decay\)" "$MM_FILE" \
-       && grep -qE "scripts/global_decay\.py" "$MM_FILE" \
-       && grep -qiE "0\.1 per .*90|90-day step" "$MM_FILE" \
-       && grep -qiE "floor(ed)? at 0\.3" "$MM_FILE" \
-       && grep -qiE "decay_steps_applied" "$MM_FILE" \
-       && grep -qiE "lifecycle: ?.archived|never hard-delete" "$MM_FILE"; then
-        pass "maintain: global decay present — global_decay.py, -0.1/90d booked once, floor 0.3, archive not delete"
+    if grep -qiE "global_decay|global-decay|claude-memory/global" "$MM_FILE"; then
+        fail "maintain: still references the archived global layer (global_decay / ~/.claude-memory/global)"
     else
-        fail "maintain: global decay missing — must run scripts/global_decay.py (-0.1 per 90 days booked once via decay_steps_applied, floor 0.3), set lifecycle:archived past 365d, never hard-delete"
+        pass "maintain: no reference to the archived global layer"
     fi
 fi
 # --- 5.2.1: maintain only reports (D-021, owner decision 2026-10-06, widened 2026-10-07) ---
@@ -748,22 +647,6 @@ if [ -f "$MM_FILE" ]; then
         fail "maintain: (no-archive) marker or D-021 reference missing"
     fi
 fi
-for f in commands/sync-context.md commands/memory-audit.md; do
-    if grep -q "STILLGELEGT.md" "$PLUGIN_ROOT/$f"; then
-        pass "$f honours the decommissioned global layer (STILLGELEGT.md)"
-    else
-        fail "$f does not check ~/.claude-memory/global/STILLGELEGT.md (G-05)"
-    fi
-done
-# The guard only helps if it runs before the auto-setup creates the global store.
-SC_GUARD=$(grep -n "STILLGELEGT.md" "$PLUGIN_ROOT/commands/sync-context.md" | head -1 | cut -d: -f1)
-SC_PREREQ=$(grep -n "^## Prerequisites" "$PLUGIN_ROOT/commands/sync-context.md" | head -1 | cut -d: -f1)
-if [ -n "$SC_GUARD" ] && [ -n "$SC_PREREQ" ] && [ "$SC_GUARD" -lt "$SC_PREREQ" ]; then
-    pass "sync-context checks STILLGELEGT.md before its auto-setup"
-else
-    fail "sync-context STILLGELEGT check (line ${SC_GUARD:-none}) must precede ## Prerequisites (line ${SC_PREREQ:-none})"
-fi
-
 # 5.2.1 review: the rule binds every ACTIVE doc that steers a model or describes the
 # flow - a rollback in wrap-up, bootstrap or references stayed green before.
 echo ""
@@ -778,12 +661,17 @@ else
     fail "active docs still prescribe archiving/reset: $(echo "$DOC_HITS" | head -5 | tr '\n' ' ')"
 fi
 
-# The decay formula has ONE home (global_decay.py). A second copy in the sourceable
-# helpers would let the prose path decay from the stored value again (2026-10-01 bug).
-if grep -qE "^apply_decay\(\)" "$PLUGIN_ROOT/scripts/global-schema.sh" 2>/dev/null; then
-    fail "global-schema.sh still defines apply_decay — the decay rule lives only in scripts/global_decay.py"
+# 5.11.0: no active file may point at the archived global layer any more.
+echo ""
+echo "-- active files: no reference to the archived global layer (5.11.0) --"
+GL_HITS=$(grep -n -E "sync-context|global_decay|global-schema|migrate-global-schema|claude-memory/global|MEM_GLOBAL_DENY_TAGS" \
+    "$PLUGIN_ROOT"/skills/*/SKILL.md "$PLUGIN_ROOT"/skills/*/references/*.md \
+    "$PLUGIN_ROOT"/references/memory-structure.md "$PLUGIN_ROOT"/commands/*.md "$PLUGIN_ROOT"/agents/*.md \
+    "$PLUGIN_ROOT"/scripts/*.sh "$PLUGIN_ROOT"/scripts/*.py "$PLUGIN_ROOT"/hooks/hooks.json 2>/dev/null)
+if [ -z "$GL_HITS" ]; then
+    pass "no active skill, command, script or hook references the archived global layer"
 else
-    pass "decay rule has a single home (global-schema.sh defines no apply_decay)"
+    fail "active files still reference the archived global layer: $(echo "$GL_HITS" | head -5 | tr '\n' ' ')"
 fi
 
 # --- session-bootstrap 4.A staleness wrap (read-only display, NO write) ---

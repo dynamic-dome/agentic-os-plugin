@@ -163,7 +163,7 @@ OBSERVATION_CHARS = 80
 
 def _open_candidate(row):
     """A candidate that can still progress: not promoted yet, and not a mood (moods are never promoted)."""
-    return row.get("status") != "promoted" and row.get("signal_type") != "mood"
+    return row.get("status") not in ("promoted", "expired") and row.get("signal_type") != "mood"
 
 
 def candidate_keys(mem, central=None):
@@ -198,7 +198,8 @@ def candidate_keys(mem, central=None):
 
 def _promotable(row) -> bool:
     """The promotion gate of apply_wrapup.promote_candidates (wrap-up Step 6.3), read only."""
-    if row.get("status") == "promoted" or row.get("signal_type") == "mood" or row.get("trust_source") != "conversation":
+    if (row.get("status") in ("promoted", "expired") or row.get("signal_type") == "mood"
+            or row.get("trust_source") != "conversation"):
         return False
     try:
         occ, conf = int(row.get("occurrences", 1)), float(row.get("confidence", 0.0))

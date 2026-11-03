@@ -27,14 +27,6 @@
 │   ├── patterns.md                     # Human-readable pattern catalog
 │   └── patterns.json                   # Machine-readable patterns
 │
-├── quality/
-│   ├── test-results.json               # Test run history
-│   ├── code-reviews.json               # Code review history
-│   └── quality-score.json              # Aggregated quality metrics
-│
-├── knowledge/
-│   └── notebook-registry.md            # NotebookLM KB registry (topics, keywords)
-│
 ├── learnings/
 │   ├── learnings.json                  # Structured learnings + salience metadata (read by bootstrap/wrap-up)
 │   └── learnings.md                    # Generated projection of learnings.json (apply_wrapup.py)
@@ -50,9 +42,11 @@
 ## Created by the SSoT vs. by a consumer
 
 - **`mem-schema.sh` creates:** all directories above, the empty-array JSON files,
-  `quality-score.json` (structured default), `working/current-session.json`, the
-  `.md` placeholders (`iteration-log.md`, `patterns.md`, `learnings.md`,
-  `notebook-registry.md`), `session-summary.md`, and `identity/soul.md` + `user.md`.
+  `working/current-session.json`, the `.md` placeholders (`iteration-log.md`,
+  `patterns.md`, `learnings.md`), `session-summary.md`, and `identity/soul.md` + `user.md`.
+- **No longer created (5.11.0):** the `quality/` folder (test-results, code-reviews, quality-score)
+  and the NotebookLM registry stub in `knowledge/` — empty stubs without an active writer.
+  Existing stores keep them untouched; wrap-up Step 7 reads the registry only if it exists.
 - **NOT created by the SSoT:** `context/project-context.md`. It needs stack
   auto-detection / docs distillation, so each consumer (hook, `/init`,
   `context-keeper`) writes it itself after calling `create_memory_structure`.
@@ -66,10 +60,7 @@
 | `patterns.json` | `[]` |
 | `decisions.json` | `[]` |
 | `open-tasks.json` | `[]` |
-| `test-results.json` | `[]` |
-| `code-reviews.json` | `[]` |
 | `learnings.json` | `[]` |
-| `quality-score.json` | `{"last_updated": null, "test_health": {"current_score": null, "trend": "unknown"}, "code_quality": {"current_score": null, "trend": "unknown"}}` |
 | `working/current-session.json` | `{"session_start": "<date>", "errors_this_session": [], "learnings_draft": []}` |
 
 ## Archiving Thresholds

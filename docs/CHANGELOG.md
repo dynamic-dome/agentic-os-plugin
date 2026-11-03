@@ -4,6 +4,45 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-03] Release v5.11.1 — Text-Fix vor dem öffentlichen Export
+PATCH, nur Text. Der Leck-Sweep vor dem Public-Export fand im 5.11.0-Eintrag einen privaten Ablagepfad und Zahlen zum
+eigenen Profil sowie in session-bootstrap 6.5(a) und memory-audit einen Verweis auf eine interne Regeldatei. Beides ist
+allgemein formuliert; Code und Verhalten unverändert.
+
+## [2026-11-03] Release v5.11.0 — weniger schreiben, Identität verschlankt, stillgelegte Teile archiviert
+MINOR. Owner-Go 03.11.2026 nach der Plugin-Durchsicht (Punkte 1-3). Push und Publish bleiben beim Owner.
+
+- **Weniger schreiben:** `apply_wrapup.py` legt Learnings unter importance 3 nicht mehr an
+  (`tally.learnings_skipped_low_importance`); rule_class-Learnings sind ausgenommen. Anlass: Im Oktober kamen 859
+  Learnings dazu, eine Sitzung sieht davon 7 bis 21.
+- **Identität verschlankt:**
+  - Plan-Sektion `identity_expire` (`older_than_days` >= 14, `reason`): Einmal-Beobachtungen (observed/inferred,
+    `occurrences` <= 1), die so lange nicht mehr gesehen wurden, bekommen `status: expired`. Nichts wird gelöscht oder
+    verschoben (D-021). Eine erneute Nennung desselben Keys holt sie zurück (`revived_at`).
+  - Plan-Sektion `user_md_retire`: streicht eine Profilzeile verlustfrei. Der alte Text geht zuerst ins Changelog
+    (`user.md/retire`), es braucht ein verifiziertes Zitat, und eine gestrichene Aussage kehrt nicht per Wiederholung
+    zurück.
+  - soul.md-Wachstum stillgelegt (wrap-up 6.4, bootstrap 6.5(a)): Der Agent-Charakter lebt in `~/.claude/CLAUDE.md`,
+    soul.md bleibt lesbare Historie, session-bootstrap ist wieder ausnahmslos lesend.
+  - Bestand: Ein Lauf über das zentrale Profil hat Zeilen gestrichen, die schon in den globalen Regeln stehen, und
+    alte Einmal-Beobachtungen verfallen lassen; vorher wurde eine Bytekopie gesichert.
+- **Archiviert** (`_archived/`, zurückholbar per `git mv`): die seit 05.10. stillgelegte globale Schicht samt
+  `/agentic-os:sync-context`, `global_decay.py`, `global-schema.sh`, `migrate-global-schema-4A.sh` und ihren Tests;
+  maintain Step 4b und der Global-Audit in memory-audit entfallen. Init legt `quality/` und den NotebookLM-Registry-Stub
+  nicht mehr an (91 von 98 Stores hatten sie leer); bestehende Stores bleiben unberührt.
+- **Tests:** `tests/test-release-511.py` (24 Fälle), Eval-Gates und Golden-Fall R21 angepasst, Alt-Tests auf
+  importance 3. Volle Suite isoliert grün (Isolation 0 verdächtig).
+
+## [2026-10-30] Kandidat (unveröffentlicht) — Soul-Kandidaten-Gate zählt Einträge, nicht den Stub
+Nur Text im Skill, kein Skript geändert. Release und Publish bleiben beim Owner (DCO #10171).
+
+- **session-bootstrap Schritt 6.5(a):** Das Gate übersprang `identity/soul-candidates.md` still, sobald die Zeile
+  `*Keine offenen Kandidaten.*` darin stand. Dateien aus der Zeit vor DCO #10148 enthalten den Stub UND echte Einträge
+  darunter; deren Kandidaten wurden nie gefragt. Jetzt zählt das Gate die Zeilen mit `## ` und überspringt nur, wenn die
+  Datei fehlt oder keine solche Zeile hat. `commands/memory-audit.md` Punkt 4 zählt genauso.
+- **Bestand:** In den lokalen Stores mit Stub plus Eintrag wurde der Stub entfernt (Plugin-Repo, cysecwiki, OpenClaw,
+  dynamicwayofai), der Inhalt blieb unverändert.
+
 ## [2026-10-29] Release v5.10.0 — Zeiger-Anzeige repariert, Sicherungen im Zeiger-Schreiber (P3 Stufe A), P2-Kleinbefunde
 MINOR. Stufe A des P3-Fahrplans (`docs/superpowers/plans/2026-10-29-p3-schlank-fahrplan.md`): erst Fehler und
 Sicherungen, kein Datenlauf. Push und Publish bleiben beim Owner.

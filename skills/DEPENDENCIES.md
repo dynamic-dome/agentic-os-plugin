@@ -1,9 +1,8 @@
 # Skill Dependency Graph — Agentic OS v5
 
-> Reflects v5.0.0. The local store schema is owned by `scripts/mem-schema.sh`
-> (see `references/memory-structure.md`); the **global** layer's pure logic
-> (provenance, promotion gate, privacy denylist) lives in `scripts/global-schema.sh`;
-> confidence decay with per-step bookkeeping lives only in `scripts/global_decay.py`.
+> Reflects v5.11.0. The local store schema is owned by `scripts/mem-schema.sh`
+> (see `references/memory-structure.md`). The decommissioned **global** layer (sync-context,
+> global-schema.sh, global_decay.py, migrate-global-schema-4A.sh) lives in `_archived/` since 5.11.0.
 > All scaling/archiving threshold NUMBERS live in `scripts/memory-thresholds.sh`
 > (threshold SSoT — read by session-bootstrap Step 3, wrap-up Step 9, /agentic-os:maintain Step 1).
 > When this graph disagrees with a skill's own SKILL.md, the SKILL.md wins.
@@ -19,7 +18,7 @@ SESSION START (SessionStart hook → session-bootstrap)
   │  │     ~/AI/cross-project-status.md, ~/AI/SESSION-WORKFLOW.md (conditional)
   │  ├── local: session-summary.md, identity/soul.md, identity/user.md,
   │  │     context/project-context.md, patterns/patterns.md,
-  │  │     quality/quality-score.json (legacy), iterations/errors.json (tail 3),
+  │  │     iterations/errors.json (tail 3),
   │  │     working/current-session.json, context/open-tasks.json (SSoT for next steps)
   │  ├── learnings: RAG via Atlas MCP, fallback scripts/learnings_top.py
   │  │     (deterministic salience ranking — never full-reads learnings.json)
@@ -50,10 +49,6 @@ WORK PHASE (user-driven, no auto-triggers on code changes)
   │     └── Step 6.5 SKILL CANDIDATE GENERATION (former skill-generator, folded in v4.0.0):
   │           pattern with skill_candidate=true, conf≥0.7, occ≥3 →
   │           writes generated-skills/<name>/SKILL.md + back-ref in patterns.json
-  │
-  ├── /agentic-os:sync-context (command, MANUAL ONLY)
-  │     └── reads/writes: ~/.claude-memory/global/{patterns,learnings,projects}.json ↔ local
-  │           (privacy pre-filter → promotion gate → provenance schema; pull serves lifecycle:active only)
   │
   └── obsidian-sync (wiki write-path; also mid-session on request)
         └── see matrix — session notes, entity updates, synthesis, promotion_status
@@ -100,7 +95,7 @@ SESSION END (manual: /agentic-os:wrap-up — no hook can trigger it; a skipped
 
 | Skill | Reads From | Writes To | Invokes |
 |-------|-----------|-----------|---------|
-| session-bootstrap | local: session-summary.md, soul.md, user.md, soul-candidates.md, user-candidates.json, project-context.md, patterns.md, quality-score.json (legacy), errors.json (tail), working/current-session.json, context/open-tasks.json (SSoT for next steps), config.json · learnings via Atlas-RAG or `scripts/learnings_top.py` · health via `scripts/memory-thresholds.sh` · cross-project: ~/AI/.agent-memory/session-summary.md, cross-project-status.md, SESSION-WORKFLOW.md · wiki (optional): entity + entrypoints | (read-only) EXCEPT the user-confirmed identity gates in Step 6.5 → soul.md + user.md, user-changelog.json, soul-candidates.md / user-candidates.json (only on explicit `j`). Staleness display (`[STALE? …]`) is DISPLAY-ONLY, never a write. | — |
+| session-bootstrap | local: session-summary.md, soul.md, user.md, soul-candidates.md, user-candidates.json, project-context.md, patterns.md, errors.json (tail), working/current-session.json, context/open-tasks.json (SSoT for next steps), config.json · learnings via Atlas-RAG or `scripts/learnings_top.py` · health via `scripts/memory-thresholds.sh` · cross-project: ~/AI/.agent-memory/session-summary.md, cross-project-status.md, SESSION-WORKFLOW.md · wiki (optional): entity + entrypoints | (read-only) EXCEPT the user-confirmed identity gates in Step 6.5 → soul.md + user.md, user-changelog.json, soul-candidates.md / user-candidates.json (only on explicit `j`). Staleness display (`[STALE? …]`) is DISPLAY-ONLY, never a write. | — |
 | pattern-extractor | errors.json, iteration-log.md, patterns.json (all via `scripts/extract_patterns.py`) | patterns.json — **written only through `scripts/extract_patterns.py`** (sole writer; the skill keeps schema ownership and the judgment-bound Steps 6.5/6.6; authorized field-GAIN exceptions: obsidian-sync → promotion metadata, implementing/validating main session → implemented_by/validated_by + dates per Step 6.6), patterns.md, generated-skills/<name>/SKILL.md (Step 6.5 skill-candidate generation, former skill-generator), context/open-tasks.json (Step 6.6 delta-draft tasks; decisions route via context-keeper, never written directly) | context-keeper (Step 6.6 architecture-level delta drafts) |
 | context-keeper | docs/PROJECT.md+ARCHITECTURE.md+CAPABILITIES.md (SoT), project-context.md, decisions.json, config.json | project-context.md (cache, own write), decisions.json — new records **only through `scripts/apply_wrapup.py`** (`decisions` plan section; Step 3.5 wiki_ref/promoted_at stays a direct field extension), ~/wiki/wiki/entities/<id>.md (optional) | — |
 | wrap-up | iteration-log.md, errors.json, learnings.json, working/current-session.json, working/user-candidates.json, context/open-tasks.json, skills/wrap-up/references/handoff-template.md, the session's own transcript (read ONLY by `scripts/identity_quote.py`, to verify a candidate's quote — never by the model) | session-summary.md, learnings.json + learnings.md, user.md (via queue promotion, changelog first), user-candidates.json (queue), user-changelog.json (audit), soul-candidates.md (propose — never soul.md), working/current-session.json (reset), context/open-tasks.json (Step 5.5 SSoT); cross-project handoff (max 1 block per project, next steps as pointer + `[cross-project]` only) + status-board + Sharepoint | pattern-extractor (Step 4, ONLY for skill/rueckfluss candidates), obsidian-sync (Step 7.5). Step 9 only recommends /agentic-os:maintain. Step 1.5 session-harvest and Step 4.5 decision-scan route through the write plan instead of invoking iteration-logger/context-keeper (T-015) |
@@ -110,9 +105,8 @@ SESSION END (manual: /agentic-os:wrap-up — no hook can trigger it; a skipped
 
 | Command | Script core | Writes |
 |---|---|---|
-| /agentic-os:maintain | memory-thresholds.sh, gc_dirty_markers.py, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh, apply_wrapup.py --render-learnings, global_decay.py | report only (no archive, no compaction — D-021); repaired JSON (owner-confirmed, Step 2), re-rendered learnings.md, owner-confirmed working/ scratch cleanup (*.py, *.tmp); global decay skipped while STILLGELEGT.md exists |
+| /agentic-os:maintain | memory-thresholds.sh, gc_dirty_markers.py, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh, apply_wrapup.py --render-learnings | report only (no archive, no compaction — D-021); repaired JSON (owner-confirmed, Step 2), re-rendered learnings.md, owner-confirmed working/ scratch cleanup (*.py, *.tmp) |
 | /agentic-os:log | apply_wrapup.py (`iterations` section) | iteration-log.md, errors.json, working/current-session.json |
-| /agentic-os:sync-context | global-schema.sh (is_denied, compute_scope, passes_promotion_gate), mem-schema.sh (MEM_GLOBAL_DENY_TAGS) | local + ~/.claude-memory/global/{patterns,learnings,projects}.json with provenance schema; privacy-filter before gate; pull serves lifecycle:active only |
 
 ## Agents
 
@@ -134,7 +128,7 @@ SESSION END (manual: /agentic-os:wrap-up — no hook can trigger it; a skipped
 
 - **memory-maintenance → /agentic-os:maintain** — 12 KB body for mechanics that never ran; the scripts own the writes, the command wraps them.
 - **iteration-logger → /agentic-os:log** — 70 % mechanics already in `apply_wrapup.py`; no usage evidence as a skill.
-- **sync-context → /agentic-os:sync-context** — keeps `disable-model-invocation: true`; all three commands carry the flag (a command file is otherwise Skill-tool-resolvable), enforced by the invocation-contract test.
+- **sync-context → /agentic-os:sync-context** — became a command in v5.0.0; **archived in 5.11.0** together with the decommissioned global layer (`_archived/`, `STILLGELEGT.md` since 2026-10-05). The remaining commands `maintain` and `log` keep `disable-model-invocation: true` (a command file is otherwise Skill-tool-resolvable), enforced by the invocation-contract test.
 - **self-improve, /rollback, /auto-commit, improvements/ → `_archived/`** — silent since 2026-06-21; reversible via `git mv` (see `_archived/README.md`).
 
 ### Removed in v4.0.0 (with reason)
@@ -154,7 +148,7 @@ Removed agents: `improvement-scout`, `fix-reviewer` (2026-04-30); `improvement-a
 2. **No auto-triggers on code changes** — user/CLAUDE.md driven (the only hook-driven skill is session-bootstrap on start; wrap-up is a manual slash command).
 3. **session-bootstrap is read-only** — never writes during startup, with ONE exception: the user-confirmed identity gates (Step 6.5) write soul.md/user.md + user-changelog.json + the queues, but only on an explicit `j` from the user (never autonomously).
 4. **Skills that invoke other skills:** `wrap-up` (pattern-extractor only for skill/rueckfluss candidates, obsidian-sync — iteration-logger/context-keeper are NOT invoked since T-015, memory-maintenance not since v5.0.0; Step 9 only recommends /agentic-os:maintain). All other skills are leaf nodes.
-5. **/agentic-os:sync-context is manual-only** — a command, no auto-sync.
+5. **No cross-project auto-sync** — the global layer and its manual command sync-context are archived (5.11.0); nothing syncs between projects.
 6. **docs/ is the source of truth for project-context.md** — context-keeper (and context-detective, /init) read docs first; project-context.md is a cache (Regel 13 / L9).
 7. **Thresholds live in ONE script** — `scripts/memory-thresholds.sh` is the only place scaling numbers exist; skills and commands reference it, never restate the numbers.
 8. **Identity growth is producer/consumer split** — wrap-up Step 6 is the only PRODUCER of identity observations (queues + promotions + mandatory status line); session-bootstrap Step 6.5 is the CONSUMER (gates + starvation check). Nothing else touches identity files. **Central profile (P2):** while `~/.agent-memory/identity/profile.md` exists, the same producer writes `identity/profile*` in the central store instead of the project's identity files (`scripts/identity_store.py`), and the bootstrap reads the projection `identity/profile-briefing.txt` plus the stage-0 `identity.*` numbers; `scripts/migrate_identity.py` moves the project profiles there once (owner-gated).
@@ -179,7 +173,6 @@ stays deliberately on-demand:
 
 | Deliberately on-demand (NOT in the bracket) | Why |
 |---|---|
-| /agentic-os:sync-context | Design Principle 5: manual-only command, no auto cross-project sync |
 | obsidian-sync (manual mid-session) | reactive; the bracket already covers the end-of-session sync |
 | /agentic-os:maintain | threshold-gated via memory-thresholds.sh (wrap-up only recommends it); not part of every wrap-up |
 | /memory-audit, /status, /log | inspection / mid-session logging commands |

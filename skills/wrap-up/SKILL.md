@@ -206,6 +206,10 @@ already exists across sessions/projects:
 Append an entry to `learnings/learnings.json` (field schema:
 `references/wrapup-schemas.md` §Learning entry, load at write time). Field contracts:
 
+**Minimum importance 3 (min-importance, 5.11.0):** `apply_wrapup.py` no longer stores learnings with importance 1
+or 2 (`tally.learnings_skipped_low_importance`) - in October 2026 the stores grew by 859 learnings while a session
+sees 7-21 of them. Do not plan trivia or workflow notes at all; a rule-class learning is exempt (Step 3f).
+
 importance: 5 = prevents data loss/security issue · 4 = prevents multi-attempt debugging ·
 3 = non-obvious behavior · 2 = workflow optimization · 1 = trivia.
 
@@ -676,21 +680,24 @@ PLAN
   (a recorded claim, see the honor-system note in 3f).
 - Report one line per superseded line: `old → new — <plain>`.
 
-### 6.4 Soul candidates — two feeder paths (soul-growth)
+### 6.4 Soul candidates — retired (soul-growth)
 
-Never write `soul.md` here (Stufe B: propose, don't commit — the write happens
-only via session-bootstrap's explicit `[j/n]` gate). Append proposals (proposal +
-evidence + date) to `identity/soul-candidates.md` from EITHER path:
+**Retired in 5.11.0 (owner go 2026-11-03).** No `soul.md` changed after 2026-07-23; what would have gone there
+(plain language, own mistakes reported openly, sparring) went into the global rules `~/.claude/CLAUDE.md` instead.
+The agent's character lives there now. Do NOT plan `soul_candidates` any more, and never write `soul.md` here: the
+file stays read-only history, the briefing still shows its non-template lines. A rule about how the agent should
+behave is a rule change (Step 3f / global rule F4), not an identity candidate. The plan section is still accepted
+for old callers and keeps writing only to `identity/soul-candidates.md`, never auto-writes soul.md.
 
-- **Direct:** stable identity signals — hard "won't" lines, changed communication
-  defaults, guard rails the user demands repeatedly.
-- **Escalation from user.md (escalation-path):** a promoted user.md entry that (a) was
-  re-confirmed in 2+ later sessions after promotion, OR (b) belongs to the categories
-  communication style / guard rail / decision-authority — these describe how the AGENT
-  should behave and belong in soul.md, not the user profile.
+### 6.4b Slim the queue and the profile (identity-slim, 5.11.0)
 
-Same trust boundary as 6.1. Anti-bloat: if soul.md is near its 80-line cap, note it in
-the candidate so the user can prune on merge.
+- `identity_expire` (`{"older_than_days": 30, "reason": "..."}`, min 14): one-off observations (observed/inferred,
+  `occurrences` <= 1) not seen for that long are marked `status: "expired"` - never deleted. The same key named
+  again brings the candidate back (`revived_at`). Run by `/agentic-os:maintain`, not on every wrap-up.
+- `user_md_retire` (`[{"line_id"|"match", "reason", "plain", "quote", "by"}]`): removes one profile line that is
+  covered elsewhere (e.g. word for word in `~/.claude/CLAUDE.md`). Same rules as `user_md_supersede`: changelog
+  first (`field: user.md/retire`, old text kept), only with a verified quote, the removed statement does not come
+  back through a repeated candidate. Report one line per removed line: `old — <plain>`.
 
 ### 6.5 Identity status line — MANDATORY (identity-visible)
 

@@ -184,8 +184,8 @@ landed) and `validated_at` (when the effect evidence was observed). New entries 
 honest empty lists and null dates; pre-4.6.0 entries lack all four fields — every consumer
 must tolerate both shapes (same contract as `derived_from`/`review_after` on learnings, v4.4.0).
 
-`lifecycle` is `"active"` by default. When a newer entry supersedes this one in the same scope
-(see `sync-context` recency-supersession), it becomes `"superseded"` and gains
+`lifecycle` is `"active"` by default. When a newer entry supersedes this one in the same scope,
+it becomes `"superseded"` and gains
 `superseded_by: <new id>` + `superseded_at: <ISO>`. Superseded entries are never deleted.
 
 `skill_candidate` is set by the script from the measurable half of the rule
@@ -374,6 +374,5 @@ Pattern Extraction Complete:
 - Do NOT write patterns.json / patterns.md with Write/Edit — `extract_patterns.py`
   is the sole writer (Step 1); hand-edits fork the id sequence and the confidence values
 - Do NOT modify errors.json or iteration-log.md (read-only for this skill)
-- Do NOT push to global memory (that's wrap-up's job)
 - Do NOT guess confidence — calculate it from the formula above
 - Do NOT create patterns from single-occurrence errors

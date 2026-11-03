@@ -592,6 +592,8 @@ def validate_plan(mem, plan, paths=None):
     validate_corrections(mem, plan, paths)
     validate_rule_gate(mem, plan)
     validate_user_md_supersede(mem, plan, paths)
+    validate_user_md_retire(mem, plan, paths)
+    validate_identity_expire(plan)
 
     sups = [d.get("supersedes") for d in (plan.get("decisions") or []) if d.get("supersedes")]
     titles = [(d.get("title") or "").strip() for d in (plan.get("decisions") or [])]
@@ -806,6 +808,9 @@ def _near(text, rows, lo, hi=1.01):
     return hits
 
 
+LEARNING_MIN_IMPORTANCE = 3
+
+
 def apply_learnings(mem, plan, date, dry, touched, tally):
     items = plan.get("learnings") or []
     rows = load_json(mem, "learnings/learnings.json", [])
@@ -817,6 +822,14 @@ def apply_learnings(mem, plan, date, dry, touched, tally):
         text = (it.get("text") or "").strip()
         if not text:
             raise PlanError("learning without 'text'")
+        imp = it.get("importance", 3)
+        if (isinstance(imp, int) and not isinstance(imp, bool) and imp < LEARNING_MIN_IMPORTANCE
+                and it.get("rule_class") is not True
+                and not (RULE_TAGS & {str(t).lower() for t in (it.get("tags") or [])})):
+            # 5.11.0 (owner go 2026-11-03): workflow notes and trivia (1-2) are no longer stored - 859 learnings in
+            # October, a session sees 7-21 of them. Rule-class learnings go to their gate whatever the importance.
+            tally["learnings_skipped_low_importance"] += 1
+            continue
         # Step 3a in code: the model's verdict on a near duplicate it was shown
         # (duplicate_of), else exact text, else Jaccard >= DUP_MIN.
         twin = by_id.get(str(it.get("duplicate_of") or ""))
@@ -1230,6 +1243,7 @@ def plan_touches_identity(plan) -> bool:
     plan = plan or {}
     corr = plan.get("corrections")
     return bool("user_candidates" in plan or plan.get("consolidate") or plan.get("user_md_supersede")
+                or plan.get("user_md_retire") or plan.get("identity_expire")
                 or (corr.get("user_md") if isinstance(corr, dict) else corr))
 
 
@@ -1687,6 +1701,202 @@ def apply_user_md_supersede(mem, plan, date, dry, touched, tally, session_id="",
         # audit entry BEFORE the edit - the same ordering contract as the promotion path
         write_json(paths.root, paths.changelog, changelog + entries, dry, touched, via="identity")
     write_atomic(paths.root, paths.md, "".join(c + eol for c, eol in lines), dry, touched, via="identity")
+
+
+# Release 5.11.0 (owner go 2026-11-03): identity slimmed down.
+# `identity_expire`: one-off observations that nobody named again are marked "expired" - never deleted. A later
+# mention of the same key brings the candidate back (apply_user_candidates, `revived_at`).
+# `user_md_retire`: remove one profile line losslessly - the old text goes into the changelog FIRST, a verified
+# quote of the user is required (like user_md_supersede), and the removed statement cannot come back through a
+# repeated candidate (retracted_statements reads user.md/retire too).
+EXPIRE_MIN_DAYS = 14
+EXPIRE_MAX_DAYS = 3650
+
+
+def validate_identity_expire(plan):
+    if "identity_expire" not in plan:
+        return
+    it = plan["identity_expire"]
+    if not isinstance(it, dict):
+        raise PlanError("identity_expire must be an object {older_than_days, reason}")
+    days = it.get("older_than_days")
+    if not isinstance(days, int) or isinstance(days, bool) or not EXPIRE_MIN_DAYS <= days <= EXPIRE_MAX_DAYS:
+        # the upper bound keeps the date arithmetic of the applier possible (Codex 5.11 V1-02: OverflowError after writes)
+        raise PlanError(f"identity_expire: 'older_than_days' must be an integer {EXPIRE_MIN_DAYS}..{EXPIRE_MAX_DAYS}, "
+                        f"got {days!r}")
+    if not isinstance(it.get("reason"), str) or not it["reason"].strip():
+        raise PlanError("identity_expire: 'reason' is required")
+
+
+def apply_identity_expire(mem, plan, date, dry, touched, tally, paths=None):
+    it = plan.get("identity_expire")
+    if not it:
+        return
+    paths = _id_paths(mem, paths)
+    queue = load_json(paths.root, paths.queue, [])
+    cutoff = _dt.date.fromisoformat(date) - _dt.timedelta(days=int(it["older_than_days"]))
+    reason = " ".join(it["reason"].split())
+    for c in queue:
+        if not isinstance(c, dict) or c.get("status") not in PLAN_CANDIDATE_STATUSES:
+            continue
+        try:
+            occ = int(c.get("occurrences", 1))
+            seen = _dt.date.fromisoformat(str(c.get("last_seen") or c.get("first_seen") or "")[:10])
+        except (TypeError, ValueError):
+            continue  # no readable date or count: never expire on a guess
+        if occ <= 1 and seen < cutoff:
+            c.update(expired_from=c["status"], status="expired", expired_at=date, expired_reason=reason)
+            tally["candidates_expired"] += 1
+            tally["candidates_expired_ids"].append(str(c.get("id")))
+    if tally["candidates_expired"]:
+        write_json(paths.root, paths.queue, queue, dry, touched, via="identity")
+    tally["queue_open"] = sum(1 for c in queue if isinstance(c, dict) and c.get("status") not in ("promoted", "expired"))
+
+
+def _retire_logged(changelog, line_id, old) -> bool:
+    for e in changelog or []:
+        if isinstance(e, dict) and e.get("field") == "user.md/retire":
+            if (line_id and e.get("candidate_id") == line_id) or (old is not None and e.get("old_value") == old):
+                return True
+    return False
+
+
+def resolve_user_md_retire(mem, items, paths=None):
+    """(resolved, skipped, legacy_only) for plan section `user_md_retire`; every form error raises PlanError
+    before the first byte. Same targeting rules as user_md_supersede (exactly one of match | line_id, one line,
+    a bullet inside a section, no placeholder)."""
+    if not isinstance(items, list):
+        raise PlanError("user_md_retire must be a list")
+    if not items:
+        return [], 0, []
+    paths = _id_paths(mem, paths)
+    contents = [c for c, _eol in split_user_md(_read_user_md_raw(mem, "user_md_retire", paths))]
+    first_h2 = _first_section_line(contents)
+    changelog = None
+    resolved, skipped, taken, legacy_only, legacy = [], 0, set(), [], None
+    for it in items:
+        if not isinstance(it, dict):
+            raise PlanError("user_md_retire entry is not an object")
+        has_match, has_id = it.get("match") is not None, it.get("line_id") is not None
+        if has_match == has_id:
+            raise PlanError("user_md_retire entry needs exactly one of 'match' or 'line_id'")
+        tag = str(it.get("match") if has_match else it.get("line_id"))[:40]
+        if not isinstance(it.get("reason"), str) or not it["reason"].strip():
+            raise PlanError(f"user_md_retire {tag!r}: 'reason' is required")
+        clean_plain(it.get("plain"), f"user_md_retire {tag!r}")
+        if not _clean_quote(it.get("quote")):
+            raise PlanError(f"user_md_retire {tag!r}: 'quote' is required (the user's literal words)")
+        if it.get("by", "agent") not in CORRECTION_DECIDERS:
+            raise PlanError(f"user_md_retire {tag!r}: 'by' must be one of {CORRECTION_DECIDERS}")
+        if it.get("trust_source", "conversation") != "conversation":
+            raise PlanError(f"user_md_retire {tag!r}: trust_source must be 'conversation', got {it.get('trust_source')!r}")
+        line_id, old = None, None
+        if has_match:
+            old = it["match"]
+            if not isinstance(old, str) or not old.strip() or "\n" in old or "\r" in old:
+                raise PlanError(f"user_md_retire {tag!r}: 'match' must be one non-empty line")
+            hits = [i for i, c in enumerate(contents) if c == old]
+        else:
+            line_id = it["line_id"]
+            if not isinstance(line_id, str) or not _LINE_ID.fullmatch(line_id):
+                raise PlanError(f"user_md_retire: invalid line_id {line_id!r}")
+            cite = re.compile(r"[\[(]\s*" + re.escape(line_id) + r"\s*[,\])]")
+            hits = [i for i, c in enumerate(contents) if cite.search(c)]
+        if len(hits) > 1:
+            raise PlanError(f"user_md_retire {tag!r}: the target occurs {len(hits)} times - not guessing")
+        if not hits:
+            if changelog is None:
+                changelog = load_json(paths.root, paths.changelog, [])
+            if _retire_logged(changelog, line_id, old):
+                skipped += 1
+                continue
+            if paths.central:
+                if legacy is None:
+                    legacy = _legacy_contents(mem)
+                if (old in legacy) if has_match else any(cite.search(c) for c in legacy):
+                    legacy_only.append(tag)
+                    continue
+            raise PlanError(f"user_md_retire {tag!r}: no such line in {os.path.basename(paths.md)}")
+        idx = hits[0]
+        if idx in taken:
+            raise PlanError(f"user_md_retire {tag!r}: targets the same line twice")
+        taken.add(idx)
+        if idx < first_h2:
+            raise PlanError(f"user_md_retire {tag!r}: the target lies in the preamble (before the first '## ' heading)")
+        target = contents[idx]
+        if not _BULLET_LINE.match(target):
+            raise PlanError(f"user_md_retire {tag!r}: the target is not a bullet line (heading, preamble or text)")
+        if is_placeholder_line(target):
+            raise PlanError(f"user_md_retire {tag!r}: the target is a placeholder line")
+        cited = _CITED_AT_END.search(target) or _CITED_ID.search(target)
+        resolved.append({"index": idx, "old": target, "item": it, "tag": tag, "quote": _clean_quote(it.get("quote")),
+                         "line_id": line_id or (cited.group(1) if cited else None)})
+    return resolved, skipped, legacy_only
+
+
+def validate_user_md_retire(mem, plan, paths=None):
+    if "user_md_retire" not in plan:
+        return
+    corr = plan.get("corrections")
+    if plan.get("user_md_supersede") or (isinstance(corr, dict) and corr.get("user_md")):
+        # Both are checked against the file as it is now; the earlier writer would change the retire target and the
+        # plan would fail half-applied (Codex 5.11 V1-01). One writer on the profile per plan.
+        raise PlanError("user_md_retire cannot share a plan with user_md_supersede or corrections.user_md - "
+                        "send them as separate calls")
+    resolve_user_md_retire(mem, plan["user_md_retire"], paths)
+
+
+def apply_user_md_retire(mem, plan, date, dry, touched, tally, session_id="", transcript=None, paths=None):
+    items = plan.get("user_md_retire") or []
+    if not items:
+        return
+    paths = _id_paths(mem, paths)
+    resolved, skipped, legacy_only = resolve_user_md_retire(mem, items, paths)
+    tally["retire_skipped_unchanged"] += skipped
+    for tag in legacy_only:
+        tally["retire_skipped_legacy"] += 1
+        tally["warnings"].append(f"user_md_retire {tag!r}: line not in profile.md - entry skipped")
+    if not resolved:
+        return
+    verdicts, reasons = _verify_identity_quotes([r["quote"] for r in resolved], session_id, transcript, tally)
+    kept = []
+    for r in resolved:
+        if verdicts.get(r["quote"]) is True:
+            kept.append(r)
+        else:
+            why = reasons.get(r["quote"]) or ("not verified" if verdicts.get(r["quote"]) is False else "no transcript")
+            tally["retire_skipped_unverified"] += 1
+            tally["warnings"].append(f"user_md_retire {r['tag']!r}: quote not verified ({why}) - entry skipped, "
+                                     f"nothing written for it")
+    if not kept:
+        return
+    lines = split_user_md(_read_user_md_raw(mem, "user_md_retire", paths))
+    changelog = load_json(paths.root, paths.changelog, [])
+    now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    entries = []
+    # Only the tail can hold the entries of a run that died between the changelog write and the file write - and only
+    # from THIS session. An older retire of the same text, or one from another session, is history (the line came back
+    # later) and gets its own new entry (Codex 5.11 V1-03).
+    recent = [e for e in changelog[-len(kept):] if isinstance(e, dict) and session_id and e.get("session") == session_id]
+    for r in kept:
+        it = r["item"]
+        entry = {"ts": now, "field": "user.md/retire", "old_value": r["old"], "new_value": None,
+                 "reason": " ".join(it["reason"].split()), "plain": clean_plain(it["plain"], "user_md_retire"),
+                 "quote": r["quote"], "quote_verified": True, "by": it.get("by", "agent"),
+                 "session": session_id or None}
+        if r["line_id"]:
+            entry["candidate_id"] = r["line_id"]
+        if paths.central:
+            entry["origin"] = _origin(mem)
+        if not _retire_logged(recent, None, r["old"]):
+            entries.append(entry)
+        tally["user_lines_retired"] += 1
+    if entries:
+        # audit entry BEFORE the edit - the same ordering contract as supersede and promotion
+        write_json(paths.root, paths.changelog, changelog + entries, dry, touched, via="identity")
+    drop = {r["index"] for r in kept}
+    write_atomic(paths.root, paths.md, "".join(c + eol for i, (c, eol) in enumerate(lines) if i not in drop),
+                 dry, touched, via="identity")
 
 
 # Learnings mixed form (DCO #9869, owner decision F4 2026-10-22). A normal learning
@@ -2542,6 +2752,11 @@ def apply_user_candidates(mem, plan, date, dry, touched, tally, session_id="", t
                 tally["warnings"].append(f"candidate {key!r}: status {st!r} is not allowed in a plan - recorded as observed")
         if key in by_key:
             c = by_key[key]
+            if c.get("status") == "expired":
+                # 5.11.0: an expired one-off observation named again is alive again - it keeps its history
+                c["status"] = c.get("expired_from") if c.get("expired_from") in PLAN_CANDIDATE_STATUSES else "observed"
+                c["revived_at"] = date
+                tally["candidates_revived"] += 1
             sessions = c.get("sessions") if isinstance(c.get("sessions"), list) else []
             counted = False
             if can_count and "sessions" in c and not sessions:
@@ -2604,7 +2819,7 @@ def apply_user_candidates(mem, plan, date, dry, touched, tally, session_id="", t
     promoted = promote_candidates(mem, queue, date, dry, touched, tally, paths=paths)
     if obs or promoted or marks != [c.get("blocked_by_supersede") for c in queue]:  # a new block note must reach the file
         write_json(paths.root, paths.queue, queue, dry, touched, via="identity")
-    tally["queue_open"] = sum(1 for c in queue if c.get("status") != "promoted")
+    tally["queue_open"] = sum(1 for c in queue if c.get("status") not in ("promoted", "expired"))
 
 
 def _norm_tokens(text):
@@ -2675,7 +2890,7 @@ def retracted_statements(changelog):
     with its invisible characters read as spaces (round 7; computed once per entry, not per candidate)."""
     out = []
     for e in changelog:
-        if isinstance(e, dict) and e.get("field") == "user.md/supersede" and e.get("old_value"):
+        if isinstance(e, dict) and e.get("field") in ("user.md/supersede", "user.md/retire") and e.get("old_value"):
             old = str(e["old_value"])
             cited = _CITED_AT_END.search(old) or _CITED_ID.search(old)
             # the notes come off the line as written AND with its invisible characters read as spaces: a zero-width
@@ -3095,7 +3310,7 @@ def new_tally() -> dict:
         "errors_added": 0, "errors_recurred": 0,
         "decisions_added": 0, "decisions_superseded": 0,
         "decisions_skipped_duplicate": 0, "decision_ids": [],
-        "learnings_added": 0, "learnings_skipped_duplicate": 0, "learning_ids": [],
+        "learnings_added": 0, "learnings_skipped_duplicate": 0, "learnings_skipped_low_importance": 0, "learning_ids": [],
         "near_duplicates": {}, "bridge_candidates": [],
         "bridge_approved": [], "bridge_rejected": [], "bridge_status_changed": 0,
         "rule_class_open": None, "rule_explained": [], "rule_released": [], "rule_rejected": [],
@@ -3111,6 +3326,8 @@ def new_tally() -> dict:
         "quotes_verified": 0, "quotes_unverified": 0, "quotes_no_transcript": 0, "quote_transcript": None,
         "confirm_downgraded": 0, "confirm_downgraded_keys": [],
         "user_lines_superseded": 0, "supersede_skipped_unchanged": 0, "supersede_skipped_legacy": 0,
+        "user_lines_retired": 0, "retire_skipped_unchanged": 0, "retire_skipped_unverified": 0, "retire_skipped_legacy": 0,
+        "candidates_expired": 0, "candidates_expired_ids": [], "candidates_revived": 0,
         "identity_target": "project", "central_path": None,
         "promoted_ids": [], "queue_open": 0,
         "soul_candidates_added": 0, "soul_skipped_duplicate": 0, "soul_rejected_trust": 0,
@@ -3262,6 +3479,9 @@ def main() -> int:
             apply_bridge_decisions(args.mem, plan, date, args.dry_run, touched, tally)
             apply_rule_explanations(args.mem, plan, date, args.dry_run, touched, tally)
             apply_rule_releases(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_user_md_retire(args.mem, plan, date, args.dry_run, touched, tally, session_id, args.transcript,
+                                 paths=paths)
+            apply_identity_expire(args.mem, plan, date, args.dry_run, touched, tally, paths=paths)
             if "user_candidates" in plan or plan.get("consolidate"):
                 # Identity growth is wrap-up Step 6's job: an iterations-only plan
                 # (/agentic-os:log) must not re-review the queue and promote to user.md.

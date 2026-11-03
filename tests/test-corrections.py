@@ -355,7 +355,7 @@ def main():
 
     print("== write-time warning")
     mem = make_mem()
-    code, out = run(mem, {"learnings": [{"text": moji("Neues Learning mit kaputtem Zeichen ü und ö"), "importance": 2}],
+    code, out = run(mem, {"learnings": [{"text": moji("Neues Learning mit kaputtem Zeichen ü und ö"), "importance": 3}],
                           "open_tasks": {"add": [{"title": moji("Neue Aufgabe für später")}]}})
     warns = " ".join(out.get("tally", {}).get("warnings", []))
     check(code == 0 and "Mojibake" in warns and warns.count("Mojibake") >= 2,

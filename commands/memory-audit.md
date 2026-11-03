@@ -41,15 +41,14 @@ Report age-based risks (the dimension the manual audit got wrong from old data):
    `short-term` AND `date` (or `last_relevant`) is older than 30 days → flag "promotion-due".
    Report the count and the **newest** `last_relevant` so the reader can see how fresh the
    store actually is (avoids the stale-clone trap).
-2. **quality never initialized** — if `quality/quality-score.json` has `last_updated: null`
-   while `iterations/iteration-log.md` has entries → flag "quality metrics never run".
-3. **user.md stub** — if `identity/user.md` is still only the init stub (no real Preferences)
+2. **user.md stub** — if `identity/user.md` is still only the init stub (no real Preferences)
    → flag "user.md not growing — check wrap-up Step 6 candidate queue". Skip this flag while the
    central profile is active (`~/.agent-memory/identity/profile.md` exists): wrap-up then grows
    `profile.md`, and the project's `user.md` stays a stub by design.
-4. **soul candidates pending** — if `identity/soul-candidates.md` has open candidates → note
-   "N soul candidates awaiting the [j/n] gate at next session start".
-5. **central profile files** — run `python "${CLAUDE_PLUGIN_ROOT}/scripts/identity_store.py" check`
+3. **soul candidates (retired gate, 5.11.0)** — if `identity/soul-candidates.md` still has old candidates (lines
+   starting with `## `) → note "N old soul candidates - the soul.md gate is retired; a wanted one becomes a rule change
+   in the owner's global rule source". Never announce a [j/n] gate.
+4. **central profile files** — run `python "${CLAUDE_PLUGIN_ROOT}/scripts/identity_store.py" check`
    (read-only). `active: false` → skip. Otherwise flag every line of `problems` verbatim: an unreadable
    `profile.md`, a queue or changelog that is no JSON list, a missing or stale `profile-briefing.txt`
    (the briefing then shows other lines than the profile holds). The audit only reports; the repair is
@@ -63,16 +62,6 @@ Report age-based risks (the dimension the manual audit got wrong from old data):
    carries `superseded_by`. Flag dangling supersessions.
 3. **JSON validity** — for each JSON store, confirm it parses. Flag any that would need
    `.corrupt.bak` recovery (but do NOT perform the recovery here).
-4. **global provenance (global-provenance-audit)** — only if `~/.claude-memory/global/`
-   exists AND has no `STILLGELEGT.md` (decommissioned 2026-10-05, G-05: then print only
-   `GLOBAL: stillgelegt (G-05) — nicht geprüft`). This is read-only reporting of the 4.A
-   invariants — it heals nothing:
-   - Flag global entries missing `scope` / `valid_from` / `source_projects` / `lifecycle`
-     (un-migrated → name the count; heals via `migrate-global-schema-4A.sh`).
-   - Count `active` global entries with `|source_projects| < 2` → "promotion-gate violation"
-     (should be `candidate`, not `active`).
-   - Count entries with `confidence <= 0.3` AND `lifecycle != archived` older than 365d →
-     "decay-due" (heals via `/agentic-os:maintain` Step 4b).
 
 ## Step 3.4: Backflow Completeness (rueckfluss-audit)
 
@@ -136,7 +125,6 @@ DRIFT
 
 STALENESS
   learnings:           {n} entries · {m} promotion-due · newest last_relevant {date}
-  quality metrics:     {initialized | never run}
   user.md:             {growing | still stub}
   soul candidates:     {n} pending gate
 
@@ -151,11 +139,6 @@ BACKFLOW (Step 3.4 — always by ID, "0 — clean" when empty)
   ready w/o implemented_by:   {n} — {P3,...}
   implemented w/o validated_by: {n} — {P5,...}
 
-GLOBAL (~/.claude-memory/global/ — omit block if absent)
-  entries w/o provenance: {n} (un-migrated → migrate-global-schema-4A.sh)
-  promotion-gate violations: {n} (active but |source_projects| < 2)
-  decay-due:             {n} (conf<=0.3, not archived, >365d)
-
 FINDINGS (one line per flagged item — GAP CLASS from Step 3.5)
   {finding}            | {GAP CLASS}        | heals via {skill}
   e.g. legacy P003     | index-gap          | heals via pattern-extractor normalization
@@ -163,7 +146,7 @@ FINDINGS (one line per flagged item — GAP CLASS from Step 3.5)
   e.g. P3 ready, no impl | feedback-loop-gap | heals via pattern-extractor delta gate
 
 VERDICT: {clean | N drift items, M staleness items, K backflow items — see above}
-Heals via: {/agentic-os:maintain | wrap-up | pattern-extractor | migrate-global-schema-4A.sh | none needed}
+Heals via: {/agentic-os:maintain | wrap-up | pattern-extractor | none needed}
 ```
 
 Keep the blocks terse — one line per metric, IDs inline. Report only — never mutate. End by

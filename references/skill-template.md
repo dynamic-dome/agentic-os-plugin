@@ -82,4 +82,5 @@ The 5 active skills, grouped by layer. (Trigger phrases in frontmatter MUST be E
 > skill-generator (folded into pattern-extractor). The deprecated agents `improvement-scout` and
 > `fix-reviewer` were removed (2026-04-30), `improvement-agent`/`research-agent` in 4.15.0;
 > `self-improve` was archived in v5.0.0 (`_archived/`). memory-maintenance, iteration-logger and
-> sync-context became commands with a script core in v5.0.0 (maintain, log, sync-context).
+> sync-context became commands with a script core in v5.0.0 (maintain, log, sync-context); the
+> global layer was decommissioned and sync-context archived in 5.11.0 (`_archived/`).

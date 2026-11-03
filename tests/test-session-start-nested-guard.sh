@@ -213,13 +213,13 @@ for variant in json dir file empty; do
   elif [ "$variant" = file ]; then
     # Not in MEM_JSON_ARRAY: a file create_memory_structure writes itself (DCO #9680, V-002). The wrapper
     # removes it after EVERY call, so the Phase 2 backfill cannot heal it before the hook reports.
-    RMCMD='rm -f "$1/quality/quality-score.json"'
-    EXPECT="missing: quality/quality-score.json)"
+    RMCMD='rm -f "$1/iterations/iteration-log.md"'
+    EXPECT="missing: iterations/iteration-log.md)"
   elif [ "$variant" = empty ]; then
     # A full disk leaves a 0-byte file behind (the redirect creates it, the write fails): the check
     # must be -s, not -e. The backfill's [ -f ] guard keeps the empty file, so nothing heals it.
-    RMCMD=': > "$1/quality/quality-score.json"'
-    EXPECT="missing: quality/quality-score.json)"
+    RMCMD=': > "$1/iterations/iteration-log.md"'
+    EXPECT="missing: iterations/iteration-log.md)"
   else
     RMCMD='rm -rf "$1/${MEM_DIRS[0]}"'
     EXPECT="missing: identity/)"

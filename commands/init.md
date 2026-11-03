@@ -34,9 +34,7 @@ Bootstrap the `.agent-memory/` knowledge system in the current project directory
    ├── context/{project-context.md*, decisions.json, open-tasks.json}
    ├── iterations/{iteration-log.md, errors.json}
    ├── patterns/{patterns.md, patterns.json}
-   ├── quality/{test-results.json, code-reviews.json, quality-score.json}
    ├── learnings/{learnings.md, learnings.json}
-   ├── knowledge/notebook-registry.md
    ├── working/current-session.json
    ├── generated-skills/
    ├── config.json              (optional, created by Wiki Integration step)
@@ -46,9 +44,10 @@ Bootstrap the `.agent-memory/` knowledge system in the current project directory
    (step 6 below). Everything else is created with empty/stub defaults by the script.
 
 3. **(Defaults are handled by the script.)** `mem-schema.sh` already wrote the empty
-   JSON stores (`[]`), the `quality-score.json` skeleton, the `working/current-session.json`
-   working-memory stub, all Markdown stubs, `notebook-registry.md`, `session-summary.md`,
-   and the `soul.md` / `user.md` identity defaults. Do not re-create them. Only proceed to
+   JSON stores (`[]`), the `working/current-session.json` working-memory stub, all Markdown
+   stubs, `session-summary.md`, and the `soul.md` / `user.md` identity defaults. Do not
+   re-create them. Empty stubs without a writer (`quality/`, `knowledge/notebook-registry.md`)
+   are no longer created since 5.11.0; existing stores keep theirs untouched. Only proceed to
    customize identity (step 5) and project context (step 6) below.
 
    Key files the script guarantees (each MANDATORY for a downstream consumer):
@@ -108,11 +107,12 @@ Bootstrap the `.agent-memory/` knowledge system in the current project directory
    ## Knowledge Base (NotebookLM) — Required for all Agents
 
    This project has a curated knowledge base in Google NotebookLM.
-   The registry at `.agent-memory/knowledge/notebook-registry.md` lists all
+   If the registry `.agent-memory/knowledge/notebook-registry.md` exists (init does not
+   create it; it appears only when the project registers notebooks), it lists all
    available notebooks with their topics and keywords.
 
    **IMPORTANT — Instruction for EVERY Agent (Claude Code, Subagents, Scheduled Tasks):**
-   You MUST check the registry before answering expert questions.
+   If the registry exists, you MUST check it before answering expert questions.
    If a matching notebook exists, open NotebookLM in the browser to query the knowledge base
    and incorporate the result into your answer.
    Do NOT answer from memory when the registry has a notebook on the topic.
@@ -130,7 +130,7 @@ Bootstrap the `.agent-memory/` knowledge system in the current project directory
    - Topics not covered by any notebook in the registry
 
    **Workflow:**
-   1. Read registry: `.agent-memory/knowledge/notebook-registry.md`
+   1. Read registry (if present): `.agent-memory/knowledge/notebook-registry.md`
    2. Identify matching notebook by keywords
    3. Open NotebookLM in browser — ask question directly (mention notebook name in prompt)
    4. Incorporate result into the answer
@@ -143,12 +143,10 @@ Agentic OS initialized!
   Directories: {count actually created}
   Files: {count actually created}
   Detected stack: {language} + {framework}
-  Knowledge Base: notebook-registry.md created
   Wiki: {connected to ~/wiki/ | not configured}
 
   Next steps:
   1. Review .agent-memory/context/project-context.md
   2. Customize .agent-memory/identity/soul.md if needed
-  3. Review .agent-memory/knowledge/notebook-registry.md
-  4. Start coding — iterations will be tracked automatically
+  3. Start coding — iterations will be tracked automatically
 ```

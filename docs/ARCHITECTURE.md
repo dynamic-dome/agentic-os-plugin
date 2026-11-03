@@ -9,7 +9,7 @@ Das Plugin installiert Skills, Hooks, Agents und Commands, die Projektwissen in 
 ```
 SessionStart-Hook (session-start.sh)
   └─ sourct scripts/mem-schema.sh → create_memory_structure()  [Init + Backfill]
-       └─ .agent-memory/  (identity, context, iterations, patterns, quality, learnings, working, ...)
+       └─ .agent-memory/  (identity, context, iterations, patterns, learnings, working, ...)
 
 session-bootstrap (read-only)  →  WORK PHASE  →  wrap-up (Handoff + Learnings)
         ▲ liest Store + zentralen Handoff           │ schreibt session-summary, learnings,
@@ -32,9 +32,9 @@ session-bootstrap (read-only)  →  WORK PHASE  →  wrap-up (Handoff + Learning
 - **Abhaengigkeiten:** `mem-schema.sh`. Schreibt `project-context.md` selbst (Inline-Stack-Detection — bewusst ausserhalb der SSoT).
 
 ### Skills (5, geschichtet) + Commands mit Skript-Kern (3)
-- **Datei(en):** `skills/*/SKILL.md` (session-bootstrap, wrap-up, context-keeper, pattern-extractor, obsidian-sync); `commands/{maintain,log,sync-context}.md` (v5.0.0, `disable-model-invocation: true` — nur per Slash)
+- **Datei(en):** `skills/*/SKILL.md` (session-bootstrap, wrap-up, context-keeper, pattern-extractor, obsidian-sync); `commands/{maintain,log}.md` (v5.0.0, `disable-model-invocation: true` — nur per Slash)
 - **Aufgabe:** Session-Lifecycle + Memory-Management. Genau ein Schreiber pro Store-Datei.
-- **Abhaengigkeiten:** Strikt azyklisch (`skills/DEPENDENCIES.md`). v5.0.0: memory-maintenance/iteration-logger/sync-context zu Commands, self-improve + rollback + auto-commit archiviert (`_archived/`). Entfernt in v4.0.0: retrospective, research-pipeline, wiki-query, quality-gate (Skill + Agent), skill-generator (in pattern-extractor gefaltet); Wrapper-Commands log/patterns/research/sync/run-loop (`log` kehrt in v5.0.0 als echter Command zurueck).
+- **Abhaengigkeiten:** Strikt azyklisch (`skills/DEPENDENCIES.md`). v5.0.0: memory-maintenance/iteration-logger/sync-context zu Commands, self-improve + rollback + auto-commit archiviert (`_archived/`). v5.11.0: sync-context und die stillgelegte globale Schicht (global_decay.py, global-schema.sh, migrate-global-schema-4A.sh) ebenfalls nach `_archived/`; leere Stubs `quality/` und `knowledge/notebook-registry.md` werden nicht mehr angelegt. Entfernt in v4.0.0: retrospective, research-pipeline, wiki-query, quality-gate (Skill + Agent), skill-generator (in pattern-extractor gefaltet); Wrapper-Commands log/patterns/research/sync/run-loop (`log` kehrt in v5.0.0 als echter Command zurueck).
 
 ### Threshold-SSoT
 - **Datei(en):** `scripts/memory-thresholds.sh`
@@ -57,7 +57,7 @@ session-bootstrap (read-only)  →  WORK PHASE  →  wrap-up (Handoff + Learning
 
 | Speicher | Typ | Pfad | Inhalt |
 |----------|-----|------|--------|
-| Memory-Store | Dateien | `.agent-memory/` | Identity, Context, Iterations, Patterns, Quality, Learnings, Working |
+| Memory-Store | Dateien | `.agent-memory/` | Identity, Context, Iterations, Patterns, Learnings, Working |
 | Zentraler Handoff | Markdown | `~/AI/.agent-memory/session-summary.md` | Cross-Project, gestapelt (prepend) |
 | Status-Board | Markdown | `~/AI/cross-project-status.md` | Ein Abschnitt pro Projekt |
 

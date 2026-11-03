@@ -34,17 +34,6 @@ fi
 
 echo ""
 
-# Run global-schema helper unit tests (4.A)
-echo ">>> Running global-schema helper tests..."
-if bash "$SCRIPT_DIR/test-global-schema.sh"; then
-    echo ">>> Global-schema tests: ALL PASSED"
-else
-    echo ">>> Global-schema tests: FAILURES DETECTED"
-    ((TOTAL_ERRORS++))
-fi
-
-echo ""
-
 # Run PreToolUse shell circuit breaker tests
 echo ">>> Running PreToolUse shell circuit breaker tests..."
 if bash "$SCRIPT_DIR/test-pretooluse-shell-circuit-breaker.sh"; then
@@ -233,6 +222,17 @@ elif [ -z "$PY_BIN" ]; then
     echo ">>> Central-profile tests: SKIPPED (no python found)"
 else
     echo ">>> Central-profile tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+# Run release 5.11.0 tests (learning threshold, identity_expire, user_md_retire)
+echo ">>> Running release-5.11 tests..."
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-release-511.py"; then
+    echo ">>> Release-5.11 tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Release-5.11 tests: SKIPPED (no python found)"
+else
+    echo ">>> Release-5.11 tests: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 
@@ -485,22 +485,6 @@ elif [ -z "$PY_BIN" ]; then
     echo ">>> Memory index projection tests: SKIPPED (no python found)"
 else
     echo ">>> Memory index projection tests: FAILURES DETECTED"
-    ((TOTAL_ERRORS++))
-fi
-
-echo ""
-
-# Run global decay tests (maintain Step 4b, booked once per 90-day step)
-echo ">>> Running global decay tests..."
-PY_BIN=""
-command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
-[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
-if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-global-decay.py"; then
-    echo ">>> Global decay tests: ALL PASSED"
-elif [ -z "$PY_BIN" ]; then
-    echo ">>> Global decay tests: SKIPPED (no python found)"
-else
-    echo ">>> Global decay tests: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 

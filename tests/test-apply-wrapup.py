@@ -167,7 +167,7 @@ pass_("script exists")
 mem = make_mem()
 rc, out = run(mem, {"date": "2026-07-27", "learnings": [
     {"text": "Neues Learning", "importance": 5, "tags": ["t"]},
-    {"text": "  bestehendes   LEARNING ", "importance": 2},
+    {"text": "  bestehendes   LEARNING ", "importance": 3},  # >= 3: since 5.11.0 lower ones are not stored at all
 ]})
 check(rc == 0, "exit 0 on a valid plan")
 check(out["tally"]["learnings_added"] == 1, "new learning appended")
@@ -234,7 +234,7 @@ for case, setup_src in (("corrupt", lambda m: write(m, "learnings/learnings.json
 mem = make_mem()
 rc, out = run(mem, {"date": "2026-07-27", "learnings": [
     {"text": "Unwichtiges Detail", "importance": 3},
-    {"text": "Schmuggelversuch", "importance": 2, "bridge_status": "approved"},
+    {"text": "Schmuggelversuch", "importance": 3, "bridge_status": "approved"},
 ]})
 rows = load(mem, "learnings/learnings.json")
 low = [r for r in rows if r["text"] == "Unwichtiges Detail"][0]

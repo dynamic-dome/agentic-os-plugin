@@ -17,7 +17,6 @@
     "session-summary": {"kind": "store", "anchor": "session-summary.md", "note": "rendered handoff, never a harvest source"},
     "identity-user": {"kind": "store", "anchor": "user.md", "note": "stable user facts / working style"},
     "identity-soul": {"kind": "store", "anchor": "soul.md", "note": "agent self-model, gated"},
-    "global-memory": {"kind": "store", "anchor": "~/.claude-memory/global/", "note": "cross-project layer"},
     "native-feedback": {"kind": "artifact", "rationale": "Claude-native memory owns user corrections/preferences; outside .agent-memory by design"},
     "skill-file": {"kind": "artifact", "rationale": "the real SKILL.md / hook file is the ONLY proof of actual behavior"},
     "docs-project": {"kind": "artifact", "rationale": "docs/PROJECT.md+ARCHITECTURE.md are SoT for stack/architecture (context-keeper Step 1.5); project-context.md only caches them"},
@@ -212,10 +211,10 @@
       "id": "R21",
       "question": "Welche Erkenntnisse gelten projektübergreifend?",
       "question_type": "cross-project",
-      "expected_leading_source": "global-memory",
+      "expected_leading_source": "wiki-concept",
       "allowed_supporting": ["patterns", "learnings"],
       "typical_wrong_pick": "patterns",
-      "why": "The local store holds project scope; cross-project truth only exists after the promotion gate (>=2 source_projects)."
+      "why": "Since 5.11.0 the global layer (~/.claude-memory/global) is archived: cross-project rules live in the rule page wiki/concepts/agent-regeln.md (and the global CLAUDE.md); a project store holds project scope only."
     },
     {
       "id": "R22",
