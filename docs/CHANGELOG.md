@@ -4,6 +4,14 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-05] Release v5.11.2 — Nachlauf zu 5.11
+PATCH. Owner-Go 05.11.2026. Reparaturen nach dem Codex-Verifier und eine schmale Plan-Sektion für Kodierungsfehler.
+
+- `apply_wrapup.py`: neue Sektion `corrections.profile_candidates` repariert nur die Kodierung von `observation` und `evidence` in der Kandidaten-Queue; `--propose-encoding-corrections` deckt sie mit ab.
+- `apply_wrapup.py`: `identity_expire` lehnt ein Plan-Datum nahe Jahr 1 vor dem ersten Byte ab; `user_md_retire` dedupliziert nur die Retire-Einträge am Log-Ende.
+- `extract_patterns.py`: Über Typgrenzen zählt nur vollständig vorhandene Evidence als derselbe Eintrag; Vorschläge werden nach dem letzten Cluster einmal neu geprüft (bekannte Grenze: keine Fixpunkt-Schleife, der nächste `--update` räumt nach).
+- `obsidian-sync`, `context-keeper`: setzen `updated`, wenn sie in bestehende Wiki-Seiten schreiben; die Wiki-Frische las erweiterte Seiten sonst als veraltet.
+
 ## [2026-11-03] Release v5.11.1 — Text-Fix vor dem öffentlichen Export
 PATCH, nur Text. Der Leck-Sweep vor dem Public-Export fand im 5.11.0-Eintrag einen privaten Ablagepfad und Zahlen zum
 eigenen Profil sowie in session-bootstrap 6.5(a) und memory-audit einen Verweis auf eine interne Regeldatei. Beides ist

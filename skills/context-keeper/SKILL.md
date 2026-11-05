@@ -193,7 +193,7 @@ For `architecture-decision` type decisions, additionally write back to the Wiki:
 - Only the main agent writes (subagents skip this step)
 - Wiki write failures do NOT block the context-keeper flow (warn + continue)
 - Do NOT duplicate what `wrap-up` Step 7.5 / `obsidian-sync` already does — context-keeper writes the **decision itself**, wrap-up writes the **session summary**
-- Do NOT create new Wiki pages here — only update existing ones
+- Do NOT create new Wiki pages here — only update existing ones; after writing to a page, set its frontmatter `updated` to today
 
 **Promotion marker (shared with obsidian-sync Step 4.5):** after a successful
 wiki write, extend the decision's record in `decisions.json` with

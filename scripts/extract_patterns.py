@@ -609,10 +609,13 @@ def match_existing(cluster, patterns, wording=""):
         sim = jaccard(wording, p.get("description")) if wording else 0.0
         # Type gate (T-019): tag/wording similarity across types is
         # coincidence, not identity - a best-practice approach must never
-        # inflate an anti-pattern's numbers. Shared evidence stays exempt:
-        # the same evidence IS the same catalog entry, whatever its label.
+        # inflate an anti-pattern's numbers. Across types only evidence that is
+        # already all there counts as the same entry: one it: ref is one iteration,
+        # and an iteration feeds several heuristics, so a single shared ref merged
+        # hotspots into an approach pattern (P012, T-022).
         same_type = p.get("type", "anti-pattern") == cluster["type"]
-        if shared_ev:
+        same_entry = same_type or set(cluster["evidence"]) <= set(p.get("evidence") or [])
+        if shared_ev and same_entry:
             scored.append((3, len(shared_ev), p))
         elif same_type and sim >= JACCARD_DUPLICATE:
             scored.append((2, sim, p))
@@ -624,6 +627,20 @@ def match_existing(cluster, patterns, wording=""):
     best = scored[0][2]
     competitors = [p.get("id") for _, _, p in scored[1:]]
     return best, competitors
+
+
+def settle_proposals(proposals, patterns, matched, tally):
+    """Second look after every cluster ran: a later cluster may have added the evidence that
+    makes an earlier proposal the same entry; --apply would then refuse its key (T-022)."""
+    rest = []
+    for cluster in proposals:
+        existing, _ = match_existing(cluster, patterns)
+        if existing is None:
+            rest.append(cluster)
+        else:
+            update_pattern(existing, cluster, tally)
+            matched.append(cluster["cluster_key"])
+    return rest
 
 
 def update_pattern(p, cluster, tally):
@@ -905,6 +922,7 @@ def run(args) -> int:
                                       "also_matched": competitors})
             else:
                 proposals.append(cluster)
+        proposals = settle_proposals(proposals, patterns, matched, tally)
 
         if args.apply:
             plan = read_plan(args.plan)

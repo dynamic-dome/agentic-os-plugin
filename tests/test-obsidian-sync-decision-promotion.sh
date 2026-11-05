@@ -74,4 +74,12 @@ grep -q "successful" "$CONTEXT_KEEPER" \
 tr -s '[:space:]' ' ' < "$CONTEXT_KEEPER" | grep -qi "may only GAIN fields" \
     || fail "context-keeper must reconcile field-extension with the decisions.json write mode"
 
+# Every writer of an existing wiki page must bump the page date. Otherwise the
+# wiki freshness check reads a recently extended page as stale: the DCO entity
+# gained decision D24 on 2026-11-04 while `updated` stayed on 2026-10-22.
+for skill in "$OBSIDIAN_SYNC" "$CONTEXT_KEEPER"; do
+    grep -qF "set its frontmatter \`updated\` to today" "$skill" \
+        || fail "$(basename "$(dirname "$skill")") must bump updated when it writes to an existing wiki page"
+done
+
 echo "Obsidian-sync decision promotion contract passed."

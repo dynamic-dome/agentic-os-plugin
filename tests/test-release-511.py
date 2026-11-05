@@ -263,5 +263,63 @@ check(rc == 0 and sum(1 for e in log if e.get("field") == "user.md/retire") == 1
       and "Klartext statt Fachjargon" not in read(m2, "identity/user.md"),
       "C4 Nachholen nach Absturz in derselben Sitzung: Zeile weg, kein doppelter Protokolleintrag")
 
+m2 = make_mem(QUEUE)
+before = snapshot(m2)
+rc, out = run(m2, {"date": "0001-01-01", "identity_expire": {"older_than_days": 14, "reason": "zu frueh"},
+                   "learnings": [{"text": "Ein ganz normales Learning der Stufe vier", "importance": 4}]})
+check(rc == 2 and snapshot(m2) == before, "C5 (#10282) Plan-Datum nahe Jahr 1: abgelehnt vor dem ersten Byte")
+m2 = make_mem()
+rc, out = run(m2, {"date": DATE, "user_md_retire": [entry]})
+write_bytes(os.path.join(m2, "identity/user.md"), USER_MD.encode("utf-8"))      # Zeile kam per supersede zurueck
+log = load(m2, "identity/user-changelog.json")
+log.append({"field": "user.md/supersede", "old_value": "B", "new_value": "Klartext statt Fachjargon", "session": SID})
+put(m2, "identity/user-changelog.json", log)
+zweite = dict(entry, line_id="UC3")
+rc, out = run(m2, {"date": DATE, "user_md_retire": [entry, zweite]})            # dieselbe Sitzung streicht erneut
+log = load(m2, "identity/user-changelog.json")
+check(rc == 0 and sum(1 for e in log if e.get("field") == "user.md/retire") == 3,
+      f"C6 (#10282) erneutes Streichen nach Wiederaufnahme in DERSELBEN Sitzung wird protokolliert (out {out})")
+
+# ----------------------------------------------------------------------- K: corrections.profile_candidates
+print("== K  corrections.profile_candidates (#10173)")
+KAPUTT = "F\u00c3\u00bchrt Reviews gr\u00c3\u00bcndlich durch"
+HEIL = "Führt Reviews gründlich durch"
+GRUND = "Encoding-Reparatur"
+m2 = make_mem([cand("UC1", "moji", observation=KAPUTT, evidence=[KAPUTT, "sauber"]), cand("UC2", "heil")])
+rc, out = run(m2, {"date": DATE, "corrections": {"profile_candidates": [
+    {"id": "UC1", "observation": HEIL, "evidence": [HEIL, "sauber"], "reason": GRUND}]}})
+q = {c["id"]: c for c in load(m2, "working/user-candidates.json")}
+check(rc == 0 and q["UC1"]["observation"] == HEIL and q["UC1"]["evidence"] == [HEIL, "sauber"]
+      and len(q["UC1"]["corrections"]) == 2 and q["UC1"]["corrections"][0]["was"] == KAPUTT
+      and "corrections" not in q["UC2"],
+      f"K1 Kodierung repariert, alter Text in corrections[], Nachbar unberuehrt (out {out})")
+vorher = snapshot(m2)
+rc, out = run(m2, {"date": DATE, "corrections": {"profile_candidates": [
+    {"id": "UC1", "observation": HEIL, "evidence": [HEIL, "sauber"], "reason": GRUND}]}})
+stand = {c["id"]: c for c in load(m2, "working/user-candidates.json")}
+check(rc == 0 and len(stand["UC1"]["corrections"]) == 2, "K2 Wiederholung aendert nichts")
+for bad, why in (({"id": "UC1", "observation": "Ganz andere Aussage", "reason": GRUND}, "anderer Wortlaut"),
+                 ({"id": "UC9", "observation": HEIL, "reason": GRUND}, "unbekannte id"),
+                 ({"id": "UC1", "reason": GRUND}, "kein Feld"),
+                 ({"id": "UC1", "observation": HEIL}, "ohne reason"),
+                 ({"id": "UC1", "status": "confirmed", "reason": GRUND}, "fremdes Feld")):
+    m3 = make_mem([cand("UC1", "moji", observation=KAPUTT)])
+    before = snapshot(m3)
+    rc, out = run(m3, {"date": DATE, "learnings": [{"text": "Ein ganz normales Learning der Stufe vier", "importance": 4}],
+                       "corrections": {"profile_candidates": [bad]}})
+    check(rc == 2 and snapshot(m3) == before, f"K3 {why}: Plan abgelehnt, nichts geschrieben")
+m3 = make_mem([cand("UC1", "moji", observation=KAPUTT, evidence=["sauber"]), cand("UC2", "heil")])
+proc = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, m3, "--propose-encoding-corrections"], env=ENV,
+                      capture_output=True, encoding="utf-8")
+vorschlag = json.loads(proc.stdout)["corrections"]["profile_candidates"]
+check(proc.returncode == 0 and [v["id"] for v in vorschlag] == ["UC1"] and vorschlag[0]["observation"] == HEIL
+      and "evidence" not in vorschlag[0], f"K4 Vorschlag nennt nur die kaputte Zeile und das kaputte Feld ({vorschlag})")
+
+m3 = make_mem([cand("UC1", "moji", observation=KAPUTT, corrections=None)])
+before = snapshot(m3)
+rc, out = run(m3, {"date": DATE, "learnings": [{"text": "Ein ganz normales Learning der Stufe vier", "importance": 4}],
+                   "corrections": {"profile_candidates": [{"id": "UC1", "observation": HEIL, "reason": GRUND}]}})
+check(rc == 2 and snapshot(m3) == before, f"K5 corrections ohne Listenform: abgelehnt vor dem ersten Byte (rc {rc})")
+
 print(f"\n{PASSED}/{TESTS} bestanden, {ERRORS} Fehler")
 sys.exit(1 if ERRORS else 0)

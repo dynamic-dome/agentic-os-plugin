@@ -222,13 +222,13 @@ top-level `bridge_status_line` for the Step 3d.5 report.
 the nested options keep their shape), optional `by` `agent` (default) | `owner` - a recorded claim, never
 verified. `user_md` entries are `{old, new, reason}` on one whole line of `identity/user.md`; `new` must be the
 deterministic encoding repair of `old` (a reworded line is refused), each repair is logged first in
-`user-changelog.json` as `user.md/encoding-correction`. The row keeps
+`user-changelog.json` as `user.md/encoding-correction`. `profile_candidates` entries are `{id, observation?, evidence?, reason}` on the candidate queue; each field must be the same encoding repair, no other field may appear. The row keeps
 `corrections[]` = `{date, by, session, field, reason, was}`. The same text again changes nothing; a new
 text below similarity 0.6 to the old one, a principle pointer, an unknown or ambiguous id rejects the
 whole plan before the first byte. Correcting a rule-class learning resets its gate. `tally.tasks_retitled`,
-`learnings_corrected`, `decisions_corrected`, `user_lines_corrected`, `corrections_skipped_unchanged`, `correction_ids`, `corrections_projection_needed`.
+`learnings_corrected`, `decisions_corrected`, `user_lines_corrected`, `candidates_corrected`, `corrections_skipped_unchanged`, `correction_ids`, `corrections_projection_needed`.
 `--propose-encoding-corrections` (read-only) prints a `corrections` plan for every Mojibake row (tasks, learnings,
-decisions, user.md lines); a new
+decisions, user.md lines, queue candidates); a new
 learning/task whose text looks like Mojibake is written but warned about (`tally.warnings`).
 
 `user_md_supersede` (Step 6.3b, P1/B2) replaces ONE line of `identity/user.md` per entry - the way to

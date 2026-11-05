@@ -550,6 +550,30 @@ frag = [p for p in out["proposals"] if p["cluster_key"].startswith("fragile:")]
 check(len(frag) == 1 and frag[0]["type"] == "anti-pattern",
       "2 iterations with failing/flaky tests and shared tags propose a fragile area")
 
+# 24e2. T-022: one shared iteration ref does not merge a cluster into a pattern of ANOTHER type
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import extract_patterns as ep_modul  # noqa: E402
+fremd = {"id": "P1", "type": "best-practice", "evidence": ["it:a", "it:b"], "tags": []}
+hotspot = {"type": "pattern", "evidence": ["it:a", "it:c", "it:d"], "tags": []}
+check(ep_modul.match_existing(hotspot, [fremd])[0] is None,
+      "T-022 cluster of another type with one shared ref and new evidence stays a new cluster")
+gleich = {"type": "pattern", "evidence": ["it:a", "it:b"], "tags": []}
+check(ep_modul.match_existing(gleich, [fremd])[0] is fremd,
+      "T-022 identical evidence stays the same entry across types (nothing new to inflate)")
+eigen = {"type": "best-practice", "evidence": ["it:a", "it:z"], "tags": []}
+check(ep_modul.match_existing(eigen, [fremd])[0] is fremd,
+      "T-022 same type keeps merging on one shared ref")
+
+tally_t022 = {"patterns_updated": 0}
+frueh = {"cluster_key": "hotspot:a", "type": "pattern", "evidence": ["it:a", "it:b"], "tags": [], "members": [], "confidence": 0.5, "occurrences": 2,
+         "first_seen": "2026-07-01", "last_seen": "2026-07-02"}
+offen = {"cluster_key": "hotspot:b", "type": "pattern", "evidence": ["it:x"], "tags": [], "members": [], "confidence": 0.5, "occurrences": 1,
+         "first_seen": "2026-07-01", "last_seen": "2026-07-02"}
+treffer = []
+rest = ep_modul.settle_proposals([frueh, offen], [fremd], treffer, tally_t022)
+check(rest == [offen] and treffer == ["hotspot:a"],
+      "T-022 a proposal covered by evidence another cluster added this run is no proposal")
+
 # 24f. prose/legacy blocks are skipped, never guessed at
 log = make_log(
     "## Irgendein Prosa-Block ohne Felder\nNur Text, keine Feldzeilen.\n",

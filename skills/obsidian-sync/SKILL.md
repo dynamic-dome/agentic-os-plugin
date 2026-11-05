@@ -121,7 +121,7 @@ Link to relevant wiki pages using `[[wiki/...]]` format.
 
 1. Find the project entity at `$WIKI_ROOT/wiki/entities/{project_id}.md`
    - Resolution order: project_id → project_aliases → filename grep
-2. If entity exists: append status/decision update to the entity's relevant section
+2. If entity exists: append status/decision update to the entity's relevant section and set its frontmatter `updated` to today
 3. If entity does not exist: skip (do NOT create entities in this step)
 
 **Do NOT update entity for:** architecture-decisions — their live writeback is
@@ -150,7 +150,7 @@ existing `### {id}:` heading. If present, the block was already written — e.g.
 by a prior run whose marker write-back failed. Do NOT append again; only set
 the missing marker in decisions.json (self-healing closes the
 wiki-written-but-unmarked window).
-- Entity exists → append to that section (create the section if missing).
+- Entity exists → append to that section (create the section if missing) and set its frontmatter `updated` to today.
 - Entity missing → create a **minimal** entity page: frontmatter (`type: entity`,
   `status: active`, `created`/`updated`, `source_count: 0`,
   `tags: [project, agent-generated]`, `aliases`), a one-line `What it is`, then

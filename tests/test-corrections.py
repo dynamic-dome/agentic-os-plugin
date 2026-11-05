@@ -266,7 +266,8 @@ def main():
           "the proposal applies as it is")
     p = subprocess.run([sys.executable, SCRIPT, mem, "--propose-encoding-corrections"], capture_output=True,
                        encoding="utf-8", errors="replace", env=ENV)
-    check(json.loads(p.stdout).get("corrections") == {"tasks": [], "learnings": [], "decisions": [], "user_md": []}, "after applying nothing is left")
+    check(json.loads(p.stdout).get("corrections") == {"tasks": [], "learnings": [], "decisions": [], "user_md": [],
+                                                      "profile_candidates": []}, "after applying nothing is left")
     check(getj(mem, "context/open-tasks.json")[0]["title"] == FIXED_TITLE, "task title repaired end to end")
 
     print("== corrections: decisions (DCO #10057 (2))")
@@ -350,7 +351,8 @@ def main():
           and UM_GOOD in get(mem, "identity/user.md") and UM_BAD not in get(mem, "identity/user.md"), "stores repaired end to end")
     p = subprocess.run([sys.executable, SCRIPT, mem, "--propose-encoding-corrections"], capture_output=True,
                        encoding="utf-8", errors="replace", env=ENV)
-    check(json.loads(p.stdout)["corrections"] == {"tasks": [], "learnings": [], "decisions": [], "user_md": []},
+    check(json.loads(p.stdout)["corrections"] == {"tasks": [], "learnings": [], "decisions": [], "user_md": [],
+                                                      "profile_candidates": []},
           "after applying nothing is left (stamps keep the old text in 'was' but are not proposed again)")
 
     print("== write-time warning")

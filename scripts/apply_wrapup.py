@@ -1036,7 +1036,9 @@ def apply_bridge_decisions(mem, plan, date, dry, touched, tally):
 # (`corrections[]`: who, when, why, what it was), so nothing is lost and a wrong
 # correction can be undone from the store itself.
 CORRECTION_DECIDERS = ("agent", "owner")
-CORRECTION_SECTIONS = ("tasks", "learnings", "decisions", "user_md")
+CORRECTION_SECTIONS = ("tasks", "learnings", "decisions", "user_md", "profile_candidates")
+# Queue fields an encoding repair may touch (DCO #10173). Everything else on a candidate stays out of reach.
+CANDIDATE_CORRECTABLE = ("observation", "evidence")
 # Decision fields a correction may rewrite (DCO #10057). `options_considered` is nested
 # (list of {option, pros[], cons[]}); it may only change its strings, never its shape.
 DECISION_TEXT_FIELDS = ("title", "context", "decision", "consequences")
@@ -1176,6 +1178,23 @@ def validate_corrections(mem, plan, paths=None):
                 raise PlanError(f"correction user_md {tag!r}: the line occurs {have.count(old)} times - not guessing")
             if have.count(old) == 0 and have.count(new) == 0:
                 raise PlanError(f"correction user_md {tag!r}: no such line in user.md")
+    cands = spec.get("profile_candidates") or []
+    if cands:
+        queue = _id_paths(mem, paths)
+        rows = load_json(queue.root, queue.queue, [])
+        for it in cands:
+            rid = _correction_common(it, "profile_candidate", seen)
+            row = _unique_row(rows, rid, "profile candidate")
+            if "corrections" in row and not isinstance(row["corrections"], list):
+                raise PlanError(f"correction {rid}: the stored 'corrections' is no list - repair the row first")
+            extra = set(it) - set(CANDIDATE_CORRECTABLE) - {"id", "reason", "by"}
+            fields = [f for f in CANDIDATE_CORRECTABLE if f in it]
+            if extra or not fields:
+                raise PlanError(f"correction {rid}: only {CANDIDATE_CORRECTABLE} may change, got {sorted(extra) or 'nothing'}")
+            for field in fields:
+                # same limit as user_md: the identity gate stays the only way to change what a candidate says
+                if it[field] != row.get(field) and it[field] != _repair_deep(row.get(field)):
+                    raise PlanError(f"correction {rid}: '{field}' is not the encoding repair of the stored text")
 
 
 def _check_similar(rid, field, old, new):
@@ -1244,7 +1263,7 @@ def plan_touches_identity(plan) -> bool:
     corr = plan.get("corrections")
     return bool("user_candidates" in plan or plan.get("consolidate") or plan.get("user_md_supersede")
                 or plan.get("user_md_retire") or plan.get("identity_expire")
-                or (corr.get("user_md") if isinstance(corr, dict) else corr))
+                or ((corr.get("user_md") or corr.get("profile_candidates")) if isinstance(corr, dict) else corr))
 
 
 def _read_user_md_raw(mem, what="correction (user_md)", paths=None):
@@ -1269,7 +1288,8 @@ def apply_corrections(mem, plan, date, dry, touched, tally, session_id="", paths
     spec = plan.get("corrections") or {}
     tasks, lrns = spec.get("tasks") or [], spec.get("learnings") or []
     decs, lines = spec.get("decisions") or [], spec.get("user_md") or []
-    if not tasks and not lrns and not decs and not lines:
+    cands = spec.get("profile_candidates") or []
+    if not tasks and not lrns and not decs and not lines and not cands:
         return
     if tasks:
         rows = load_json(mem, "context/open-tasks.json", [])
@@ -1386,6 +1406,26 @@ def apply_corrections(mem, plan, date, dry, touched, tally, session_id="", paths
             changelog = load_json(paths.root, paths.changelog, [])
             write_json(paths.root, paths.changelog, changelog + entries, dry, touched, via="identity")
             write_atomic(paths.root, paths.md, "".join(parts), dry, touched, via="identity")
+    if cands:
+        paths = _id_paths(mem, paths)
+        rows = load_json(paths.root, paths.queue, [])
+        changed = False
+        for it in cands:
+            row = _unique_row(rows, str(it["id"]).strip(), "profile candidate")
+            row_changed = False
+            for field in CANDIDATE_CORRECTABLE:
+                if field in it and it[field] != row.get(field):
+                    _stamp_correction(row, field, row.get(field), date, it, session_id)
+                    row[field] = it[field]
+                    row_changed = True
+            if not row_changed:
+                tally["corrections_skipped_unchanged"] += 1
+                continue
+            tally["candidates_corrected"] += 1
+            tally["correction_ids"].append(str(row.get("id")))
+            changed = True
+        if changed:
+            write_json(paths.root, paths.queue, rows, dry, touched, via="identity")
 
 
 def _contains_mojibake(value) -> bool:
@@ -1412,7 +1452,7 @@ def propose_encoding_corrections(mem, identity_store_arg=None):
     """Read-only: the correction plan that repairs every row whose text, summary or
     title was read as cp1252. Rows already clean are not listed, so applying the
     result and asking again yields an empty plan."""
-    out = {"tasks": [], "learnings": [], "decisions": [], "user_md": []}
+    out = {"tasks": [], "learnings": [], "decisions": [], "user_md": [], "profile_candidates": []}
     why = "Encoding-Reparatur: UTF-8 war als cp1252 gelesen (Mojibake), Zeichen rueckuebersetzt"
     for r in load_json(mem, "context/open-tasks.json", []):
         if isinstance(r, dict) and looks_mojibake(r.get("title")):
@@ -1442,6 +1482,16 @@ def propose_encoding_corrections(mem, identity_store_arg=None):
         store, _source = identity_store.resolve_store(identity_store_arg, os.environ)
         own = (identity_store.central_paths(store) if identity_store.central_active(store)
                else identity_store.legacy_paths(mem))
+        for r in load_json(own.root, own.queue, []):
+            if not isinstance(r, dict):
+                continue
+            item = {"id": r.get("id")}
+            for field in CANDIDATE_CORRECTABLE:
+                if _contains_mojibake(r.get(field)):
+                    item[field] = _repair_deep(r[field])
+            if len(item) > 1:
+                item["reason"] = why
+                out["profile_candidates"].append(item)
         user_text = _read_user_md_raw(mem, paths=own) if os.path.isfile(os.path.join(own.root, own.md)) else ""
     except PlanError:
         user_text = ""   # not UTF-8: --lint / maintain Step 2 report that, the proposal stays read-only
@@ -1726,6 +1776,14 @@ def validate_identity_expire(plan):
                         f"got {days!r}")
     if not isinstance(it.get("reason"), str) or not it["reason"].strip():
         raise PlanError("identity_expire: 'reason' is required")
+    try:
+        _expire_cutoff(plan.get("date") or _dt.date.today().isoformat(), days)
+    except OverflowError:   # a date near year 1 used to raise after the first writes (DCO #10282)
+        raise PlanError(f"identity_expire: {days} days before plan date {plan.get('date')!r} is no date") from None
+
+
+def _expire_cutoff(date, days):
+    return _dt.date.fromisoformat(date) - _dt.timedelta(days=int(days))
 
 
 def apply_identity_expire(mem, plan, date, dry, touched, tally, paths=None):
@@ -1734,7 +1792,7 @@ def apply_identity_expire(mem, plan, date, dry, touched, tally, paths=None):
         return
     paths = _id_paths(mem, paths)
     queue = load_json(paths.root, paths.queue, [])
-    cutoff = _dt.date.fromisoformat(date) - _dt.timedelta(days=int(it["older_than_days"]))
+    cutoff = _expire_cutoff(date, it["older_than_days"])
     reason = " ".join(it["reason"].split())
     for c in queue:
         if not isinstance(c, dict) or c.get("status") not in PLAN_CANDIDATE_STATUSES:
@@ -1876,8 +1934,14 @@ def apply_user_md_retire(mem, plan, date, dry, touched, tally, session_id="", tr
     entries = []
     # Only the tail can hold the entries of a run that died between the changelog write and the file write - and only
     # from THIS session. An older retire of the same text, or one from another session, is history (the line came back
-    # later) and gets its own new entry (Codex 5.11 V1-03).
-    recent = [e for e in changelog[-len(kept):] if isinstance(e, dict) and session_id and e.get("session") == session_id]
+    # later) and gets its own new entry (Codex 5.11 V1-03). The run must END the log: any other entry after a retire
+    # means the session went on, so that retire finished and is history too (DCO #10282).
+    recent = []
+    for e in reversed(changelog[-len(kept):]):
+        if not (isinstance(e, dict) and session_id and e.get("session") == session_id
+                and e.get("field") == "user.md/retire"):
+            break
+        recent.append(e)
     for r in kept:
         it = r["item"]
         entry = {"ts": now, "field": "user.md/retire", "old_value": r["old"], "new_value": None,
@@ -3315,7 +3379,7 @@ def new_tally() -> dict:
         "bridge_approved": [], "bridge_rejected": [], "bridge_status_changed": 0,
         "rule_class_open": None, "rule_explained": [], "rule_released": [], "rule_rejected": [],
         "tasks_retitled": 0, "learnings_corrected": 0, "corrections_skipped_unchanged": 0,
-        "decisions_corrected": 0, "user_lines_corrected": 0,
+        "decisions_corrected": 0, "user_lines_corrected": 0, "candidates_corrected": 0,
         "correction_ids": [], "corrections_projection_needed": False,
         "restored": 0, "restored_ids": [], "restore_skipped_live": 0, "restore_dropped": [],
         "principles_added": 0, "principles_updated": 0, "principles_unchanged": 0, "principle_ids": [],
