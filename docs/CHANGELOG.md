@@ -4,6 +4,14 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-05] Release v5.12.0 — wrap-up als Judge (T-028b)
+
+- `/agentic-os:wrap-up` läuft in drei Runden: `wrapup_core.py pre`, ein Plan durch `apply`, Bericht. Eine vierte Runde (`followup`) gibt es nur für Urteile, die eine neue id brauchen.
+- Der Skill-Body schrumpft von 60 auf rund 13 KB, die langen Regeln liegen in `references/judge-rules.md`. wrap-up ruft keinen Skill mehr auf.
+- Handoff, Status-Board, Session-Note, Patterns, Projektionen, Berichte und Marker kommen aus dem Core. Der Marker bleibt der letzte Schreibvorgang.
+- Folge für den Owner: Entity-Seiten, Synthese und Decision-Promotion im Wiki laufen nur noch über den manuellen Skill `obsidian-sync` (Scope-Entscheid 2026-09-08). Das NotebookLM-Angebot, das Sharepoint-Delta und der RAG-Check je Learning sind aus dem Ablauf heraus.
+- Messlauf der Runden und API-Calls steht aus, er braucht einen echten Lauf nach dem Release.
+
 ## [2026-11-05] Release v5.11.2 — Nachlauf zu 5.11
 PATCH. Owner-Go 05.11.2026. Reparaturen nach dem Codex-Verifier und eine schmale Plan-Sektion für Kodierungsfehler.
 

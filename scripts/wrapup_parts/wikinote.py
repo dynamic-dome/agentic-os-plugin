@@ -36,6 +36,28 @@ def _write(path, text):
         raise
 
 
+def _render_judged(project_id, date, iterations, summary):
+    """Note of a judged wrap-up: a deterministic projection of the plan (spec 2026-11-05, A6)."""
+    state = summary.get("current_state") or summary.get("active_task") or ""
+    lines = ["---", "type: query", "status: final", f"created: {date}", f"updated: {date}", "source_count: 0",
+             "tags:", "  - session", "  - agent-generated", "aliases: []", "query_kind: session",
+             "question: Was wurde in dieser Session erarbeitet?", "scope: []", f"project: {project_id}",
+             "agent: claude-code", f"iterations: {len(iterations)}", "quality_delta: null",
+             "patterns_found: 0", "authority: derived", "---", "",
+             f"# {date} Session: {project_id}", "", "## Was wurde gemacht", ""]
+    lines += [f"- {x}" for x in (summary.get("what_was_done") or [])[:MAX_ITEMS]]
+    if state:
+        lines += ["", "## Stand", "", str(state)]
+    files = []
+    for it in iterations:
+        for f in it.get("files_changed") or []:
+            if f not in files:
+                files.append(f)
+    if files:
+        lines += ["", "## Berührte Dateien", ""] + [f"- `{f}`" for f in files[:MAX_ITEMS]]
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _render(project_id, date, iterations):
     lines = ["---", "type: query", "status: final", f"created: {date}", f"updated: {date}", "source_count: 0",
              "tags:", "  - session", "  - agent-generated", "  - headless", "aliases: []", "query_kind: session",
@@ -84,26 +106,37 @@ def _add_log_block(log_path, header, block):
     return True
 
 
-def write_session_note(wiki_root, project_id, date, iterations, *, enabled=True, threshold=1):
-    """-> '<rel path>' on success, 'skipped(<reason>)' or 'failed(<reason>)'."""
+def write_session_note(wiki_root, project_id, date, iterations, *, enabled=True, threshold=1, summary=None,
+                       session_id=""):
+    """-> '<rel path>' on success, 'skipped(<reason>)' or 'failed(<reason>)'.
+
+    With `summary` the note belongs to a judged wrap-up and carries the session in its name: two sessions
+    of one day must not overwrite each other; the caller has applied the substantiality gate. Without it,
+    it is the night run's note of the day and `threshold` decides.
+    """
     if not enabled:
         return "skipped(sync disabled)"
-    if len(iterations) < max(1, int(threshold or 1)):
+    if summary is None and len(iterations) < max(1, int(threshold or 1)):
         return "skipped(below threshold)"
     queries = os.path.join(wiki_root, "wiki", "queries")
     if not os.path.isdir(queries):
         return "skipped(no wiki root)"
-    rel = f"wiki/queries/{date}-session-{project_id}-headless.md"
+    judged = summary is not None
+    label = (session_id[:8] or "session") if judged else "headless"
+    origin = "Wrap-up" if judged else "automatisch konsolidiert"
+    stamp = "manuell per obsidian-sync" if judged else "headless"
+    rel = f"wiki/queries/{date}-session-{project_id}-{label}.md"
     try:
-        _write(os.path.join(wiki_root, *rel.split("/")), _render(project_id, date, iterations))
+        text = _render_judged(project_id, date, iterations, summary) if judged else _render(project_id, date, iterations)
+        _write(os.path.join(wiki_root, *rel.split("/")), text)
         _add_index_line(os.path.join(wiki_root, "index.md"),
-                        f"- [{date} Session: {project_id} (headless)]({rel}) — {project_id}, "
-                        f"{len(iterations)} Iterationen (automatisch konsolidiert)", rel)
-        header = f"## [{date}] agent-sync | {project_id} (headless)"
+                        f"- [{date} Session: {project_id} ({label})]({rel}) — {project_id}, "
+                        f"{len(iterations)} Iterationen ({origin})", rel)
+        header = f"## [{date}] agent-sync | {project_id} ({label})"
         _add_log_block(os.path.join(wiki_root, "log.md"), header,
-                       f"{header}\n\n- Session-Note: {rel}\n- Entity updated: no (headless)\n"
-                       "- Decisions promoted: 0 (headless)\n- Learnings promoted: 0 (headless)\n"
-                       "- Patterns flagged: 0 (headless)\n- Total pages touched: 3")
-    except OSError as exc:
+                       f"{header}\n\n- Session-Note: {rel}\n- Entity updated: no ({stamp})\n"
+                       f"- Decisions promoted: 0 ({stamp})\n- Learnings promoted: 0 ({stamp})\n"
+                       f"- Patterns flagged: 0 ({stamp})\n- Total pages touched: 3")
+    except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         return f"failed({type(exc).__name__})"
     return rel

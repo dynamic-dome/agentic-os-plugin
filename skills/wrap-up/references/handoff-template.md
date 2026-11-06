@@ -1,6 +1,7 @@
 # Central Handoff — Template + Prepend Algorithm (SSoT)
 
-Referenced by wrap-up Step 7.6. Write-side of the cross-project handoff; read-side is
+Implemented by `scripts/wrapup_parts/handoff.py` and `wrapup_core.py` (T-028b): no model writes these files any
+more, this file documents the format. Write-side of the cross-project handoff; read-side is
 session-bootstrap Step 0.5. Paths per SESSION-WORKFLOW.md §1/§3.
 
 ## 7.6a — Central handoff file

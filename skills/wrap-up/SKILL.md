@@ -9,931 +9,179 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '4.13'
+  version: '5.0'
   part-of: agentic-os
   layer: core
 ---
 
 # Session Wrap-Up
 
-End-of-session sequence. Summarizes work, extracts learnings, grows identity,
-prepares the next session.
+End-of-session sequence. You are the judge: you decide what is worth keeping, a script does
+everything else. Three turns, one plan. Design: `docs/superpowers/specs/2026-11-05-t028b-judge-fortschreibung.md`.
 
 ## Long-Term Memory Routine (long-term-memory-routine)
 
 After every substantial task or session, consolidate durable knowledge into the
 central .agent-memory/ knowledge base instead of leaving it in the conversation:
 
-- Work iterations → `iterations/iteration-log.md` + `errors.json` (write plan, Step 1.5 —
+- Work iterations → `iterations/iteration-log.md` + `errors.json` (plan section `iterations`;
   `/agentic-os:log` is the entry point for mid-session logging)
 - Reusable learnings → `learnings/learnings.json` + `learnings.md`
-- Durable decisions → `context/decisions.json` (write plan, Step 4.5 — the
+- Durable decisions → `context/decisions.json` (plan section `decisions`; the
   `context-keeper` skill stays the entry point outside wrap-up)
 - Open next steps → `context/open-tasks.json`
-- Identity observations → `working/user-candidates.json` → `identity/user.md` / `identity/soul-candidates.md`
+- Identity observations → `working/user-candidates.json` → `identity/user.md`
 - Handoff snapshot → `session-summary.md` + central handoff
 
 Reject trivial facts. Manual-only — no hook triggers this automatically.
 
-## Step 0: Deterministic Preflight (stage0-preprocess)
+## The protocol (write-plan)
 
-Run the stage-0 preprocessor FIRST — it gathers every mechanical session fact
-without model work:
+Cost is the sum of context length over calls: a measured run paid 94% context transport, 6% thinking.
+So there are exactly three turns, and you invoke no skill during them.
 
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/preprocess_state.py" .agent-memory --session-id <session-id>
-```
+1. **Brief.** `python "${CLAUDE_PLUGIN_ROOT}/scripts/wrapup_core.py" pre --mem .agent-memory --session-id <session-id>`
+2. **Plan.** One JSON plan through `apply` (below). Everything mechanical happens in that call: ids, dedup,
+   the promotion rule, summary, central handoff, status board, wiki note, patterns, projections, reports,
+   and the consolidation marker last.
+3. **Report** from the returned JSON (below). Never count by hand.
 
-(`<session-id>` everywhere in this skill is the real id of THIS session, the value of
-`$CLAUDE_CODE_SESSION_ID`; the identity checks of Step 6 depend on it.)
+A fourth turn exists only when `apply` returns `bridge_candidates` or an open rule queue (see followup).
 
-Use its JSON output (`changed_files`, `git_diff_summary`, `threshold_events`,
-`validation_errors`, `open_tasks`, `user_candidates` — listed only because `--session-id` is
-passed, state hashes) as the PRIMARY data source for all following steps. If `validation_errors` is non-empty, surface them in
-the summary instead of re-validating files by reading them.
+`<session-id>` is the real id of THIS session, the value of `$CLAUDE_CODE_SESSION_ID`: another id makes
+the identity evidence of the run unverifiable (`tally.session_binding_mismatch`).
 
-(context-diet) Do NOT systematically re-read the session transcript or full
-memory files: work from the preprocess state object plus the conversation
-context you already hold. Fall back to targeted lookups ONLY for single
-unresolved points — never a full re-scan. Track roughly how many bytes of
-files you actually read this run; Step 9.5 logs that number.
+(stage0-preprocess) `pre` runs the stage-0 preprocessor `preprocess_state.py` and adds what you need: harvested
+iterations, today's errors, open tasks, existing identity keys, open bridge candidates, the rule queue. It writes
+nothing. If `validation_errors` is not empty, name them in the report.
 
-## Step 0.6: Write-Plan Discipline (write-plan)
+(context-diet) Do NOT systematically re-read the transcript or full memory files. Work from the brief and the
+conversation you already hold; targeted lookups only, for a single unresolved point.
 
-There are exactly THREE batch calls per run: the early one in Step 1.5 (iterations
-only, so Step 4 can see this session's errors), the main one in Step 7.4
-(everything else, before wiki sync and handoff) and the marker-only one in Step 9.5
-(`{"consolidate": true}`). A fourth runs only when Step 7.4 returns open
-`tally.bridge_candidates`: Step 3d's `bridge_decisions`-only call (the ids exist only
-after 7.4). Do NOT write `iteration-log.md`, `errors.json`,
-`working/current-session.json`,
-`decisions.json`, `learnings.json`/`learnings.md`, `session-summary.md`,
-`open-tasks.json`, `user-candidates.json`, `user-changelog.json`, `user.md`,
-`soul-candidates.md`, `consolidation-marker.json` or the `dirty-*.json` flags
-with individual Write/Edit calls. Collect the results of Steps 1.5–7 into ONE
-write plan and hand it to the batch writer in Step 7.4.
+Never write a store file with Write or Edit: `apply_wrapup.py` owns them, `patterns.*` belong to
+`extract_patterns.py`, `soul.md` is read-only history.
 
-Why: a measured run took 28 API calls — 11.8M cache-read and 1.38M
-cache-write tokens against only 39k output tokens. That is 94% context
-transport and 6% thinking. The model is stateless: every call resends the
-whole conversation, so each additional turn costs another full context. The
-plan collapses the write phase to ~2 calls.
+## What you judge
 
-The same arithmetic is why this skill no longer invokes `context-keeper` or
-`pattern-extractor` (mid-session logging is the `/agentic-os:log` command): loading a skill body was followed by a
-full prefix-cache rewrite in 41% of measured cases (L34/D-010), and those three
-bodies were almost entirely mechanical rules that now live in the scripts. The
-skill and the command remain the entry points when a user calls them directly.
+**Iterations (session-harvest).** Leave `iterations` out and the core logs the harvest from the brief. Everything
+was already logged with `/agentic-os:log`: send `"iterations": []`. Send your own when the conversation knows more
+than git: 1–5 distinct iterations, three failed fixes before the right
+one are ONE iteration with `attempts: 3`, at least 2 lowercase tags, errors with root cause and prevention.
+`apply_wrapup.py` owns the writes to `iteration-log.md` and `errors.json`.
 
-Keep judgment in your head (what is a learning, what is an identity signal, how
-important); leave every mechanical rule to the script — ids, `review_after`,
-dedup, the promotion rule, changelog ordering, `learnings.md` regeneration, the
-marker and the dirty flags. Plan schema: `references/wrapup-schemas.md`
-§Write plan.
+**Learnings.** A learning would prevent a future mistake, reveals something non-obvious, or documents a rationale
+not in the code. Plan at most 3: the core keeps the most important (`learnings_dropped_by_cap`), rule-class
+learnings are exempt. Importance: 5 prevents data loss or a security issue, 4 prevents multi-attempt debugging,
+3 is non-obvious behavior. Below 3 is not stored (min-importance), so do not plan it. `summary`: the rule in one
+sentence, at most 150 characters. `derived_from`: this session's origins or `[]`, never a guess.
+A learning that changes a rule, a gate or who decides what gets `"rule_class": true` (rule-gate); when unsure,
+mark it.
+(dedup-in-code) Do NOT read `learnings/learnings.json` for this: `apply_wrapup.py` owns the dedup (Jaccard >= 0.6
+refreshes the old entry). If you know the duplicate, set `"duplicate_of": "<id>"`; `near_duplicates` in the result
+names the close calls.
 
-## Step 1: Gather Session Data
+**Decisions (decision-scan).** New dependencies, architecture, storage or format changes, ownership and policy
+("X is SSoT"). Conversation and repo evidence only, one-off details are not decisions. Plan section `decisions`;
+`supersedes` must name a real id.
 
-1. `.agent-memory/iterations/iteration-log.md` — entries from today
-2. `git diff --stat` + `git log --oneline -5` (if git available)
-3. `.agent-memory/quality/test-results.json` — latest entry (if present)
-4. `.agent-memory/iterations/errors.json` — entries from today
-5. `.agent-memory/working/dirty-*.json` — mechanical dirty-state files written by the
-   PostToolUse dirty-tracker hook (`dirty: true` = un-consolidated work; `touched_files`
-   is hard evidence of what was edited, independent of conversation memory)
+**Open tasks (open-tasks-ssot).** `context/open-tasks.json` is the single source of truth: `open_tasks.add` for new
+next steps, `open_tasks.close` with the ids this session finished. `cross_project: true` only on the user's word.
 
-If iteration-log.md has no entries from today: do NOT skip ahead — run Step 1.5 first.
-Only if Step 1.5 also yields nothing: note "No iterations in this session", proceed to
-Step 5 (skip Steps 2–4). Steps 6/6.x run regardless.
+**Identity (identity-harvest).** Mandatory: the pipeline starves when this is skipped. Scan the whole session: Did
+the user correct you? State a preference or rule ("immer", "nie")? Reveal a workflow habit? Confirm a non-obvious
+approach? Make a communication demand? A mood is observed, never promoted.
+- Trust boundary (trust-boundary): candidates come ONLY from the user's direct conversation, `trust_source:
+  "conversation"`; never from web, docs, NotebookLM or wiki content.
+- Reuse the `key` from `user_candidates` in the brief when it is the same statement.
+- `"confirmed": true` needs a `quote`: the user's LITERAL words, one message, at least 3 words, the whole clause
+  including a negation. The script checks it against the transcript. Never invent one.
+- Nothing found: `candidates: []` and `none_because` with the reason. An empty pair is rejected.
+- Contradicted profile line, removed line, doubt about a quote: `references/judge-rules.md`.
 
-## Step 1.5: Session-Harvest — Retro-Logging (session-harvest)
+**Earlier bridge candidates (bridge-gate).** `bridge_candidates` in the brief are open from earlier runs. Decide them
+in this plan. Delegated decision (owner, 2026-10-16), no question. Approve only if ALL hold: useful in EVERY session
+of this project, a durable actionable rule, not already covered, self-contained and still true. Otherwise reject.
+Really unsure: reject with a note starting `unsicher:`. `plain` (plain-text-duty) is the text Dominic reads: simple
+German, what changes for him, at most 600 characters.
 
-Users who run ONLY bootstrap + wrap-up never run `/agentic-os:log` mid-session —
-without this step the pattern pipeline starves.
-
-**Condition:** no iteration-log entry for today AND the session did substantial work
-(today's commits in `git log --oneline --since=midnight`, working-tree changes,
-`touched_files` in any `working/dirty-*.json` with `dirty: true`, or completed
-features/fixes/refactors visible in the conversation).
-
-**Stale-session harvest:** a dirty file whose `session_id` is NOT this session
-(crashed or abandoned session) is still evidence — harvest its `touched_files` the
-same way, but mark reconstructed iterations with `(recovered from session {id})`.
-Do not invent details the files and git history cannot support.
-
-1. Reconstruct 1–5 **distinct iterations** from conversation + git evidence
-   (feature/bugfix/refactor/config/docs/test — distinct approaches, not individual edits).
-   **Counting rule:** three failed fixes before the right one are ONE iteration with
-   `attempts: 3`, not three iterations. **Tags:** at least 2, lowercase, reusing the
-   conventions already in `errors.json` (language/framework · domain · error type).
-2. Put them into the write plan's `iterations` array (Step 7.4). Do **NOT** run
-   `/agentic-os:log` for this and do NOT write `iteration-log.md` /
-   `errors.json` / `working/current-session.json` by hand — `apply_wrapup.py` owns
-   those writes and their mechanics: id continuation in the format already on disk,
-   the recurrence rule (same category AND ≥2 overlapping tags → `occurrences++`
-   instead of a new entry), the markdown shape, and the working-memory bookkeeping.
-   Judgment stays here: what counts as one iteration, which errors mattered, why.
-3. Trivial session (pure lookup/discussion, no artifacts): skip silently.
-4. **Apply the iterations NOW (early-apply), not in Step 7.4** — one call with only
-   this section:
-
-   ```bash
-   python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory \
-     --session-id <session-id> <<'PLAN'
-   {"date": "<today>", "iterations": [ ... ]}
-   PLAN
-   ```
-
-   Why the split: Step 4 reads `errors.json` from disk. If the harvested errors
-   were still sitting in the final plan, the extractor would analyse the state
-   BEFORE this session and never see its own errors — the pattern pipeline would
-   starve exactly as it did before v3.6.0. Leave `iterations` out of the Step 7.4
-   plan afterwards (a repeat is harmless — the header dedup skips it and touches
-   no error counts — but pointless).
-
-## Step 2: Summarize Work Done
-
-- Count: iterations, errors, tests run
-- List: files changed (git diff or iteration log)
-- Note: quality/test trend if data exists
-
-## Step 3: Extract Learnings
-
-A learning is worth recording if it would prevent a future mistake, reveals something
-non-obvious, or documents a decision rationale not in the code. NO trivial facts.
-
-### 3a: Dedup Check
-
-(dedup-in-code, 5.3.0) Do NOT read `learnings/learnings.json` for this — in a large store
-that is 30k+ tokens resent on every following call. `apply_wrapup.py` owns the rule
-(token Jaccard similarity to a live entry, >= 0.6 → duplicate): the script updates that
-entry's `last_relevant` and skips creation. Run the write plan with `--dry-run` first: its
-top-level `near_duplicates` lists, per planned learning, up to 3 live entries with
-Jaccard 0.2–0.6 (id, score, text). Judge only those: same core insight → set
-`"duplicate_of": "<id>"` on the planned learning (the script then refreshes that entry
-instead of adding one); otherwise leave it as is.
-
-### 3a.2: Cross-Session RAG-Check (Atlas)
-
-Before appending a candidate, ask the Atlas memory RAG whether an equivalent learning
-already exists across sessions/projects:
-
-- **Load the tool ONCE per wrap-up run** (it is deferred):
-  `ToolSearch("select:mcp__agent-memory-atlas__memory_search_tool")` — one call for the
-  whole run, never per learning.
-- **One query per candidate, capped:** `memory_search_tool("{learning text}",
-  source_system="agent-memory", top_k=3, snippet_len=200)`. Never more than one query
-  per candidate — wrap-up runs at session end where context is scarce.
-- **The duplicate verdict is yours, not the score's:** read the hits; discard the
-  candidate ONLY if a hit states the same core insight. Do NOT apply a numeric score
-  threshold — the RAG returns ranking scores (RRF), not similarity measures.
-- **On a confirmed duplicate:** if the matching entry lives in THIS project's
-  `learnings.json`, update its `last_relevant` (same handling as 3a). If the hit comes
-  from another project, discard the candidate — it is already knowledge there, and a
-  `cross_project` re-capture would be noise.
-- **Fail-soft, three layers (never block wrap-up):** (a) ToolSearch does not find the
-  tool (project/user without the Atlas MCP) → skip this step silently; the local Jaccard
-  check remains the only dedup instance. (b) The FIRST tool call fails (daemon down) →
-  fast-skip the RAG check for the REST of the run, no retries (each refused connection
-  costs a full socket timeout). (c) Anything else: warn and continue — never block
-  wrap-up.
-- **Complementary, not redundant:** the RAG index only sees learnings after the next
-  index rebuild. Duplicates created earlier in the SAME session are caught only by the
-  local Jaccard check (3a). Neither mechanism replaces the other — do not "optimize
-  away" 3a because 3a.2 exists.
-
-### 3b: Score and Append
-
-Append an entry to `learnings/learnings.json` (field schema:
-`references/wrapup-schemas.md` §Learning entry, load at write time). Field contracts:
-
-**Minimum importance 3 (min-importance, 5.11.0):** `apply_wrapup.py` no longer stores learnings with importance 1
-or 2 (`tally.learnings_skipped_low_importance`) - in October 2026 the stores grew by 859 learnings while a session
-sees 7-21 of them. Do not plan trivia or workflow notes at all; a rule-class learning is exempt (Step 3f).
-
-importance: 5 = prevents data loss/security issue · 4 = prevents multi-attempt debugging ·
-3 = non-obvious behavior · 2 = workflow optimization · 1 = trivia.
-
-**`derived_from` (provenance):** IDs of THIS session's origins —
-iteration numbers from `iteration-log.md` (`iteration-{n}`), error IDs from
-`errors.json` (`E{n}`), decision IDs (`D{n}`). No traceable origin → `[]`. Never
-invent provenance; an honest empty list beats a guessed reference.
-
-**`summary` (short form, optional — strongly recommended for `importance >= 4`):** the
-conclusion in one sentence, <= 150 characters — the rule, not its context. The MEMORY.md
-and AGENTS.md projections show it instead of the first 150 characters of `text`, which
-are usually context. Omit it rather than paraphrase badly; without it the projection
-cuts `text`. Longer than 150 → kept, but the tally warns and the projection cuts it.
-
-**`review_after` (staleness contract):** date when the learning's validity should be
-re-checked; default = `date` + 90 days (matches the bootstrap STALE threshold). Set
-ONCE at creation — bootstrap and /agentic-os:maintain read it, wrap-up never updates it
-on existing entries.
-
-Backward compatibility: entries created before v4.4.0 lack both fields — leave them
-as-is (consumers use `.get()`); do NOT backfill.
-
-### 3c: Regenerate learnings.md
-
-**Done by `apply_wrapup.py` automatically** whenever the plan adds a learning — never
-by hand. `learnings.md` is a pure projection of `learnings.json`: header
-`*Auto-generated from learnings.json — do not edit directly.*`, then one
-`## Importance {n}` section per level (5 → 1), entries
-`- **{id}** ({date}) {text}  #{tags}` newest first, superseded entries omitted.
-Regenerate without a plan: `python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --render-learnings`.
-
-### 3d: Bridge gate — delegated (bridge-gate)
-
-Curated Claude→Codex bridge (design: membrain/membridge.md). Canonical store is
-learnings.json (`bridge_status`, reason in `bridge_note`); the AGENTS.md block is a
-projection. **Delegated since 5.7.0** (owner decision 2026-10-16, global rule
-"Delegierte Entscheidungen"): bridging is reversible and internal, so the agent
-pre-assesses, decides and reports one reason per entry — no `[j/n]` question.
-Runs AFTER Step 7.4: the ids of this session's learnings exist only then.
-
-1. Every learning written this session with `importance >= 4` gets
-   `"bridge_status": "candidate"` — **done by `apply_wrapup.py` automatically**
-   (additive field; older entries without it are untouched, never backfill; a
-   plan-supplied `bridge_status` is dropped — a verdict exists only via the
-   `bridge_decisions` section, which demands a reason).
-2. Source: `tally.bridge_candidates` from the Step 7.4 apply run — every open live
-   candidate store-wide, this session's and earlier undecided ones. Do not re-read
-   learnings.json for this. Empty → go to 3e.
-3. Pre-assess each candidate. Approve only if ALL hold: (a) useful in EVERY
-   Codex/Claude session of this project — every line in AGENTS.md / MEMORY.md costs
-   context on every start; (b) a durable, actionable rule, not a one-off fact or a
-   session story; (c) not already covered by a global rule, an approved learning or
-   a principle pointer; (d) self-contained and still true today. Otherwise reject.
-   Genuinely unsure → a Codex second opinion if one is at hand, else reject with a
-   note starting `unsicher:` — rejecting is the conservative default (reversible,
-   costs no context). Never leave a candidate undecided to "ask next time".
-4. Apply the verdicts in ONE call with only this section (no `consolidate`):
-   ```bash
-   python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory      --session-id <session-id> <<'PLAN'
-   {"bridge_decisions": [{"id": "L26", "status": "approved", "note": "<one-sentence reason>",
-                          "plain": "<plain German for Dominic>"}]}
-   PLAN
-   ```
-   `status` is `approved` or `rejected`; `note` (the technical reason) and `plain` (plain-text-duty)
-   are both required. **`plain` is the text Dominic reads** (owner request 2026-10-27: the plain
-   explanation decides whether he can judge a learning): simple German, no jargon, what changes concretely
-   for his sessions, at most 600 characters. A missing, empty or longer `plain` rejects the
-   whole plan before the first byte. The script stores `bridge_note` = `<date> agent: <note>`
-   and `bridge_plain` = `<plain>` on the object and rejects the whole plan on an unknown,
-   superseded, retired or principle id.
-5. Report — mandatory, like Step 6.5: the returned `bridge_status_line` verbatim,
-   then one line per case `L26 approved — <plain>` (the plain text, not the technical reason).
-6. If `tally.bridge_status_changed > 0`, run BOTH projections:
-   `python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_projection.py" .agent-memory --agents-md <project-root>/AGENTS.md`
-   (Codex side; workspace store `~/AI/.agent-memory` → `~/AI/AGENTS.md`) and
-   `python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" .agent-memory --project-root <project-root>`
-   (Claude side: managed block in `~/.claude/projects/<hash>/memory/MEMORY.md`;
-   the script derives `<hash>` itself). Report both one-line outputs verbatim.
-7. Owner override = rollback: when Dominic disagrees, the same section with
-   `"by": "owner"` and the flipped status, then both projections again. No special
-   path, no question beforehand.
-
-### 3f: Rule-class learnings — second model + owner (rule-gate)
-
-Mixed form (owner decision F4, 2026-10-22; DCO #9869). **Normal learnings** stay with
-Step 3d: the agent curates them alone and reports one line each. A learning that
-**changes a rule or the constitution** (global/project rules, hard gates, delegation,
-who may decide what) is **rule-class**: it never reaches AGENTS.md / MEMORY.md on the
-agent's say-so alone - the agent commits to the procedure below (the script checks its form, see the honor-system note below).
-
-1. **Mark it** in the Step 7.4 plan: `"rule_class": true` on the learning. A tag `regel`,
-   `rule`, `verfassung` or `constitution` marks it too. When unsure whether a learning
-   changes a rule, mark it - the cost is one explanation, not a silent rule change.
-   `apply_wrapup.py` then stores `rule_class` + `release.status: needs_explanation`,
-   makes it a bridge candidate whatever its importance, keeps it out of
-   `tally.bridge_candidates` (Step 3d cannot approve it; `bridge_decisions` approved on it is
-   rejected) and lists it in `tally.rule_class_open`.
-2. **Second model (mark + queue, no live model call in the plugin).** For each id in
-   `tally.rule_class_open.needs_explanation`:
-   `python "${CLAUDE_PLUGIN_ROOT}/scripts/learning_release.py" sheet .agent-memory <id>` renders the
-   Erklärbogen (`references/erklaerbogen-vorlage.md`). Hand it to a model that is **not**
-   the author - Codex (`/codex:rescue`) or a sub-agent of a different model class -
-   and enter its JSON answer as `rule_explanations` (own call; needs `explained_by`,
-   `plain` (plain German, at most 600 characters - longer is rejected), `risk`, `verdict`). No second model at hand: the learning stays
-   `needs_explanation` and is reported again next time (fail closed).
-3. **Owner release.** Show Dominic the `plain` text and the verdict. He releases only when he
-   can say it in **two sentences of his own** - record them as `rule_releases`
-   (`{"id","by":"owner","two_sentences":"..."}`). The script refuses `by` other than `owner`,
-   a state other than `explained`, anything but 2 (at most 3) real sentences and a copy of the
-   sheet. Rejecting (`"status":"rejected"`) is always possible. Never release on the owner's
-   behalf and never infer a release from silence.
-
-   **`"by": "owner"` is an honor system, not an authentication.** The script checks the form
-   (the field value, state `explained`, 2-3 real sentences, no copy of the sheet) and nothing
-   else: the agent writes the plan itself, so it can neither know nor prove that Dominic said
-   those sentences. The gate binds the agent by **self-commitment**. Enter a release only when
-   Dominic wrote the two sentences in THIS conversation, copy them verbatim into
-   `two_sentences`, and never compose them from the sheet, from memory or from his silence. A
-   release the agent invented would pass every technical check; what remains is the audit
-   trail (`release.two_sentences`, `released_at` in the store) that lets the owner see and
-   revert it afterwards. The same holds for every other `by: owner` in the plan (`bridge_decisions`,
-   `corrections`): it is a recorded claim, not a verified identity.
-4. After a release `tally.bridge_status_changed > 0` -> both projections (3d.6).
-5. Report - mandatory: the returned `rule_class_status_line` verbatim, plus one line per case
-   `L26 erklärt von <modell>: <plain, ein Satz>`. A correction of a rule-class text
-   (`corrections`) resets the state to `needs_explanation` and takes the learning out of the bridge.
-
-### 3g: Corrections - fix a title or a learning text (corrections)
-
-Existing rows were never editable: the wrap-up path only adds, and the stores are
-applier-owned, so a wrong task title or a damaged learning text (Mojibake, DCO #9393) had
-no regular repair. Plan section `corrections` is that path - own call, reason required:
+**Summary.** `what_was_done` (up to 8 lines), `current_state`, `active_task`, `blockers`, `checks`. Statistics, open
+items and next steps come from the store. `warnings`: the file is rewritten whole, so carry over every entry of
+`active_warnings` in the brief that still holds. German is fine here, the headers are the script's.
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --session-id <session-id> <<'PLAN'
-{"corrections": {"tasks": [{"id": "T-116", "title": "<new title>", "reason": "<why>"}],
-                 "learnings": [{"id": "L154", "text": "<corrected text>", "reason": "<why>"}]}}
+python "${CLAUDE_PLUGIN_ROOT}/scripts/wrapup_core.py" apply --mem .agent-memory --session-id <session-id> <<'PLAN'
+{"summary": {"what_was_done": ["..."], "current_state": "...", "active_task": "T-1", "blockers": "keine",
+             "checks": {"tests": "bestanden (84/84)", "lint": "n/a"}},
+ "identity": {"candidates": [{"key": "kebab-key", "observation": "...", "signal_type": "preference",
+                              "confidence": 0.5, "evidence": [], "confirmed": false, "quote": "",
+                              "trust_source": "conversation"}], "none_because": ""},
+ "learnings": [{"text": "...", "summary": "...", "importance": 4, "tags": ["a", "b"], "derived_from": []}],
+ "decisions": [],
+ "open_tasks": {"add": [{"title": "...", "source": "wrap-up", "cross_project": false}], "close": ["T-1"]},
+ "bridge_decisions": [{"id": "L26", "status": "approved", "note": "...", "plain": "..."}]}
 PLAN
 ```
 
-The row keeps `corrections[]` (date, by, session, field, reason, `was` = the old text). A
-learning text must stay the same statement (similarity >= 0.6) - a different statement is a
-new learning that supersedes the old one. `by` (`agent` default | `owner`) is a recorded claim,
-not a verified identity (see the honor-system note in 3f).
+Every key except `summary` and `identity` is optional. `session_summary` and `user_candidates` belong to the core;
+sending them is rejected, as is a missing `summary` or `identity`. Field schemas: `references/wrapup-schemas.md`.
 
-Two more sections (DCO #10057), same rules: `decisions` (`{"id","reason", title|context|decision|
-consequences|options_considered}`; `options_considered` keeps its shape - same entries, same keys,
-only the strings are repaired; `status`, `supersedes` and the like cannot be corrected here, a
-changed decision is a new decision) and `user_md` (`{"old","new","reason"}`, one whole line of
-`identity/user.md`). **`user_md` repairs the encoding and nothing else**: `new` must equal the
-deterministic repair of `old`, otherwise the plan is refused - user.md changes its wording only
-through the candidate queue (Step 6). Each repaired line gets an audit entry
-`user.md/encoding-correction` in `user-changelog.json` first. A decision that was already promoted
-to the wiki is repaired in the store only; the plan warns, the wiki page is a separate step.
+Exit 2 means nothing was consolidated: no marker, dirty flags stay set on purpose. Fix the plan and run it again,
+never write the files by hand. `--dry-run` shows the tally without touching a file.
 
-Mojibake: `apply_wrapup.py .agent-memory
---propose-encoding-corrections` prints the ready plan for tasks, learnings, decisions and
-user.md lines (read-only), pipe it back in. If
-`tally.corrections_projection_needed` or `bridge_status_changed > 0`, run both projections (3d.6);
-the AGENTS.md block is a projection and is never edited by hand.
+## Report
 
-### 3e: Codex memory ingest (codex-ingest)
+Emit these lines verbatim from the result, in every run:
+- `identity_status_line` (identity-visible). `tally.confirm_downgraded_keys`, `quote_unrelated` and
+  `supersede_skipped_unverified`: name them, Dominic should see which confirmations did not count.
+- `wiki_sync_line` (wiki-sync-visible): wiki sync never skips silently, this status line says what happened. The
+  session note is a projection of this plan; entity pages, synthesis and decision promotion stay with the manual
+  `obsidian-sync` skill.
+- `bridge_status_line` and `rule_class_status_line` when present, for verdicts one line per case
+  `L26 approved — <plain>`; `reports.codex_ingest`; `reports.review_sweep`; every line of
+  `reports.threshold_lines` plus `→ run /agentic-os:maintain` when there are any.
+- `warnings`: contract violations, not noise. One is expected in the AI workspace: its summary IS the central
+  handoff, the block arrives through the core.
+- `near_duplicates`: name a pair that states the same insight; retiring one is `/agentic-os:maintain`.
+- `pattern_proposals` > 0, or skill candidates: recommend the `pattern-extractor` skill, never call it here. The same
+  after about 5 sessions with iterations but no new pattern (pattern-starvation-guard): the script sees only the
+  error-based half of the signal.
+- `sharepoint_touched: true`: say that the sharepoint delta is manual now.
+- `handoff`: a `failed(...)` or `drift-merged`.
 
-E1 of the memory hub (membrain spec 2026-09-08). Codex writes its own native
-memory (`~/.codex/memories/memory_summary.md`); nobody else reads it. Pull its
-preferences/tips into the hub as candidates so gate 3d can decide:
+**Commits.** `repo.uncommitted` is `ja`: suggest a code commit. `repo.memory_uncommitted` is `ja`: suggest, apart from
+it, `chore(memory): session {date}`.
+Stage surgically, never `git add -A`, and wait for confirmation: never commit on your own.
 
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/ingest_codex_memory.py" .agent-memory
-```
+## followup: verdicts that need ids
 
-Report its one line verbatim (`codex-ingest: {n} new, {n} dup, ...`). Rules:
-- Runs AFTER 3d so this session's own candidates were already decided; new
-  codex candidates are decided at the NEXT wrap-up (never in the same gate —
-  keeps the report short and the origin visible).
-- Never write into `~/.codex/memories`. A missing/odd file yields `skipped` or
-  `0 new` — not an error, do not retry.
-- Snapshot-sync (5.1.3): Codex's current summary is canon. Tips Codex no longer
-  lists become `bridge_status: "retired"` (out of the bridge, `superseded_by`
-  links a reworded successor); rewordings of owner-rejected tips stay rejected
-  (`dup-rejected`). Codex entries carry `origin: "agent"`.
-- If the line reports `rephrased`, `retired` or `revived` > 0, re-run BOTH
-  projections from 3d.6 — they ran before this step, and a retired entry must
-  not stay in MEMORY.md / AGENTS.md until the next wrap-up.
-- Entries carry `source_agent: codex`; `bridge_projection.py` excludes them
-  from AGENTS.md (no echo back to Codex), `memory_index_projection.py`
-  includes them for Claude.
-
-### 3.5: Layer Lifecycle
-
-- short-term older than 30 days: `last_relevant` within 30 days → promote to
-  `"long-term"`; otherwise → `layer: "archive-candidate"`.
-- Consume `working/current-session.json`: dedup-check each `learnings_draft`, promote
-  worthy ones (short-term), discard trivia, reset the file. Promoted drafts get
-  `derived_from` pointing at their source iteration if the draft names one, else `[]`.
-- New learning contradicts an old one → set `superseded_by` on the old entry.
-
-## Step 4: Pattern Extraction (pattern-extraction)
-
-If 3+ new iterations were logged this session, run the deterministic extractor.
-Do **NOT** invoke the `pattern-extractor` skill for this path — its detection
-heuristics, confidence formula and Jaccard dedup are exact thresholds, and they
-live in the script:
+`bridge_candidates` in the `apply` result: this session's learnings have ids only now. Decide them by the rules above
+in one call, then report `bridge_status_line` verbatim and one line per case `L26 approved — <plain>`.
 
 ```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/extract_patterns.py" .agent-memory --update
-```
-
-It applies everything already determined (evidence merge, recomputed confidence,
-legacy-shape normalization, `patterns.md`) and returns `proposals` — clusters it
-found but cannot name. Empty `proposals` (the common case) means you are done
-after one call. Otherwise supply wording for the ones worth keeping in ONE
-follow-up call:
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/extract_patterns.py" .agent-memory --apply <<'PLAN'
-{"patterns": [{"cluster_key": "<from the proposal>", "description": "...",
-               "recommendation": "..."}]}
+python "${CLAUDE_PLUGIN_ROOT}/scripts/wrapup_core.py" followup --mem .agent-memory --session-id <session-id> <<'PLAN'
+{"bridge_decisions": [{"id": "L26", "status": "approved", "note": "<reason>", "plain": "<plain German>"}]}
 PLAN
 ```
 
-`evidence`, `occurrences`, `confidence` and the dates come from the measurement
-and are ignored if the plan sets them — you supply language, never numbers.
-
-Invoke the `pattern-extractor` skill ONLY when (a) the report lists
-`skill_candidates` or `rueckfluss_candidates` you actually intend to act on —
-skill generation (its Step 6.5) and delta drafts (Step 6.6) are genuine judgment
-work and stay there — or (b) the **starvation guard (pattern-starvation-guard)**
-fires: the script only sees the error-based half of the signal (iteration-log is
-prose, T-019/D-012), so if roughly 5 consecutive sessions produced iterations but
-ZERO new patterns and ZERO proposals, run the full `pattern-extractor` skill once
-as a deliberate deep pass over the prose history — the cheap routine path must
-never permanently replace the semantic read, only ration it.
-Fewer than 3 new iterations: skip the whole step.
-
-## Step 4.5: Decision Scan (decision-scan)
-
-Scan the session for **decisions of record**: new/changed dependencies, architecture
-choices, storage/format changes, ownership/policy decisions ("X is SSoT", "no auto-sync").
-Trust boundary: conversation + repo evidence only. One-off implementation details are
-NOT decisions — when in doubt, skip. None found: skip silently.
-
-If found: put them into the write plan's `decisions` array (Step 7.4) — do **NOT**
-invoke the `context-keeper` skill for this and never edit `decisions.json` by hand.
-`apply_wrapup.py` owns the mechanics: id continuation in the on-disk format, the
-append-only rule, and the supersede flip (`supersedes: "D-00n"` sets the old record
-to `superseded`; pointing at an unknown id rejects the whole plan). Judgment stays
-here: is this a decision of record, what were the real alternatives, what follows
-from it. `project-context.md` (the docs cache) remains context-keeper's own job and
-is NOT part of wrap-up.
-
-## Step 5: Update session-summary.md
-
-(delta-update) Update session-summary.md as a DELTA against the existing
-file: rewrite only sections whose content actually changed this session
-(added / updated / resolved items) and keep unchanged sections untouched —
-do not regenerate the whole file from scratch.
-
-Overwrite `.agent-memory/session-summary.md` (**max 30 lines**, English headers).
-Template: `references/wrapup-schemas.md` §Local session-summary.md.
-
-## Step 5.5: Persist Next Steps to open-tasks.json (open-tasks-ssot)
-
-`context/open-tasks.json` is the single source of truth (SSoT) for this project's
-open tasks; Step 5's "Next Steps" is a RENDERING of it, never the reverse.
-
-1. Read it (treat missing as `[]`).
-2. Every Step-5 Next-Step/Open-Item without a same-title entry (case-insensitive) →
-   append `{"id": "T-{next}", "title", "status": "open"|"blocked", "created", "updated",
-   "source": "wrap-up", "cross_project": false}`.
-3. Items this session completed → `"status": "done", "updated": today`. Never delete —
-   finished tasks stay in the file; nothing is moved to an archive (D-021).
-4. `"cross_project": true` ONLY for items the user explicitly flagged — sole feed for
-   the central handoff's `[cross-project]` lines.
-
-## Step 6: Identity Growth (user.md + soul candidates)
-
-The identity pipeline starves when this step is skipped or runs silently — it is the
-ONLY producer of identity observations in the whole system. It is therefore mandatory,
-checklist-driven, and always reports (Step 6.6).
-
-**Central profile (central-profile)** (P2, Release A). One profile for all projects lives in
-`~/.agent-memory/identity/` (`profile.md`, `profile-candidates.json`, `profile-changelog.json`). It is
-ACTIVE exactly when `profile.md` exists - the migration (`scripts/migrate_identity.py`) writes that file
-last, and renaming it switches back. While it is active, the identity sections of the plan go there,
-not into this project's files; you write the plan exactly as before:
-- `user_candidates` enqueue into `profile-candidates.json`; new ids are `PCn` (global), each new row
-  carries `origin: {"projekt": "<project folder relative to home>", "id": null}`. A promotion cites
-  `(PCn, date)` in `profile.md`; the audit entries in `profile-changelog.json` carry `origin` too.
-- `user_md_supersede` replaces a line of `profile.md`. A target that stands only in the project's old
-  `user.md` is skipped with the warning "not in profile.md" (tally `supersede_skipped_legacy`) -
-  re-read the profile and target its line instead.
-- The store is resolved at call time: `--identity-store <dir>`, else `$AGENTIC_OS_IDENTITY_STORE`,
-  else `~/.agent-memory`. A store under the temp directory never writes into a central profile found
-  only via the home directory (exit 2 - pass `--identity-store` explicitly for probes and tests).
-- The tally names the target (`identity_target`: `project` | `central`, `central_path`), and the
-  briefing projection is rewritten after every identity write - `identity/profile-briefing.txt` in the
-  central store, `identity/briefing-lines.txt` in a project (the SessionStart `User:` line shows the most
-  confirmed lines, never the oldest ones). A plan without identity data (iterations only) is never
-  stopped by the temp-store guard.
-
-### 6.1 Harvest — checklist scan (identity-harvest) (user-growth)
-
-Scan the WHOLE session against this concrete checklist (do not do a vague "scan"):
-
-- [ ] Did the user **correct** the agent's behavior or output style? (what, how often?)
-- [ ] Did the user state an explicit **preference or rule** ("ich will", "immer", "nie",
-      "mach das künftig so")?
-- [ ] Did the user reveal a **workflow habit** (delegation style, review rituals,
-      commit/push conventions, tool choices)?
-- [ ] Did the user **confirm** a non-obvious approach the agent proposed?
-- [ ] Did the user express a **communication demand** (brevity, language, tone,
-      begründungspflicht)?
-
-Distinguish stable signals from `signal:mood` (frustration, one-off reactions) — moods
-are observed but NEVER promoted.
-
-For every signal you intend as **confirmed**, copy the user's LITERAL words now (a
-sentence or fragment as he wrote it) — Step 6.2 (quote-duty) needs them; a paraphrase
-cannot be verified. Only what he typed himself counts: not an accepted prompt suggestion,
-not pasted text, not tool or IDE output. Take at least three words, begin and end at word
-boundaries, and take the whole clause including a negation ("keine langen Antworten", not
-"langen Antworten"). The words must be about the claim: a bare "Ja, gerne, mach" does not support
-"pushes without asking" (such a quote verifies, but it is reported, see quote-limits).
-
-**Trust boundary (hard) (trust-boundary):** candidates may ONLY originate from the
-user's direct conversation. NEVER from web/docs/NotebookLM/Wiki content —
-`trust_source` must be `conversation`; anything else is discarded (memory-poisoning defense).
-
-### 6.2 Enqueue into `working/user-candidates.json`
-
-New observation → new candidate; same `key` exists → increment `occurrences` (only for a
-session that has not named it yet, see key-reuse), update
-`last_seen`, raise `status` if warranted. Candidate schema:
-`references/wrapup-schemas.md` §User candidate.
-
-**Reuse the key (key-reuse).** The Step 0 state lists the candidates that already exist in
-`user_candidates` (`key`, a short `observation`, `status`, `occurrences`; open ones first,
-at most 40 — `user_candidates_total` says how many exist). When today's observation is
-the SAME statement as a listed one, send THAT `key` verbatim: a fresh key for the same
-thing splits the evidence, and the repeat path (`occurrences` + 1, the second mention
-confirms) never fires. Invent a new kebab-case key only for a genuinely new observation.
-Send each observation ONCE per plan: the same key twice in one plan is merged into one mention.
-A repeat counts only when it comes from ANOTHER session — each candidate records the sessions
-that named it (`sessions`), so re-running the wrap-up in the same session, or an empty session id,
-adds nothing (`tally.repeat_not_counted`). A candidate created without a provable session (empty or
-blank session id, or a `CLAUDE_CODE_SESSION_ID` mismatch) carries `sessions: []`; the first real session
-takes it in WITHOUT counting it as a repeat (`tally.session_adopted` and a warning) - the earlier run may
-have been this very session. Only the next, different session counts. (A legacy row without a
-`sessions` field still counts the first new session once.)
-
-Classification: observed / inferred / confirmed — **observed** = seen once (queue-only),
-**inferred** = agent-derived (uncertain), **confirmed** = explicitly confirmed by the
-user (with a verified quote, below) OR the same signal named in 2 different sessions.
-
-**Quote duty (quote-duty).** `"confirmed": true` is a claim the script checks, not a flag it
-believes. Add `"quote"`: the user's LITERAL words, copied, not paraphrased, one message only.
-`apply_wrapup.py` looks the quote up as a substring of ONE genuine user message of this
-session's transcript (not in tool output, system reminders, command output, pasted text, IDE
-selections, accepted prompt suggestions or another session's records; case, whitespace and
-typographic quotes do not matter) and stores `quote_verified` on the candidate: `true` |
-`false` | `"kein_transkript"`. The quote needs at least 8 characters and 3 words, must begin and
-end at word boundaries and must not stand within 3 words of a negation word (nicht, nie, kein…, keinerlei,
-keineswegs, nein, nö, ohne, weder, not, never, no, …n't — also typed without the apostrophe or with an
-acute or grave accent for it) in that message. Only `true` confirms at first sight. No quote, `false`,
-or no transcript to check against (tests, Codex, headless): the candidate stays
-`observed`/`inferred` and the second mention (from another session) confirms it as before —
-that is not an error. A plan `status` of `confirmed` is the same claim and is checked the same way.
-Never invent a quote: the check reads the transcript, you cannot talk past it. The result
-carries `tally.quotes_verified` / `quotes_unverified` / `quotes_no_transcript`,
-`tally.quote_reasons` (why a quote failed, per key) and `tally.confirm_downgraded_keys` (claims
-that were not honoured) — mention those keys in the report so Dominic sees which confirmations
-did not count.
-
-Limits (quote-limits): the check proves the WORDING, not the MEANING. A substring cannot tell
-sarcasm, a question or a quoted counter-position from a statement, so a verified quote is
-necessary evidence, not proof; the thresholds (8 characters, 3 words, one message, the negation
-list) are heuristics that Dominic calibrates. `--session-id` must be the real id of THIS session
-(`$CLAUDE_CODE_SESSION_ID`): if that variable is set and differs, no quote verifies and nothing
-is counted (`tally.session_binding_mismatch`, plus a warning), the rest of the plan runs.
-`--transcript` is accepted only as `<HOME>/.claude/projects/<dir>/<session-id>.jsonl`; any other
-file is refused (`tally.transcript_override_rejected`) — do not point it at a file you wrote. The
-default lookup follows no link (junction, symlink) out of `projects/` either.
-A negation further than 3 words from the quote is not seen. A verified quote that shares no
-content word with the claim it is meant to support (the candidate's observation, a supersede's `new_text`)
-still verifies, but is reported: `tally.quote_unrelated` and a warning name it — read those before you
-rely on the confirmation, and tell Dominic. The comparison uses the STORED observation (for a known key the
-queue row's text that is promoted, not what this plan carries). A verified quote and a claim of which only
-one carries a negation word ("keine langen Antworten" for "Mag lange Antworten", or the reverse) are
-counted as well: `tally.quote_polarity`, a counter and NO warning line. That one is a WEAK hint: a paraphrase that
-drops or adds "ohne", "keine" or "no" ("Pusht ohne Rueckfrage" for a plain yes) sets it off often, mostly without
-any contradiction, so it stays out of the warnings (it would dull `quote_unrelated`) and serves as calibration data.
-Look at the pair yourself when it matters; do not report each hit to Dominic.
-
-### 6.3 Promote to user.md — FULL queue re-review (queue-re-review)
-
-Review **every** candidate in `user-candidates.json`, not only ones touched this
-session (an enqueue-only queue is how promotions starved for weeks). Promote when
-**confirmed** OR (**inferred** AND `occurrences >= 2` AND `confidence >= 0.6`):
-
-1. FIRST append an audit entry to `identity/user-changelog.json`
-   (`{ts, field, old_value, new_value, candidate_id, evidence}`, plus `quote` /
-   `quote_verified` when the candidate carries one) — changelog before edit.
-2. Then edit the matching user.md section (Preferences / Work Style / Known Corrections).
-3. Set candidate `status: "promoted"`.
-
-The line is INSERTED at the end of its `## ` section; nothing else in `user.md` changes (BOM, line
-endings, preamble and section order stay). A statement a `user_md_supersede` retracted needs the verified
-words of the user to come back: a candidate that TOUCHES it is NOT promoted unless `confirmed_by` is `quote`
-(a verified quote). A repetition or the inferred route is not enough; the status stays,
-`tally.promotion_blocked_superseded` counts it and a warning says so — report it, Dominic decides. The measure
-does not judge meaning, it only sets the proof level, and it is generous (a false alarm costs one quote): at
-least 50% of the content words of the retracted line (4+ letters, no function words, umlauts written out, same
-stem; the line is read with only its closing citation cut and once more with every closing bracket (unnested)
-cut, one touching reading is enough) stand in the candidate — among ALL its words, function words included
-("noch einmal" stands for "nochmal"); a line of fewer than 3 content words is touched when
-all its words stand in it (function words may be missing), a line without one ("Mag TDD") when all its tokens do. A
-refinement is no exception. Known limits: a synonym or paraphrase that keeps under 50% of the words ("kurz" →
-"knapp" in another sentence), a candidate that names only part of the line ("Will keine Emojis" against "Will
-keine Emojis in Commits") and deliberately disguised wording (look-alike letters) are not touched; and a
-verified quote is proof of WORDING only — even the quote of the retraction itself lifts a candidate that shares
-its words. A candidate that contradicts an existing line is no new candidate: `user_md_supersede` (6.3b) with
-the verified quote is the way; a promoted key is closed, a new statement needs a new key. A block is noted on the
-candidate (`blocked_by_supersede`: the id of the replaced line) and warned about once. The way back is always the
-user's own words, never your word: the same key in the
-plan with `confirmed: true` and a verified `quote` lifts the row (`confirmed_by: "quote"`), or Dominic's decision
-becomes a `user_md_supersede` of the replacing line to the candidate's wording with his verified quote (the next
-review then closes the candidate as a duplicate).
-
-`signal:mood` is NEVER promoted. One-off corrections stay `observed`.
-
-### 6.3b Supersede a profile line (user-supersede)
-
-A promoted `user.md` line that the user has since contradicted or refined is REPLACED,
-never left standing next to its opposite. Plan section `user_md_supersede` — its own call
-after Step 7.4, like `corrections` (3g):
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --session-id <session-id> <<'PLAN'
-{"user_md_supersede": [{"line_id": "UC12", "new_text": "- <the line as it should read now>",
-  "reason": "<why>", "plain": "<plain German for Dominic, what changes>",
-  "quote": "<the user's literal words that justify the change>"}]}
-PLAN
-```
-
-- Target: `line_id` (the candidate id the line cites, `(UC12, date)`) OR `match` (the exact
-  line text) — exactly one of them, and it must hit exactly ONE line. Use `match` when the
-  line cites no id. A rerun is recognised as already applied (`match`: the new line stands
-  once; `line_id`: the changelog also holds that supersede).
-- `new_text` is one bullet line (`- ...`, no line separator of any kind). `reason`, `plain` and
-  `quote` are required: `plain` is the explanation Dominic reads (simple German, no jargon, what
-  changes concretely, at most 600 characters), `new_text` stays the technical wording that is
-  written into the file. An empty `reason`, `plain` or `quote`, a placeholder line
-  (`- (Will be populated ...)`), a heading or the preamble (everything before the first `## `) as
-  target, an unknown or ambiguous target, two entries with the same target or the same `new_text`,
-  or a `trust_source` other than `conversation` rejects the WHOLE plan: exit 2, nothing written.
-- The `quote` is the user's literal words and is checked like a candidate's (6.2): only a
-  VERIFIED quote applies the entry. An entry whose quote is not verified is skipped — nothing is
-  written for it, `tally.supersede_skipped_unverified` and a warning say so, the rest of the
-  plan runs. Report each skipped entry to Dominic; a profile line is never replaced on your word alone.
-  A verified quote that shares no content word with `new_text`, or that differs from it in negation, still
-  applies the entry, but `quote_unrelated` is reported as a warning (`quote_polarity` only counts) — check that
-  the words really justify the change. A candidate that contradicts an existing line is not a new candidate:
-  this entry with the verified quote is the way (it is also how a blocked statement, 6.3, is released).
-- The script writes the old wording to `user-changelog.json` FIRST (`field: user.md/supersede`,
-  `old_value`, `new_value`, `reason`, `plain`, `quote`), then replaces exactly that line; CRLF, BOM,
-  preamble and section order stay byte for byte. `"by": "owner"` records that Dominic decided
-  (a recorded claim, see the honor-system note in 3f).
-- Report one line per superseded line: `old → new — <plain>`.
-
-### 6.4 Soul candidates — retired (soul-growth)
-
-**Retired in 5.11.0 (owner go 2026-11-03).** No `soul.md` changed after 2026-07-23; what would have gone there
-(plain language, own mistakes reported openly, sparring) went into the global rules `~/.claude/CLAUDE.md` instead.
-The agent's character lives there now. Do NOT plan `soul_candidates` any more, and never write `soul.md` here: the
-file stays read-only history, the briefing still shows its non-template lines. A rule about how the agent should
-behave is a rule change (Step 3f / global rule F4), not an identity candidate. The plan section is still accepted
-for old callers and keeps writing only to `identity/soul-candidates.md`, never auto-writes soul.md.
-
-### 6.4b Slim the queue and the profile (identity-slim, 5.11.0)
-
-- `identity_expire` (`{"older_than_days": 30, "reason": "..."}`, min 14): one-off observations (observed/inferred,
-  `occurrences` <= 1) not seen for that long are marked `status: "expired"` - never deleted. The same key named
-  again brings the candidate back (`revived_at`). Run by `/agentic-os:maintain`, not on every wrap-up.
-- `user_md_retire` (`[{"line_id"|"match", "reason", "plain", "quote", "by"}]`): removes one profile line that is
-  covered elsewhere (e.g. word for word in `~/.claude/CLAUDE.md`). Same rules as `user_md_supersede`: changelog
-  first (`field: user.md/retire`, old text kept), only with a verified quote, the removed statement does not come
-  back through a repeated candidate. Report one line per removed line: `old — <plain>`.
-
-### 6.5 Identity status line — MANDATORY (identity-visible)
-
-Identity growth never skips silently (same rule as wiki-sync-visible — the silent skip
-is how the pipeline starved unnoticed for months). Emit exactly ONE line in EVERY
-wrap-up, even when nothing was found:
-
-`Identity: {n} beobachtet, {m} → user.md promotet, {k} soul-candidates; Queue: {q} offen{, ältester promotable: {id}}`
-
-With the central profile active (central-profile, Step 6) the script reports the other target:
-
-`Identity: {n} beobachtet, {m} → profile.md promotet, {k} soul-candidates; Queue: {q} offen{, ältester promotable: {id}}`
-
-Emit its `identity_status_line` verbatim either way.
-
-## Step 7: Optional NotebookLM Sync
-
-If `.agent-memory/knowledge/notebook-registry.md` lists a notebook AND 3+ meaningful
-learnings were extracted: offer sync via the `notebooklm` user-skill. Otherwise skip.
-
-## Step 7.4: Apply the Write Plan (batch-apply)
-
-Emit the plan collected across Steps 3–7 and apply it in ONE call — BEFORE the wiki
-sync (7.5), the central handoff (7.6) and the commit offer (8): all three read the
-freshly written learnings, decisions and session-summary from disk (L44) — except the
-summary in the AI workspace (central-summary, 7.5). Leave
-`consolidate` OUT of this plan — the marker is Step 9.5's own call, so the wiki note
-and handoff files never land after the marker as tail writes.
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory \
-  --session-id <session-id> <<'PLAN'
-{ ...write plan... }
-PLAN
-```
-
-`<session-id>` is the real id of THIS session (`$CLAUDE_CODE_SESSION_ID`). Another id makes the
-identity evidence of the run unverifiable: no quote verifies, no repeat is counted
-(`tally.session_binding_mismatch`).
-
-Read the returned JSON:
-
-- `tally` — measured counts from the writes that actually happened. Use these
-  numbers for Step 6.5, never a hand count.
-- `identity_status_line` — emit verbatim as the mandatory Step 6.5 line.
-- `files_written` — spot-check one or two if anything looks off.
-- `tally.bridge_candidates` — not empty → Step 3d runs now (its own call, after this one).
-- `tally.rule_class_open` — not empty → Step 3f (second-model explanation, then the owner).
-- `warnings` — surface them; they are contract violations (e.g. summary over
-  30 lines), not noise. One is expected: in the AI workspace the store's summary
-  IS the central handoff, so `session-summary.md not written: … central handoff`
-  just means the block arrives in 7.6a (DCO #9433).
-
-Exit code 2 means the plan was rejected and **nothing was consolidated**: the
-marker is absent and the dirty flags stay set on purpose. Fix the plan and
-re-run rather than writing the files by hand.
-
-Use `--dry-run` first when unsure — it reports the full tally without touching
-a file.
-
-## Step 7.5: Obsidian Wiki Sync (Conditional)
-
-Delegates to the `obsidian-sync` skill — do NOT duplicate its logic.
-
-### Trigger Conditions (wiki-sync-gate)
-**Hard gate:** `.agent-memory/config.json` exists AND `sync_enabled: true`.
-Holds → invoke `obsidian-sync` unconditionally: the substantiality rule is OWNED by
-obsidian-sync Step 2 (single source — do not restate or re-check it here); it decides
-substantial vs. skip itself and reports the outcome visibly.
-
-**Always report (wiki-sync-visible)** — wiki sync never skips silently; emit exactly
-ONE status line in every case:
-- `Wiki-Sync: Note geschrieben → wiki/queries/{file} ({n} pages touched)`
-- `Wiki-Sync: übersprungen — sync_enabled false oder keine config.json`
-- `Wiki-Sync: übersprungen — Session nicht substanziell`
-- Failure: `Wiki-Sync fehlgeschlagen: {reason}. Session data is safe in .agent-memory/.`
-  (warn and continue — never block wrap-up).
-
-**AI workspace (central-summary):** there `session-summary.md` is the central handoff
-and still starts with the PREVIOUS session's block until 7.6a prepends this one — so
-obsidian-sync takes the session summary from this run's write plan
-(`session_summary`), not from the file.
-
-## Step 7.6: Central Cross-Project Handoff (SESSION-WORKFLOW)
-
-Write BOTH cross-project files following **`references/handoff-template.md`** (SSoT for
-the prepend algorithm, dedup rules, hard cap, and both templates — read it before
-writing):
-
-**Read-then-write guard (mandatory for 7.6a/7.6b):** both files are shared
-with parallel sessions and other agents — guard every read-modify-write cycle with
-`scripts/handoff_write_guard.py` (plugin root):
-
-1. Right after READING a surface:
-   `python scripts/handoff_write_guard.py snapshot "<file>" --state .agent-memory/working/handoff-guard-<session-id>.json`
-   (session-id from Step 0 preprocess; both files may go in ONE snapshot call)
-2. Immediately BEFORE writing it: same command with `check`.
-   - Exit 0 → write.
-   - Exit 20 (DRIFT — someone wrote in between) → re-read the file, MERGE your block
-     into the new content (never overwrite the foreign change), re-snapshot, then write.
-   - Exit 21 (no snapshot) → you skipped the read; read + snapshot first.
-3. Guard failures are never silent: report one line per drift
-   (`Handoff-Guard: Drift auf {file} — re-read+merge ausgeführt`).
-
-- **7.6a Central handoff** `~/AI/.agent-memory/session-summary.md`:
-  PREPEND new block, demote old TOP. **Ownership-dedup (handoff-dedup):** delete older
-  blocks of the SAME project — the file keeps at most one block per project; hard cap
-  5 blocks total. **Pointer rule (next-steps-pointer):** Naechste Schritte carries ONE
-  pointer to the local open-tasks.json (open count + top item) plus ONLY
-  `[cross-project]`-flagged items — never a copy of project next steps. Directory
-  missing → skip silently.
-- **7.6b Status board** `~/AI/cross-project-status.md`: replace ONLY this
-  project's section (~5 lines), never touch other sections.
-- **7.6c Sharepoint delta** (only if this session touched
-  `G:\Meine Ablage\dynamic-AI\dynamic_sharepoint`): frontmatter-check new MD files
-  (Manifest §4), hygiene-sweep (§7), INDEX.md update, ONE delta-handoff under
-  `01_HANDOFFS/`, one `Sharepoint touched`-line in 7.6a's Wichtige Pfade. Not
-  touched/not mounted → skip silently, no empty handoff.
-
-## Step 8: Suggest Git Commits (Optional)
-
-If there are uncommitted changes:
-
-1. `git status --short` — stage surgically, never `git add -A` (foreign drift stays out).
-2. Suggest TWO separate commits where applicable:
-   - **Code commit** — conventional message (feat/fix/refactor/test/chore).
-   - **Memory commit** — `.agent-memory/` changes (`chore(memory): session {date}`).
-     Code commits leave `.agent-memory/` out by convention; without this offer,
-     memory growth silently accumulates as uncommitted drift for weeks.
-3. Show the user what would be committed; **wait for confirmation** — never commit
-   without explicit approval.
-
-## Step 9: Memory Maintenance (Delegated)
-
-Run `bash scripts/memory-thresholds.sh` (plugin root; threshold SSoT shared with
-`/agentic-os:maintain`). Exit 10 → print its `THRESHOLD:` lines in the wrap-up report
-and add one line `→ run /agentic-os:maintain` (a command with a script core; never
-invoked from here — a skill-body injection risks a full prefix-cache rewrite, L34/D-010).
-Exit 0 → no line.
-
-Then run the decay report (memory hub spec §4, report only):
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/review_sweep.py" .agent-memory \
-  --native-memory "$(python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" --print-native-dir .)" \
-  --report .agent-memory/working/review-sweep.md
-```
-
-Emit its one line verbatim. Any count > 0 → name the report path; decisions
-(keep / supersede / retire) are the owner's and happen via /agentic-os:maintain,
-never here.
-
-## Step 9.5: Consolidation Marker + Dirty Reset (consolidation-marker)
-
-This step makes consolidation VERIFIABLE: bootstrap and session-start.sh detect
-crashed sessions by "dirty file exists but no matching marker". It is mandatory
-and runs LAST — only after Steps 1–9 actually completed.
-
-**Execution:** one more batch call with a marker-only plan, after Steps 1–9:
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory \
-  --session-id <session-id> <<'PLAN'
-{"consolidate": true}
-PLAN
-```
-
-It skips the marker on any failure. From its output only `dirty_files_consolidated`
-matters — the identity line was already emitted from Step 7.4. The main plan (7.4)
-must NOT carry `consolidate`: the wiki note and handoff files (7.5/7.6) would land
-after the marker as tail writes and trip the next bootstrap's recovery check.
-Points 1–5 below define the contract that call implements; write them by hand only
-if the script is unavailable.
-
-1. Read all `.agent-memory/working/dirty-*.json` with `dirty: true` (their
-   `touched_files` were already used as evidence in Steps 1/1.5).
-2. Overwrite `.agent-memory/consolidation-marker.json` (single file, no history —
-   git history preserves older markers):
-
-Marker schema: `references/wrapup-schemas.md` §Consolidation marker.
-
-3. For EVERY dirty file consumed: set `dirty: false`, `consolidated_at: {ISO timestamp}`,
-   `consolidated_by: "wrap-up"`; only this session's own file also gets the harvest closure
-   (`harvest.closed_by: "wrap-up"`, D-024 - `apply_wrapup.py` does both). Do NOT delete the
-   files here — the daily run deletes CLOSED markers via `scripts/gc_dirty_markers.py`
-   (harvest state with a matching snapshot, evidence line first; mtime <30min is protected);
-   other sessions' files stay pending until a harvest rule closes them.
-4. **Self-healing rule (parallel sessions):** if a consumed dirty file belonged to a
-   session that is still running in parallel, its next Write/Edit simply re-sets
-   `dirty: true` via the hook — consolidating it here is harmless. Never try to guess
-   which sessions are "still alive". Re-dirtying preserves the consolidation fact
-   (`last_consolidated_at/by` + `writes_since_consolidation`), so post-marker tail
-   writes of THIS wrap-up (native memory, handoff files) never masquerade as a
-   crashed session in the next bootstrap.
-5. On any failure in Steps 1–8: do NOT write the marker and do NOT reset dirty flags —
-   an honest dirty state is exactly what recovery needs.
-
-(cost-trace) Finally, log the run trace and refresh the state hash (both
-fail-soft, never blocking). Measured beats estimated (T-016): the script finds
-this session's own transcript from the session id and appends an
-`"estimate": false` record — covering the session up to this point, which is
-the whole run except these final lines:
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/measure_session_cost.py" --locate <session-id> \
-  --append-trace .agent-memory --task wrap-up
-python "${CLAUDE_PLUGIN_ROOT}/scripts/preprocess_state.py" .agent-memory --write-hash > /dev/null
-```
-
-ONLY if the first line reports `"ok": false` (no transcript — headless run or
-foreign harness), fall back to the old estimate so the trace never has a hole:
-
-```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/cost-trace.sh" append --mem .agent-memory \
-  --task wrap-up --class cheap-write \
-  --context-bytes <approx bytes of files read this run> --escalated <0|1>
-```
-
----
+`followup` takes only `bridge_decisions`, `rule_explanations`, `rule_releases`, `corrections`, `user_md_supersede`
+and `user_md_retire`, and runs both projections afterwards. A rule-class learning needs a second model and the
+owner: read `references/judge-rules.md` 3f first, and never release on the owner's behalf. Every `"by": "owner"`
+is an honor system, a recorded claim the script cannot verify: write it only for what Dominic said in this
+conversation, in his own words.
 
 ## Escalation Rules (escalation-rules)
 
-This skill runs on the cheap-write model class (SSoT:
-`scripts/model-routing.sh`). The following cases must NOT be resolved by this
-skill run itself. When one occurs:
+This skill runs on the cheap-write model class (SSoT: `scripts/model-routing.sh`). The following cases must NOT be
+resolved by this run itself. When one occurs:
 
-1. Append `{"ts": "...", "task": "wrap-up", "reason": "...", "detail": "..."}`
-   to `.agent-memory/working/escalations-<session-id>.json` (create as JSON
-   array if missing).
+1. Append `{"ts": "...", "task": "wrap-up", "reason": "...", "detail": "..."}` to
+   `.agent-memory/working/escalations-<session-id>.json` (create as JSON array if missing).
 2. Emit a visible `ESKALATION: <reason>` line in the output.
 3. Leave the decision itself to the next turn on the session model.
 
 Escalate when:
 - two active sources contradict each other,
-- a change would touch identity or stable user preferences (identity writes
-  additionally stay behind the existing [j/n] gates),
+- a change would touch identity or stable user preferences beyond the plan sections above,
 - an active decision record would be replaced,
 - a pattern would be promoted into a skill or Agentic-OS rule,
 - a change is difficult to reverse,
@@ -941,26 +189,24 @@ Escalate when:
 
 # Handoff Mode (Pre-Compression)
 
-When triggered by long context or explicit handoff request, append a `## Handoff
-Context` block to session-summary.md (fields: Active task / Current state / Active
-patterns / Open questions). Template: `references/wrapup-schemas.md` §Handoff Mode.
+When triggered by long context or an explicit handoff request, add `"handoff": {"active_task": "", "current_state": "",
+"active_patterns": "", "open_questions": ""}` to `summary`: the core renders the `## Handoff Context` block of
+session-summary.md. Template: `references/wrapup-schemas.md` §Handoff Mode.
 
 ## Error Handling
 
-- `iteration-log.md` missing: create it, note "No previous iterations"
-- JSON parse error: `apply_wrapup.py` stops with exit 2 BEFORE the first write and leaves the file untouched (5.2.1) — report file and error, recommend `/agentic-os:maintain` Step 2. Never rename, recreate or hand-edit the file.
+- JSON parse error in a store: `apply` stops with exit 2 BEFORE the first write and leaves the file untouched. Report
+  file and error, recommend `/agentic-os:maintain` Step 2. Never rename, recreate or hand-edit the file.
 - `.agent-memory/` missing: suggest `/agentic-os:init`
+- `failed(...)` in handoff, wiki or projections: report it. The store is consolidated, the marker is right.
 
 ## What NOT to Do
 
-- Do NOT write `errors.json`, `iteration-log.md` or `decisions.json` with Write/Edit —
-  they go through the write plan (Step 7.4); `patterns.json`/`patterns.md` belong to
-  `scripts/extract_patterns.py` and are refused by the batch writer
-- Do NOT write soul.md — ever (candidates only; the write is bootstrap's [j/n] gate)
-- Do NOT skip Step 6 or its status line — identity growth must be visible
-- Do NOT write session-summary.md longer than 30 lines
+- Do NOT write `errors.json`, `iteration-log.md`, `decisions.json` or any other store file with Write/Edit
+- Do NOT write soul.md — ever. Soul growth is retired (5.11.0); a rule about how the agent should behave is a
+  rule-class learning, not an identity candidate
+- Do NOT skip identity or its status line — identity growth must be visible
 - Do NOT commit without user confirmation
 - Do NOT log trivial "learnings"; do NOT prune skill_candidate patterns
-- Do NOT delete `working/dirty-*.json` (Step 9.5 flips flags; the daily run GCs closed
-  markers via gc_dirty_markers.py) and do NOT write the consolidation marker when the
-  wrap-up was incomplete
+- Do NOT delete `working/dirty-*.json` and do NOT write the consolidation marker yourself
+- Do NOT call `obsidian-sync`, `pattern-extractor` or `context-keeper` from a wrap-up run

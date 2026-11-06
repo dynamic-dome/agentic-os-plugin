@@ -12,6 +12,10 @@ body, never here.
 
 ## Write plan (batch writer)
 
+**Judge plan (T-028b):** `wrapup_core.py apply` takes this object with `summary` and `identity` in place of
+`session_summary` and `user_candidates` (`SKILL.md` shows the shape) and hands the rest to `apply_wrapup.py`.
+The sections below describe what the applier accepts. `consolidate` is ignored there: the core sets the marker.
+
 `scripts/apply_wrapup.py` applies every mutation below in ONE pass. Emit this
 object once, pipe it into the script, read the returned tally (exception:
 `bridge_decisions` travels in its own call after it, see below) — do not write

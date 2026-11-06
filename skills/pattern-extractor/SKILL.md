@@ -3,8 +3,8 @@ name: pattern-extractor
 description: >
   Extracts recurring patterns, anti-patterns, and best practices from
   iteration and error history into the pattern catalog; generates skills
-  from confirmed candidates. Use every ~5 iterations, at session end
-  (invoked by wrap-up), or on "extract patterns" /
+  from confirmed candidates. Use every ~5 iterations, when wrap-up recommends
+  it, or on "extract patterns" /
   "refresh patterns".
 metadata:
   author: agentic-os

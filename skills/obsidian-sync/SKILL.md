@@ -3,8 +3,8 @@ name: obsidian-sync
 description: >
   Syncs session results from .agent-memory/ (RAM) into the Obsidian wiki
   (Brain): session note, project-entity updates, decision promotion, rolling
-  synthesis. Main agent only. Use at session end (invoked by wrap-up) or on
-  "sync to wiki" / "obsidian sync".
+  synthesis. Main agent only. Use after a wrap-up for entity pages and decision
+  promotion, or on "sync to wiki" / "obsidian sync".
 model: sonnet
 effort: medium
 metadata:
@@ -20,7 +20,8 @@ Sync session results from .agent-memory/ (RAM) into ~/wiki/ (Brain).
 
 ## When to Use
 
-- At session end via wrap-up Step 7.5 (auto-triggered, conditional)
+- After a wrap-up, when entity pages, synthesis or decision promotion are wanted. The session note itself is a
+  projection of the wrap-up plan (`scripts/wrapup_core.py`); wrap-up no longer invokes this skill (T-028b).
 - Manually when user says "sync to wiki", "obsidian sync", etc.
 - After a productive session with >= 2 iterations or meaningful learnings
 
@@ -60,8 +61,7 @@ Validate wiki connection:
 Read from .agent-memory/:
 1. `session-summary.md` — current session summary. Exception: in the AI workspace
    (`~/AI`) this file is the central handoff, and its top block belongs to whichever
-   project wrote last — take the summary from the caller's write plan
-   (`session_summary`, wrap-up Step 7.4) or, when run standalone, from the conversation.
+   project wrote last — take the summary from the conversation.
 2. `iterations/iteration-log.md` — today's iterations (filter by today's date)
 3. `learnings/learnings.json` OR `learnings/learnings.md` — new learnings from this session (check .json first, fall back to .md; parse .md as bullet list if no .json exists)
 4. `patterns/patterns.json` OR `patterns/patterns.md` — patterns with updated confidence (check .json first, fall back to .md)
@@ -70,8 +70,8 @@ Read from .agent-memory/:
 **Substantiality gate (wiki-sync-gate):** the session must be substantial — ANY of:
 >= 1 iteration logged today, OR today's commits exist (`git log --oneline --since=midnight`),
 OR a meaningful learning (importance >= 4), OR a new decision landed. A single real
-iteration or any commit already warrants a note. This gate is OWNED here — wrap-up
-Step 7.5 delegates the substantiality decision to this step and never restates the rule.
+iteration or any commit already warrants a note. This gate is OWNED here; `wrapup_core.py` applies the same
+rule to the note it projects (`_substantial`).
 If none hold → output "Wiki-Sync: übersprungen — Session nicht substanziell." and stop.
 
 ## Step 3: Create Session Note

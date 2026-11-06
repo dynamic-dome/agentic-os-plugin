@@ -39,7 +39,7 @@ session-bootstrap (read-only)  →  WORK PHASE  →  wrap-up (Handoff + Learning
 ### Threshold-SSoT
 - **Datei(en):** `scripts/memory-thresholds.sh`
 - **Aufgabe:** EINZIGE Definition aller Skalierungs-Schwellen; exit 10 bei Ueberschreitung. Seit 5.2.1 melden die Schwellen nur — nichts wird nach Anzahl oder Alter archiviert (D-021).
-- **Abhaengigkeiten:** Konsumiert von session-bootstrap (Step 3), wrap-up (Step 9), /agentic-os:maintain (Step 1). Skill-Bodies nennen keine Zahlen.
+- **Abhaengigkeiten:** Konsumiert von session-bootstrap (Step 3), `wrapup_core.py`, /agentic-os:maintain (Step 1). Skill-Bodies nennen keine Zahlen.
 
 ### Salience-Ranking
 - **Datei(en):** `scripts/learnings_top.py`
@@ -51,7 +51,7 @@ session-bootstrap (read-only)  →  WORK PHASE  →  wrap-up (Handoff + Learning
 1. SessionStart-Hook sourct `mem-schema.sh`, erzeugt/heilt `.agent-memory/`, injiziert Kontext.
 2. `session-bootstrap` liest Store + zentralen Handoff (read-only), produziert Briefing.
 3. Work Phase: User/CLAUDE.md-getrieben rufen Skills, die je ihre Store-Datei schreiben.
-4. `wrap-up` schreibt session-summary, Learnings, zentralen Handoff (prepend) + Status-Board.
+4. `wrap-up` urteilt in einem Plan; `scripts/wrapup_core.py` schreibt session-summary, Learnings, zentralen Handoff (prepend), Status-Board und Session-Note.
 
 ## Persistenz
 

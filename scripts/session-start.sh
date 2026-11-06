@@ -420,7 +420,7 @@ if [ -d "$MEMORY_DIR/working" ]; then
   done < <(find "$MEMORY_DIR/working" -name 'dirty-*.json' -mmin +30 -exec grep -l '"dirty": true' {} + 2>/dev/null; ended_young)
 fi
 if [ "$DIRTY_COUNT" -gt 0 ]; then
-  RECOVERY_LINE="RECOVERY: ${DIRTY_COUNT} unkonsolidierte Session(s) erkannt — wrap-up ausfuehren (Step 1.5 harvestet aus touched_files + git)"
+  RECOVERY_LINE="RECOVERY: ${DIRTY_COUNT} unkonsolidierte Session(s) erkannt — wrap-up ausfuehren (harvestet aus touched_files + git)"
   BRIEFING="${BRIEFING:+$BRIEFING | }$RECOVERY_LINE"
 fi
 

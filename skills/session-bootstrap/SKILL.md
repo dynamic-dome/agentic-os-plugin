@@ -36,7 +36,7 @@ Restore full project context at the start of every coding session.
 
 1. Read `~/AI/.agent-memory/session-summary.md` (the **central handoff**).
    It is a STACKED file: the most recent session is at the TOP, older sessions are
-   preserved below under `# Vorherige Session (...erhalten)` headings (wrap-up Step 7.6a
+   preserved below under `# Vorherige Session (...erhalten)` headings (`wrapup_core.py`
    prepends, it does NOT blank-overwrite). The TOP block is the last session, possibly
    from a different project — read it; older blocks are history, scan only if needed.
 2. Read `~/AI/SESSION-WORKFLOW.md` **only if** the central handoff references it or if this is the first session in a new project
@@ -213,13 +213,13 @@ For each JSON file loaded: if parse fails → warn the user with file and parse 
 ### Scaling Guards (delegated to threshold SSoT)
 Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-thresholds.sh" .agent-memory`. Exit 10 →
 include its `THRESHOLD:` lines under HEALTH in the briefing. Exit 0 → no scaling warnings.
-(Thresholds live ONLY in that script — shared with wrap-up Step 9 and /agentic-os:maintain.)
+(Thresholds live ONLY in that script — shared with wrapup_core.py and /agentic-os:maintain.)
 
 ### Recovery Detection (recovery-detect) — read-only
 
 Detect sessions that ended WITHOUT consolidation (crash, closed window, skipped
 wrap-up). Sources: `working/dirty-*.json` (PostToolUse dirty-tracker hook) and
-`consolidation-marker.json` (wrap-up Step 9.5).
+`consolidation-marker.json` (written last by `wrapup_core.py apply`).
 
 1. List `working/dirty-*.json` with `dirty: true`.
 2. Ignore files whose `updated` is younger than **30 minutes** — that is most likely a
@@ -254,11 +254,11 @@ RECOVERY
   Unkonsolidierte {Codex-|}Session {sid-8} vom {updated}: {write_count} Writes,
   (Praefix "Codex-" wenn das Dirty-Flag `agent: "codex"` traegt)
   z.B. {file1}, {file2}
-  → Empfehlung: wrap-up ausführen (Step 1.5 harvestet aus touched_files + git)
+  → Empfehlung: wrap-up ausführen (harvestet aus touched_files + git)
 ```
 
 This step is strictly read-only: bootstrap NEVER resets dirty flags, never deletes
-dirty files, never writes the marker — that is wrap-up Step 9.5's job. If the user
+dirty files, never writes the marker — that is `wrapup_core.py`'s job. If the user
 declines recovery, the dirty files simply stay and are re-reported next session.
 
 ## Step 3.5: Sharepoint-Pull (Cross-Device)
@@ -363,7 +363,7 @@ This step surfaces the user candidate queue (`working/user-candidates.json`, or 
 
 ### (a) Soul candidate gate — retired (5.11.0)
 
-Retired with wrap-up Step 6.4 (owner go 2026-11-03): the agent's character lives in the global rules
+Retired in 5.11.0 (owner go 2026-11-03): the agent's character lives in the global rules
 `~/.claude/CLAUDE.md`, `soul.md` is read-only history. Do NOT ask a soul `[j/n]` question,
 never write `soul.md` and never write `identity/soul-candidates.md`. Old candidates stay where they are; if the owner wants one of them,
 it becomes a rule change in the owner's global rule source, not a soul.md write. Session-bootstrap is
@@ -378,7 +378,7 @@ queue when `identity.target` is `central`) that meet wrap-up's promotion gate (s
 stage-0 state read `working/user-candidates.json` yourself - never the central queue. If the count is
 above 0 - wrap-up apparently missed them - add ONE briefing line:
 `USER CANDIDATES: {n} promotable (z.B. {id}: {key}) — jetzt übernehmen? [j/n]`
-On explicit `j`: perform wrap-up Step 6.3's promotion (changelog first, then user.md - or
+On explicit `j`: perform the promotion of references/judge-rules.md 6.3 (changelog first, then user.md - or
 `profile.md` - then mark `promoted`) through `apply_wrapup.py`. Same audit trail, same trust rules.
 
 ### (c) Identity starvation warning (read-only)
@@ -387,7 +387,7 @@ Compare `identity.last_seen` from the stage-0 state (the newest `last_seen` of t
 stage-0 state `max(last_seen)` across user-candidates.json) with the local session-summary
 date. If the last identity observation is 2+ sessions old (or the file is empty while
 sessions exist), add to HEALTH:
-`Identity-Scan zuletzt {date} — Pipeline verhungert, wrap-up Step 6 prüfen`
+`Identity-Scan zuletzt {date} — Pipeline verhungert, Identity-Abschnitt von wrap-up prüfen`
 
 ## Escalation Rules (escalation-rules)
 

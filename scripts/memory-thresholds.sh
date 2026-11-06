@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # memory-thresholds.sh — single source of truth for .agent-memory scaling thresholds.
-# Used by: wrap-up Step 9 (THRESHOLD lines + recommendation) and /agentic-os:maintain (report).
+# Used by: wrapup_core.py (THRESHOLD lines + recommendation) and /agentic-os:maintain (report).
 # Exit 0 = all within limits. Exit 10 = at least one threshold exceeded (lines on stdout).
 # 5.2.1 (D-021, owner decision 2026-10-07): a
 # threshold only REPORTS. Nothing is archived, pruned, compacted or moved because of a

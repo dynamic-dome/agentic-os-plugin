@@ -146,20 +146,13 @@ if [ -f "$WU_HO_FILE" ]; then
         fail "wrap-up: missing (open-tasks-ssot) block — wrap-up must write Next Steps/Open Items into context/open-tasks.json (SSoT), summary is only a rendering"
     fi
 
-    # (handoff-dedup): 7.6a prepend droppt aeltere Bloecke desselben Projekts
-    HD_BLOCK=$(grep -A4 "(handoff-dedup)" "$WU_HO_FILE")
-    if echo "$HD_BLOCK" | grep -qi "one block per project" && echo "$HD_BLOCK" | grep -qi "same project"; then
-        pass "wrap-up: (handoff-dedup) — central handoff keeps max one block per project"
+    # (handoff-dedup), (next-steps-pointer): mechanics are code since T-028b (wrapup_parts/handoff.py,
+    # _judged_block); tests/test-wrapup-judge.py and test-wrapup-core.py prove them. The body must not
+    # send the model back to writing the handoff by hand.
+    if ! grep -qE "handoff_write_guard|Read-then-write guard" "$WU_HO_FILE"; then
+        pass "wrap-up: the handoff is written by the core, the body has no hand-written path"
     else
-        fail "wrap-up: missing (handoff-dedup) rule in Step 7.6a — prepend must drop older blocks of the SAME project (kills next-step stacking)"
-    fi
-
-    # (next-steps-pointer): zentraler Block verweist statt zu kopieren
-    NSP_BLOCK=$(grep -A5 "(next-steps-pointer)" "$WU_HO_FILE")
-    if echo "$NSP_BLOCK" | grep -q "open-tasks.json" && echo "$NSP_BLOCK" | grep -q "cross-project"; then
-        pass "wrap-up: (next-steps-pointer) — central Naechste Schritte is pointer + [cross-project] items only"
-    else
-        fail "wrap-up: missing (next-steps-pointer) rule in Step 7.6a — central handoff must point to local open-tasks.json and list only [cross-project] items inline"
+        fail "wrap-up: body still describes writing the central handoff by hand — that is wrapup_core.py's job since T-028b"
     fi
 fi
 
@@ -191,14 +184,11 @@ if [ -f "$WU_WS_FILE" ]; then
         fail "wrap-up: missing (wiki-sync-visible) — Step 7.5 must emit a visible status line in every case (synced / skipped+reason / failed), not skip silently"
     fi
 
-    # (wiki-sync-gate): single-sourced in obsidian-sync Step 2 since 4.15.0 —
-    # wrap-up Step 7.5 keeps only the hard gate (config + sync_enabled) and delegates
-    # the substantiality decision. It must NOT restate the rule (duplicate gates drift).
-    WSG_BLOCK=$(grep -A8 "Trigger Conditions (wiki-sync-gate)" "$WU_WS_FILE")
-    if echo "$WSG_BLOCK" | grep -qi "obsidian-sync" && ! echo "$WSG_BLOCK" | grep -q "since=midnight"; then
-        pass "wrap-up: (wiki-sync-gate) — delegates substantiality to obsidian-sync (single source, no restated rule)"
+    # The session note is a projection of the plan since T-028b; obsidian-sync stays manual.
+    if ! grep -qE "invoke .obsidian-sync|Delegates to the .obsidian-sync" "$WU_WS_FILE" && grep -qF "wiki_sync_line" "$WU_WS_FILE"; then
+        pass "wrap-up: the wiki note comes from the core, obsidian-sync is not invoked (T-028b)"
     else
-        fail "wrap-up: Step 7.5 must delegate the substantiality decision to obsidian-sync and not restate the since=midnight rule — the gate is single-sourced in obsidian-sync Step 2"
+        fail "wrap-up: body must report wiki_sync_line and must not invoke obsidian-sync (spec 2026-09-08 scope decision)"
     fi
 fi
 
@@ -279,13 +269,13 @@ if [ -f "$SB_FILE" ]; then
 fi
 
 echo ""
-echo "-- wrap-up: optional NotebookLM sync --"
+echo "-- wrap-up: no NotebookLM offer in the routine path (spec 2026-09-08, D-018) --"
 WU2_FILE="$SKILLS_DIR/wrap-up/SKILL.md"
 if [ -f "$WU2_FILE" ]; then
-    if grep -qi "notebooklm\|notebook.*sync\|sync.*notebook" "$WU2_FILE"; then
-        pass "wrap-up: has optional NotebookLM sync step to close learnings feedback loop"
+    if ! grep -qiE "notebook-registry|NotebookLM Sync|offer sync" "$WU2_FILE"; then
+        pass "wrap-up: no NotebookLM offer; the notebooklm user skill stays manual"
     else
-        fail "wrap-up: missing optional NotebookLM sync — session learnings never reach NotebookLM knowledge base (P1: close bidirectional flows)"
+        fail "wrap-up: body still offers a NotebookLM sync — owner scope decision 2026-09-08 took it out of the flow"
     fi
 fi
 
@@ -305,7 +295,7 @@ fi
 # --- Memory Growth Engine (Master-Plan 2026-06-03, Sprint user.md + soul.md) ---
 # Pins the growth mechanics into the owning skill bodies. Marker-based + concept phrase,
 # bidirectionally verified (strip -> FAIL, restore -> PASS).
-WU_GROW_FILE="$SKILLS_DIR/wrap-up/SKILL.md"
+WU_GROW_FILE="$SKILLS_DIR/wrap-up/references/judge-rules.md"  # rules moved here in T-028b
 SB_GROW_FILE="$SKILLS_DIR/session-bootstrap/SKILL.md"
 MM_GROW_FILE="$PLUGIN_ROOT/commands/maintain.md"
 
@@ -475,15 +465,12 @@ if [ -f "$WU_GROW_FILE" ]; then
         fail "wrap-up: promotion rules missing — Step 6.3 must say a promoted line is INSERTED without rewriting user.md and that a statement retracted by a supersede is NOT promoted (promotion_blocked_superseded)"
     fi
     # the session id is the real one (D2) and the key list needs --session-id (D10)
-    S74_BLOCK=$(grep -A22 -E "^## Step 7\.4" "$WU_GROW_FILE")
-    S0_BLOCK=$(grep -A22 -E "^## Step 0: " "$WU_GROW_FILE")
-    if echo "$S74_BLOCK" | grep -qE "CLAUDE_CODE_SESSION_ID" \
-       && echo "$S74_BLOCK" | grep -qE "session_binding_mismatch" \
-       && echo "$S0_BLOCK" | grep -qE "listed only because" \
-       && echo "$S0_BLOCK" | grep -qE "\-\-session-id"; then
-        pass "wrap-up: session id rules present — Step 7.4 names the real session id, Step 0 lists the candidate keys only with --session-id"
+    if grep -qE "CLAUDE_CODE_SESSION_ID" "$SKILLS_DIR/wrap-up/SKILL.md" \
+       && grep -qE "session_binding_mismatch" "$SKILLS_DIR/wrap-up/SKILL.md" \
+       && awk '/^def cmd_pre/{f=1} /^def cmd_apply_plan/{f=0} f' "$PLUGIN_ROOT/scripts/wrapup_core.py" | grep -qE '"preprocess_state.py", \[mem, "--session-id", session_id'; then
+        pass "wrap-up: session id rules present — the body names the real session id, pre hands it to stage 0 (candidate keys)"
     else
-        fail "wrap-up: session id rules missing — Step 7.4 must say the session id is \$CLAUDE_CODE_SESSION_ID (session_binding_mismatch) and Step 0 that user_candidates are listed only because --session-id is passed"
+        fail "wrap-up: session id rules missing — the body must say the session id is \$CLAUDE_CODE_SESSION_ID (session_binding_mismatch), wrapup_core.py must pass --session-id on"
     fi
     # maintain Step 5c: the card carries the plain text (D11)
     M5C_BLOCK=$(sed -n '/^## Step 5c:/,/^## Step 6:/p' "$MM_GROW_FILE" 2>/dev/null)
@@ -801,12 +788,6 @@ if [ -f "$WU_MR_FILE" ]; then
     else
         fail "wrap-up: missing (context-diet) — must forbid systematic transcript/full-memory re-reads (state object + held context first, targeted lookups only)"
     fi
-    DU_BLOCK=$(grep -A4 "(delta-update)" "$WU_MR_FILE")
-    if echo "$DU_BLOCK" | grep -qi "delta" && echo "$DU_BLOCK" | grep -qi "unchanged sections"; then
-        pass "wrap-up: (delta-update) — session-summary updated as delta, unchanged sections untouched"
-    else
-        fail "wrap-up: missing (delta-update) — Step 5 must update session-summary.md as a delta (only changed sections), not rewrite the whole file"
-    fi
     ER_BLOCK=$(grep -A20 "(escalation-rules)" "$WU_MR_FILE")
     if echo "$ER_BLOCK" | grep -q "escalations-" \
        && echo "$ER_BLOCK" | grep -q "ESKALATION:" \
@@ -817,14 +798,14 @@ if [ -f "$WU_MR_FILE" ]; then
     else
         fail "wrap-up: missing/incomplete (escalation-rules) — must log to working/escalations-<sid>.json, emit ESKALATION: line, and name the conditions (contradiction, identity, decision replacement, pattern promotion, hard-to-reverse, missing sources)"
     fi
-    CT_BLOCK=$(grep -A24 "(cost-trace)" "$WU_MR_FILE")
-    if echo "$CT_BLOCK" | grep -q "measure_session_cost.py" \
-       && echo "$CT_BLOCK" | grep -q -- "--locate" \
-       && echo "$CT_BLOCK" | grep -q "cost-trace.sh" \
-       && echo "$CT_BLOCK" | grep -q "cheap-write"; then
-        pass "wrap-up: (cost-trace) — measured via measure_session_cost.py --locate, estimate fallback via cost-trace.sh"
+    CORE_PY="$PLUGIN_ROOT/scripts/wrapup_core.py"
+    if grep -q "measure_session_cost.py" "$CORE_PY" \
+       && grep -q -- "--locate" "$CORE_PY" \
+       && grep -q "cost-trace.sh" "$CORE_PY" \
+       && grep -q "cheap-write" "$CORE_PY"; then
+        pass "wrap-up: (cost-trace) — wrapup_core.py measures via measure_session_cost.py --locate, estimate fallback via cost-trace.sh"
     else
-        fail "wrap-up: missing/incomplete (cost-trace) — end of run must measure via measure_session_cost.py --locate <session-id> --append-trace and keep the cost-trace.sh cheap-write estimate as fallback (T-016)"
+        fail "wrap-up: missing/incomplete (cost-trace) — wrapup_core.py must measure via measure_session_cost.py --locate and keep the cost-trace.sh cheap-write estimate as fallback (T-016)"
     fi
 fi
 
@@ -856,38 +837,28 @@ if [ -f "$SB_MR_FILE" ]; then
     fi
 fi
 
-# --- wrap-up: batch-apply runs BEFORE wiki sync / handoff; marker is its own final call (T-024, L44) ---
-# obsidian-sync (7.5) and the central handoff (7.6) read learnings/decisions/session-summary
-# from DISK. When the main batch write came after them (old Step 8.5) they saw the state
-# BEFORE this session. The marker must NOT ride on that main call, or the wiki/handoff
-# writes land after it as tail writes and trip bootstrap's recovery detection.
+# --- wrap-up: the store write precedes handoff and note, the marker comes last (T-024, L44; one process since T-028b) ---
+# Handoff and note read what the run wrote; a marker before them would make them tail writes that trip
+# bootstrap's recovery detection. tests/test-wrapup-judge.py proves the behaviour, this pins the order in the source.
 echo ""
-echo "-- wrap-up: (batch-apply) precedes wiki sync + handoff; (consolidation-marker) has its own call --"
-WU_ORD_FILE="$SKILLS_DIR/wrap-up/SKILL.md"
-if [ -f "$WU_ORD_FILE" ]; then
-    BA_LINE=$(grep -n "(batch-apply)" "$WU_ORD_FILE" | head -1 | cut -d: -f1)
-    WS_LINE=$(grep -n "^## Step.*Obsidian Wiki Sync" "$WU_ORD_FILE" | head -1 | cut -d: -f1)
-    HO_LINE=$(grep -n "^## Step.*Central Cross-Project Handoff" "$WU_ORD_FILE" | head -1 | cut -d: -f1)
-    if [ -n "$BA_LINE" ] && [ -n "$WS_LINE" ] && [ -n "$HO_LINE" ] \
-       && [ "$BA_LINE" -lt "$WS_LINE" ] && [ "$BA_LINE" -lt "$HO_LINE" ]; then
-        pass "wrap-up: (batch-apply) step comes before Obsidian Wiki Sync and Central Handoff (they read the written state)"
-    else
-        fail "wrap-up: (batch-apply) must precede the Obsidian Wiki Sync and Central Handoff steps — otherwise obsidian-sync reads learnings/decisions/summary from BEFORE this session (L44)"
-    fi
-    BA_BLOCK=$(awk '/\(batch-apply\)/{f=1; print; next} f && /^## /{exit} f' "$WU_ORD_FILE")
-    CM_BLOCK=$(awk '/\(consolidation-marker\)/{f=1; print; next} f && /^## /{exit} f' "$WU_ORD_FILE")
-    if echo "$CM_BLOCK" | grep -q "apply_wrapup.py" && echo "$CM_BLOCK" | grep -q '"consolidate": true' \
-       && ! echo "$BA_BLOCK" | grep -q '"consolidate": true'; then
-        pass "wrap-up: (consolidation-marker) is a separate marker-only apply_wrapup call; main (batch-apply) plan carries no consolidate"
-    else
-        fail "wrap-up: (consolidation-marker) must run its own apply_wrapup.py call with {\"consolidate\": true} AFTER wiki/handoff, and the (batch-apply) plan must not set consolidate (tail-write false recoveries)"
-    fi
+echo "-- wrap-up: apply order in wrapup_core.py (store, handoff, note, marker) --"
+CORE_ORD="$PLUGIN_ROOT/scripts/wrapup_core.py"
+ORD_BLOCK=$(awk '/^def cmd_apply_plan/{f=1} /^def cmd_followup/{f=0} f' "$CORE_ORD")
+ST_LINE=$(echo "$ORD_BLOCK" | grep -n '_child("apply_wrapup.py", \[\*applier' | head -1 | cut -d: -f1)
+HO_LINE=$(echo "$ORD_BLOCK" | grep -n '_publish(mem' | head -1 | cut -d: -f1)
+WN_LINE=$(echo "$ORD_BLOCK" | grep -n 'write_session_note(' | head -1 | cut -d: -f1)
+MK_LINE=$(echo "$ORD_BLOCK" | grep -n 'aw.apply_consolidation(' | head -1 | cut -d: -f1)
+if [ -n "$ST_LINE" ] && [ -n "$HO_LINE" ] && [ -n "$WN_LINE" ] && [ -n "$MK_LINE" ] \
+   && [ "$ST_LINE" -lt "$HO_LINE" ] && [ "$HO_LINE" -lt "$WN_LINE" ] && [ "$WN_LINE" -lt "$MK_LINE" ]; then
+    pass "wrap-up: cmd_apply_plan writes the store first and the marker last"
+else
+    fail "wrap-up: cmd_apply_plan order broken — store write, handoff, note, marker (L44, tail writes)"
 fi
 
 echo ""
 echo "-- identity: central profile (P2, Release A) --"
 # Prose anchors for the central-profile contract the scripts enforce (tests/test-identity-central.py proves the code side).
-CP_BLOCK=$(grep -A24 -E "\(central-profile\)" "$SKILLS_DIR/wrap-up/SKILL.md")
+CP_BLOCK=$(grep -A24 -E "\(central-profile\)" "$SKILLS_DIR/wrap-up/references/judge-rules.md")
 if [ -n "$CP_BLOCK" ] \
    && echo "$CP_BLOCK" | grep -qF "profile.md" \
    && echo "$CP_BLOCK" | grep -qF -- "--identity-store" \
@@ -899,7 +870,7 @@ if [ -n "$CP_BLOCK" ] \
 else
     fail "wrap-up: (central-profile) missing — Step 6 must say the central profile is active exactly when profile.md exists, name --identity-store and AGENTIC_OS_IDENTITY_STORE, the PC ids with origin, and that a supersede of a line found only in the project's user.md is skipped ('not in profile.md')"
 fi
-if grep -qF 'profile.md' <(grep -E "^\`Identity: " "$SKILLS_DIR/wrap-up/SKILL.md"); then
+if grep -qF 'profile.md' <(grep -E "^\`Identity: " "$SKILLS_DIR/wrap-up/references/judge-rules.md"); then
     pass "wrap-up: the identity status line names profile.md for the central mode"
 else
     fail "wrap-up: the Step 6.5 identity status line must show the central variant (→ profile.md promotet)"

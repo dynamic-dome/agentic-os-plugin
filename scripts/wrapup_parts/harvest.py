@@ -47,7 +47,7 @@ def _rel(project_root: str, path: str) -> str | None:
 
 def _commits(project_root: str, since: str) -> list[dict]:
     git = shutil.which("git")
-    if not git or not os.path.isdir(os.path.join(project_root, ".git")):
+    if not git or not os.path.exists(os.path.join(project_root, ".git")):
         return []
     try:
         out = subprocess.run([git, "-C", project_root, "log", f"--since={since}", "--no-merges",

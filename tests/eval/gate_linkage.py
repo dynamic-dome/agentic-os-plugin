@@ -25,6 +25,11 @@ when it is intentionally removed. Derived from the bodies on 2026-07-18; bootstr
 extended after the Codex verifier review (CNF + 6 previously-missing gates);
 wrap-up coverage added T-35 (before wrap-up is structurally cut).
 
+T-028b cut it: the mechanics are code now, so wrap-up's surface is the body, its references and the core
+(WRAPUP_SURFACE). A gate may live in any of them, but it must still be found: the rule "no gate logic leaves
+the body" became "no gate logic leaves the surface". Removed on purpose in that commit: cross-session-rag
+(owner scope decision 2026-09-08, D-018) and layer-lifecycle (prose without any executable path).
+
 Design: memevalharness.md (membrain).
 """
 import os
@@ -39,7 +44,12 @@ def skill_body(name):
 
 
 BOOTSTRAP = skill_body("session-bootstrap")
-WRAPUP = skill_body("wrap-up")
+WRAPUP_SURFACE = [skill_body("wrap-up"),
+                  os.path.join(PLUGIN_ROOT, "skills", "wrap-up", "references", "judge-rules.md"),
+                  os.path.join(PLUGIN_ROOT, "skills", "wrap-up", "references", "handoff-template.md"),
+                  os.path.join(PLUGIN_ROOT, "scripts", "wrapup_core.py"),
+                  os.path.join(PLUGIN_ROOT, "scripts", "wrapup_parts", "harvest.py"),
+                  os.path.join(PLUGIN_ROOT, "scripts", "wrapup_parts", "handoff.py")]
 
 # gate = {"name", "clauses": [clause, ...]}; clause = [token, ...] (OR within).
 # ALL clauses of a gate must be satisfied (AND across clauses).
@@ -121,13 +131,13 @@ BOOTSTRAP_GATES = [
     ]},
 ]
 
-# wrap-up is the bigger structural lever but has more WRITE gates; every one must
-# survive a body cut. Tokens verified present in skills/wrap-up/SKILL.md (2026-07-18).
+# wrap-up has more WRITE gates than bootstrap; every one must survive. Tokens verified against
+# WRAPUP_SURFACE on 2026-11-05 (T-028b).
 WRAPUP_GATES = [
     {"name": "stage0-preprocess", "clauses": [
         ["preprocess_state.py"],                         # trigger: run preprocessor
         ["--session-id"],                                # trigger: session-scoped
-        ["PRIMARY data source"],                         # action: use its state object
+        ["(stage0-preprocess)"],                         # action: the brief is the data source
     ]},
     {"name": "context-diet", "clauses": [
         ["(context-diet)"],                              # marker
@@ -135,45 +145,36 @@ WRAPUP_GATES = [
     ]},
     {"name": "session-harvest", "clauses": [
         ["(session-harvest)"],                           # marker
-        ["git log --oneline --since=midnight"],          # trigger: substantial work
-        ["`iterations` array"],                          # action: into the write plan (T-015)
+        ["harvest(project_root, mem, _since(mem, dirty))"],  # trigger: plan without iterations
+        ["`iterations`"],                                # action: into the plan
     ]},
     {"name": "stale-session-harvest", "clauses": [
-        ["is NOT this session"],                         # trigger: crashed session
-        ["recovered from session"],                      # action: marked reconstruction
+        ["recovered_from"],                              # action: marked reconstruction
+        ["_dirty_sessions"],                             # trigger: every dirty session, not only this one
     ]},
     {"name": "learnings-dedup-jaccard", "clauses": [
-        ["Jaccard similarity"],                          # trigger: local dedup
-        ["0.6 → duplicate"],                             # trigger: threshold
-        ["last_relevant"],                               # action: bump, skip create
-    ]},
-    {"name": "cross-session-rag", "clauses": [
-        ["memory_search_tool"],                          # trigger: Atlas dedup
-        ['source_system="agent-memory"'],                # trigger: own-project scope
-        ["Fail-soft"],                                   # action: never block wrap-up
+        ["(dedup-in-code)"],                             # marker
+        ["Jaccard >= 0.6"],                              # trigger: threshold
+        ["duplicate_of"],                                # action: the judge's override
     ]},
     {"name": "bridge-gate", "clauses": [
-        ["bridge_status"],                               # trigger: candidate field
+        ["bridge_candidates"],                           # trigger: open candidates
         ["Approve only if ALL hold"],                    # judgment: delegated bridge test (5.7.0)
         ["bridge_decisions"],                            # action: verdict + reason via the applier
         ["bridge_status_line"],                          # contract: mandatory report
-        ["bridge_status_changed > 0"],                   # trigger: projections only on change
+        ['out["projections"] = _projections('],          # trigger: projections after the verdicts
         ["bridge_projection.py"],                        # action: projection run
     ]},
-    {"name": "layer-lifecycle", "clauses": [
-        ["older than 30 days"],                          # trigger: short-term age
-        ["archive-candidate"],                           # action: demote
-    ]},
     {"name": "pattern-extraction", "clauses": [
-        ["3+ new iterations"],                           # trigger: enough new data
-        ["extract_patterns.py"],                         # action: run the extractor script
+        ['"extract_patterns.py", [mem, "--update"]'],    # action: run the extractor script
+        ["pattern_proposals"],                           # action: unnamed clusters go to the report
     ]},
     {"name": "decision-scan", "clauses": [
         ["(decision-scan)"],                             # marker
-        ["`decisions` array"],                           # action: into the write plan (T-015)
+        ["Plan section `decisions`"],                    # action: into the plan (T-015)
     ]},
     {"name": "session-summary-cap", "clauses": [
-        ["max 30 lines"],                                # contract: bounded summary
+        ["up to 8 lines"],                               # contract: bounded summary
     ]},
     {"name": "open-tasks-ssot", "clauses": [
         ["(open-tasks-ssot)"],                           # marker
@@ -183,6 +184,7 @@ WRAPUP_GATES = [
     {"name": "identity-harvest", "clauses": [
         ["(identity-harvest)"],                          # marker
         ["(user-growth)"],                               # marker
+        ["none_because"],                                # action: an empty scan must say why
     ]},
     {"name": "trust-boundary", "clauses": [
         ["(trust-boundary)"],                            # marker
@@ -205,45 +207,44 @@ WRAPUP_GATES = [
     ]},
     {"name": "wiki-sync-gate", "clauses": [
         ["(wiki-sync-gate)"],                            # marker
-        ["sync_enabled: true"],                          # trigger: config on
-        ["obsidian-sync"],                               # action: delegate writes
+        ['enabled=bool(cfg.get("sync_enabled"))'],       # trigger: config on
+        ["obsidian-sync"],                               # action: everything beyond the note stays manual
     ]},
     {"name": "wiki-sync-visible", "clauses": [
         ["(wiki-sync-visible)"],                         # marker
         ["Wiki-Sync:"],                                  # action: always-report line
     ]},
     {"name": "central-summary", "clauses": [
-        ["(central-summary)"],                           # marker
         ["AI workspace"],                                # trigger: summary IS the handoff
-        ["from this run's write plan"],                  # action: not from the file
+        ["handoff, the block arrives through the core"], # action: not from the file
     ]},
     {"name": "handoff-guard", "clauses": [
-        ["handoff_write_guard.py"],                      # trigger: read-modify-write
-        ["Exit 20"],                                     # trigger: drift detected
-        ["snapshot"],                                    # action: guard cycle
+        ["handoff_write_guard"],                         # trigger: read-modify-write
+        ["_guarded_write"],                              # action: guard cycle in process
+        ["drift-merged"],                                # action: re-read and merge on drift
     ]},
     {"name": "handoff-dedup", "clauses": [
-        ["(handoff-dedup)"],                             # marker
+        ["Ownership-dedup"],                             # marker
         ["at most one block per project"],               # action: ownership dedup
         ["5 blocks total"],                              # action: hard cap
     ]},
     {"name": "next-steps-pointer", "clauses": [
-        ["(next-steps-pointer)"],                        # marker
-        ["pointer"],                                     # action: pointer, not copy
+        ["Naechste Schritte = pointer"],                 # contract
+        ["Projekt-Next-Steps:"],                         # action: pointer, not copy
     ]},
     {"name": "git-commit-confirm", "clauses": [
         ["git add -A"],                                  # trigger: never blanket-stage
         ["wait for confirmation"],                       # action: no commit without OK
     ]},
     {"name": "consolidation-marker", "clauses": [
-        ["(consolidation-marker)"],                      # marker
-        ["consolidation-marker.json"],                   # action: write marker
-        ["consolidated_by"],                             # action: flag dirty files
-        ["do NOT write the marker"],                     # action: honest dirty on fail
+        ["aw.apply_consolidation("],                     # action: write marker
+        ["marker LAST"],                                 # contract: nothing after it but the trace
+        ["do NOT write the consolidation marker"],       # action: never by hand
+        ["consolidation marker NOT written"],            # action: honest dirty on fail
     ]},
     {"name": "thresholds", "clauses": [
         ["memory-thresholds.sh"],                        # trigger: SSoT script
-        ["Exit 10"],                                     # trigger: scaling signal
+        ["threshold_lines"],                             # trigger: scaling signal in the report
         ["/agentic-os:maintain"],                        # action: recommend cleanup command
     ]},
     {"name": "escalation-rules", "clauses": [
@@ -259,7 +260,7 @@ WRAPUP_GATES = [
 # skill dir name -> (body path, gate inventory)
 SKILLS = {
     "session-bootstrap": (BOOTSTRAP, BOOTSTRAP_GATES),
-    "wrap-up": (WRAPUP, WRAPUP_GATES),
+    "wrap-up": (WRAPUP_SURFACE, WRAPUP_GATES),
 }
 
 # Back-compat alias for anything importing GATES from this module.
@@ -326,6 +327,8 @@ def selftest(body, label, gates):
 
 
 def read_body(path):
+    if isinstance(path, list):  # a surface of several files
+        return "\n".join(read_body(p) for p in path)
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 

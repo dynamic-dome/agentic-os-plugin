@@ -1230,22 +1230,15 @@ if [ -f "$WU_SKILL36" ]; then
               | wc -l)
         echo $((ALL - NEG))
     }
-    for FORBIDDEN_CALLEE in iteration-logger context-keeper; do
+    # Budget 0 since T-028b: the body is the judge, every mechanical step lives in wrapup_core.py.
+    for FORBIDDEN_CALLEE in iteration-logger context-keeper pattern-extractor obsidian-sync; do
         N=$(positive_invokes "$FORBIDDEN_CALLEE")
         if [ "$N" -eq 0 ]; then
-            pass "wrap-up: does not invoke $FORBIDDEN_CALLEE (its rules live in apply_wrapup.py)"
+            pass "wrap-up: does not invoke $FORBIDDEN_CALLEE (delegation budget 0, T-028b)"
         else
-            fail "wrap-up: still prescribes $N skill invocation(s) of $FORBIDDEN_CALLEE — each one risks a full prefix-cache rewrite (41%, L34); route the data through the write plan instead"
+            fail "wrap-up: still prescribes $N skill invocation(s) of $FORBIDDEN_CALLEE — each one risks a full prefix-cache rewrite (41%, L34); the core owns this step"
         fi
     done
-    # pattern-extractor keeps exactly ONE conditional invoke: Steps 6.5/6.6 (skill
-    # generation, delta drafts) are judgment work that no script can take over.
-    N=$(positive_invokes "pattern-extractor")
-    if [ "$N" -le 1 ]; then
-        pass "wrap-up: at most one conditional pattern-extractor invoke (Steps 6.5/6.6)"
-    else
-        fail "wrap-up: $N pattern-extractor invocations — the routine path must call scripts/extract_patterns.py, not the skill"
-    fi
 
     # Coverage must survive the rebuild: both blocks still have to route somewhere.
     HARVEST_BLOCK="$(grep -A 24 "(session-harvest)" "$WU_SKILL36")"
@@ -1260,11 +1253,10 @@ if [ -f "$WU_SKILL36" ]; then
     else
         fail "wrap-up: (decision-scan) block no longer routes decisions anywhere — session decisions are lost"
     fi
-    PEXT_BLOCK="$(grep -A 26 "(pattern-extraction)" "$WU_SKILL36")"
-    if echo "$PEXT_BLOCK" | grep -q "extract_patterns.py"; then
-        pass "wrap-up: (pattern-extraction) calls the deterministic extractor script"
+    if grep -qE '"extract_patterns.py", \[mem, "--update"\]' "$PLUGIN_ROOT/scripts/wrapup_core.py"; then
+        pass "wrap-up: the core runs the deterministic pattern extractor"
     else
-        fail "wrap-up: (pattern-extraction) block does not call scripts/extract_patterns.py"
+        fail "wrap-up: wrapup_core.py does not call extract_patterns.py --update — the pattern pipeline starves"
     fi
     # Write ownership still has to be stated - it moved to the script, it did not vanish.
     if echo "$HARVEST_BLOCK" | grep -q "apply_wrapup.py"; then
@@ -1291,7 +1283,7 @@ fi
 # learnings.json - the rule lives in apply_wrapup.py; the block must name the
 # marker, the script, near_duplicates and duplicate_of, and must not tell the
 # model to read the file (isolated block, L11).
-WU_3A="$(sed -n '/^### 3a: Dedup Check/,/^### 3a.2/p' "$PLUGIN_ROOT/skills/wrap-up/SKILL.md" 2>/dev/null)"
+WU_3A="$(grep -A4 "(dedup-in-code" "$PLUGIN_ROOT/skills/wrap-up/SKILL.md" 2>/dev/null)"
 if echo "$WU_3A" | grep -q "(dedup-in-code" && echo "$WU_3A" | grep -q "apply_wrapup.py"    && echo "$WU_3A" | grep -q "near_duplicates" && echo "$WU_3A" | grep -q "duplicate_of"    && ! echo "$WU_3A" | grep -qiE "^Read .?learnings/learnings\.json"; then
     pass "wrap-up Step 3a: dedup runs in apply_wrapup.py (near_duplicates/duplicate_of), no full read of learnings.json"
 else

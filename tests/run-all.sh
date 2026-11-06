@@ -270,6 +270,22 @@ fi
 
 echo ""
 
+# Run wrap-up judge path tests (T-028b: pre, plan path, followup)
+echo ">>> Running wrapup-judge tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-wrapup-judge.py"; then
+    echo ">>> Wrapup-judge tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Wrapup-judge tests: SKIPPED (no python found)"
+else
+    echo ">>> Wrapup-judge tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
 # Run extract_patterns tests (T-015: deterministic half of pattern-extractor)
 echo ">>> Running extract-patterns tests..."
 PY_BIN=""

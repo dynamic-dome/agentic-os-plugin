@@ -4,7 +4,7 @@
 > (see `references/memory-structure.md`). The decommissioned **global** layer (sync-context,
 > global-schema.sh, global_decay.py, migrate-global-schema-4A.sh) lives in `_archived/` since 5.11.0.
 > All scaling/archiving threshold NUMBERS live in `scripts/memory-thresholds.sh`
-> (threshold SSoT — read by session-bootstrap Step 3, wrap-up Step 9, /agentic-os:maintain Step 1).
+> (threshold SSoT — read by session-bootstrap Step 3, wrapup_core.py, /agentic-os:maintain Step 1).
 > When this graph disagrees with a skill's own SKILL.md, the SKILL.md wins.
 
 ## Session Lifecycle (Execution Order)
@@ -24,7 +24,7 @@ SESSION START (SessionStart hook → session-bootstrap)
   │  │     (deterministic salience ranking — never full-reads learnings.json)
   │  ├── health: bash scripts/memory-thresholds.sh (exit 10 → THRESHOLD lines in briefing)
   │  ├── wiki (optional, if config.json sync_enabled): entity + entrypoints (≤5 pages)
-  │  └── Step 6.5 IDENTITY GATES (consumer side of wrap-up Step 6):
+  │  └── Step 6.5 IDENTITY GATES (consumer side of wrap-up's identity plan section):
   │        (a) soul-candidates.md → "[j/n]" gate — soul.md write ONLY on explicit `j`
   │        (b) user-candidates.json fallback promotion gate — also only on explicit `j`
   │        (c) starvation warning (read-only) when the identity pipeline is stale
@@ -59,36 +59,25 @@ SESSION END (manual: /agentic-os:wrap-up — no hook can trigger it; a skipped
   │
   ▼
   wrap-up (MANUAL-ONLY — invoke as slash command; that path applies model: sonnet)
-  │  ├── reads: iteration-log.md, errors.json, learnings.json,
-  │  │     working/current-session.json, working/user-candidates.json,
-  │  │     context/open-tasks.json, skills/wrap-up/references/handoff-template.md
-  │  ├── writes: session-summary.md, learnings.json + learnings.md,
-  │  │     context/open-tasks.json (Step 5.5, SSoT for next steps),
-  │  │     working/current-session.json (reset)
-  │  ├── Step 1.5 → session-harvest: retro-logs the session's iterations into
-  │  │     the write plan (`iterations`) when none were logged today — since
-  │  │     T-015 NO iteration-logger invoke (apply_wrapup.py owns the writes)
-  │  ├── Step 4   → runs scripts/extract_patterns.py (if 3+ new iterations);
-  │  │     invokes pattern-extractor ONLY for skill/rueckfluss candidates
-  │  ├── Step 4.5 → decision-scan: decisions of record into the write plan
-  │  │     (`decisions`) — since T-015 NO context-keeper invoke
-  │  ├── Step 6   → IDENTITY GROWTH — the ONLY producer of identity observations:
-  │  │     checklist harvest → working/user-candidates.json (queue; existing keys come
-  │  │     from preprocess_state.py, `confirmed` needs a quote that identity_quote.py finds
-  │  │     in the session transcript, read-only) →
-  │  │     FULL queue re-review (queue-re-review) → identity/user.md promotion
-  │  │     (changelog-before-write) → identity/soul-candidates.md (direct +
-  │  │     escalation-path; NEVER writes soul.md) → MANDATORY status line
-  │  │     (identity-visible). Consumed by bootstrap Step 6.5 gates. A contradicted
-  │  │     profile line is replaced via `user_md_supersede` (6.3b, verified quote required,
-  │  │     changelog first).
-  │  ├── Step 7.5 → invokes obsidian-sync (gates: sync_enabled + substantiality;
-  │  │     always reports — wiki-sync-visible)
-  │  ├── Step 7.6 → writes cross-project: ~/AI/.agent-memory/session-summary.md
-  │  │     (prepend handoff), ~/AI/cross-project-status.md, Sharepoint (optional)
-  │  │     — templates + dedup rules in skills/wrap-up/references/handoff-template.md
-  │  └── Step 9   → runs scripts/memory-thresholds.sh + review_sweep.py; exit 10
-  │        → prints THRESHOLD lines and recommends /agentic-os:maintain (never invoked)
+  │  Judge since T-028b: three turns, no skill invoked. scripts/wrapup_core.py does the rest.
+  │  ├── pre (read-only) → brief: harvested iterations, today's errors, open tasks,
+  │  │     existing identity keys (preprocess_state.py), open bridge candidates, rule queue
+  │  ├── apply (ONE plan: summary + identity required) → apply_wrapup.py owns every store
+  │  │     write: session-harvest (`iterations`, harvest when the plan has none),
+  │  │     decision-scan (`decisions`), learnings (cap 3, rule-class exempt), open tasks,
+  │  │     IDENTITY GROWTH — the ONLY producer of identity observations: judged candidates →
+  │  │     working/user-candidates.json (`confirmed` needs a quote that identity_quote.py finds
+  │  │     in the session transcript, read-only) → FULL queue re-review (queue-re-review) →
+  │  │     identity/user.md promotion (changelog-before-write); NEVER writes soul.md
+  │  │     → then ingest_codex_memory.py, extract_patterns.py --update, session-summary.md,
+  │  │     cross-project ~/AI/.agent-memory/session-summary.md (prepend handoff) and
+  │  │     ~/AI/cross-project-status.md (template: references/handoff-template.md), session note
+  │  │     as a projection of the plan, both projections, memory-thresholds.sh, review_sweep.py,
+  │  │     consolidation marker LAST, cost trace, state hash
+  │  ├── report → verbatim lines from the result (identity-visible, wiki-sync-visible);
+  │  │     recommends /agentic-os:maintain and pattern-extractor, invokes neither
+  │  └── followup (only when needed) → bridge_decisions and other verdicts that need ids
+  │        from apply; both projections rerun. Full rules: references/judge-rules.md
 ```
 
 ## Dependency Matrix
@@ -147,11 +136,11 @@ Removed agents: `improvement-scout`, `fix-reviewer` (2026-04-30); `improvement-a
 1. **No circular dependencies** — DAG only.
 2. **No auto-triggers on code changes** — user/CLAUDE.md driven (the only hook-driven skill is session-bootstrap on start; wrap-up is a manual slash command).
 3. **session-bootstrap is read-only** — never writes during startup, with ONE exception: the user-confirmed identity gates (Step 6.5) write soul.md/user.md + user-changelog.json + the queues, but only on an explicit `j` from the user (never autonomously).
-4. **Skills that invoke other skills:** `wrap-up` (pattern-extractor only for skill/rueckfluss candidates, obsidian-sync — iteration-logger/context-keeper are NOT invoked since T-015, memory-maintenance not since v5.0.0; Step 9 only recommends /agentic-os:maintain). All other skills are leaf nodes.
+4. **Skills that invoke other skills:** none since T-028b. `wrap-up` is a judge over `scripts/wrapup_core.py`: it recommends pattern-extractor and /agentic-os:maintain and leaves obsidian-sync to the user. All skills are leaf nodes.
 5. **No cross-project auto-sync** — the global layer and its manual command sync-context are archived (5.11.0); nothing syncs between projects.
 6. **docs/ is the source of truth for project-context.md** — context-keeper (and context-detective, /init) read docs first; project-context.md is a cache (Regel 13 / L9).
 7. **Thresholds live in ONE script** — `scripts/memory-thresholds.sh` is the only place scaling numbers exist; skills and commands reference it, never restate the numbers.
-8. **Identity growth is producer/consumer split** — wrap-up Step 6 is the only PRODUCER of identity observations (queues + promotions + mandatory status line); session-bootstrap Step 6.5 is the CONSUMER (gates + starvation check). Nothing else touches identity files. **Central profile (P2):** while `~/.agent-memory/identity/profile.md` exists, the same producer writes `identity/profile*` in the central store instead of the project's identity files (`scripts/identity_store.py`), and the bootstrap reads the projection `identity/profile-briefing.txt` plus the stage-0 `identity.*` numbers; `scripts/migrate_identity.py` moves the project profiles there once (owner-gated).
+8. **Identity growth is producer/consumer split** — wrap-up's plan section `identity` is the only PRODUCER of identity observations (queues + promotions + mandatory status line); session-bootstrap Step 6.5 is the CONSUMER (gates + starvation check). Nothing else touches identity files. **Central profile (P2):** while `~/.agent-memory/identity/profile.md` exists, the same producer writes `identity/profile*` in the central store instead of the project's identity files (`scripts/identity_store.py`), and the bootstrap reads the projection `identity/profile-briefing.txt` plus the stage-0 `identity.*` numbers; `scripts/migrate_identity.py` moves the project profiles there once (owner-gated).
 
 ## Session-Bracket Coverage
 
@@ -163,13 +152,13 @@ stays deliberately on-demand:
 |---|---|
 | Context restore, health checks, salience learnings, wiki context, Sharepoint pull | bootstrap (learnings_top.py / Atlas-RAG, memory-thresholds.sh) |
 | Auto-init, model-visible start briefing (tasks SSoT, recovery, root-drift, handoff head; re-fires after /compact), dirty-state tracking | hooks (2 command hooks; prompt hooks removed 4.21.0) |
-| Iteration logging | wrap-up Step 1.5 session-harvest → write plan → `scripts/apply_wrapup.py` |
-| Pattern extraction | wrap-up Step 4 (3+ iterations, fed by harvest) → `scripts/extract_patterns.py` |
-| Skill-candidate generation, rueckfluss drafts | wrap-up Step 4 → pattern-extractor Steps 6.5/6.6 (only when the extractor reports candidates) |
-| Decisions of record | wrap-up Step 4.5 decision-scan → write plan → `scripts/apply_wrapup.py` |
-| Identity growth (user.md, soul candidates) + gates | wrap-up Step 6 (producer) + bootstrap Step 6.5 (consumer) |
-| Learnings, open-tasks SSoT | wrap-up Steps 3-5.5 |
-| Wiki sync, central handoff, status board, maintenance recommendation | wrap-up Steps 7-9 (handoff-template.md, memory-thresholds.sh) |
+| Iteration logging | wrap-up session-harvest → plan → `scripts/wrapup_core.py` → `scripts/apply_wrapup.py` |
+| Pattern extraction | `scripts/wrapup_core.py` → `scripts/extract_patterns.py --update` on every run |
+| Skill-candidate generation, rueckfluss drafts | wrap-up recommends the pattern-extractor skill when the extractor reports candidates; the user runs it |
+| Decisions of record | wrap-up decision-scan → plan → `scripts/apply_wrapup.py` |
+| Identity growth (user.md) + gates | wrap-up plan section `identity` (producer, rules in references/judge-rules.md) + bootstrap Step 6.5 (consumer) |
+| Learnings, open-tasks SSoT | wrap-up plan |
+| Session note, central handoff, status board, maintenance recommendation | `scripts/wrapup_core.py` (handoff-template.md, memory-thresholds.sh); entity pages and decision promotion stay with the manual obsidian-sync skill |
 
 | Deliberately on-demand (NOT in the bracket) | Why |
 |---|---|

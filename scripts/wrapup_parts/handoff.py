@@ -208,7 +208,7 @@ def write_central(central_dir, project, new_block, _before_write=None, dropped_o
 
     try:
         return _guarded_write(os.path.join(folder, "session-summary.md"), compute, _before_write)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         return f"failed({type(exc).__name__})"
 
 
@@ -244,7 +244,7 @@ def rescue_blocks(central_dir, blocks, _before_write=None):
         if not rescued:
             return {"rescued": [], "lost": list(lost), "status": "none"}
         status = _guarded_write(board, compute, _before_write)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         status = f"failed({type(exc).__name__})"
     if status not in ("written", "drift-merged"):
         return {"rescued": [], "lost": list(lost) + list(rescued), "status": status}
@@ -260,7 +260,7 @@ def rescue_dropped(central_dir, project, new_block, _before_write=None):
         if not os.path.isfile(hand):
             return {"rescued": [], "lost": [], "status": "none"}
         _, dropped = _prepend(_read(hand), new_block, project)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         return {"rescued": [], "lost": [], "status": f"failed({type(exc).__name__})"}
     return rescue_blocks(central_dir, dropped, _before_write)
 
@@ -272,5 +272,5 @@ def write_board(central_dir, project, section, _before_write=None):
     try:
         return _guarded_write(os.path.join(central_dir, "cross-project-status.md"),
                               lambda old: replace_board_section(old, project, section), _before_write)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         return f"failed({type(exc).__name__})"
