@@ -102,8 +102,9 @@ BOOTSTRAP_GATES = [
     ]},
     # --- gates added after the Codex verifier review (were missing) ---
     {"name": "missing-memory-stop", "clauses": [
-        ["should not happen"],                           # trigger: .agent-memory gone
+        ["creates it only in a git repo"],               # trigger: no store, and the hook inits only in git repos
         ["Memory system not found"],                     # action: stop message
+        ["and stop"],                                    # action: halt, no further steps without a store
     ]},
     {"name": "staleness-wrap-90d", "clauses": [
         ["90 days"],                                     # trigger: last_relevant age
@@ -254,6 +255,7 @@ WRAPUP_GATES = [
     {"name": "cost-trace", "clauses": [
         ["cost-trace.sh"],                               # trigger: SSoT script
         ["--write-hash"],                                # action: refresh state hash
+        ["reports.cost_trace"],                          # action: a trace status that is not ok reaches the report
     ]},
 ]
 

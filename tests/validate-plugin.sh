@@ -396,6 +396,7 @@ echo "-- auto-init creates no empty quality/ or knowledge/ stubs (functional) --
 SESSION_HOOK="$PLUGIN_ROOT/scripts/session-start.sh"
 if [ -f "$SESSION_HOOK" ]; then
     NR_TMP=$(mktemp -d)
+    git init -q "$NR_TMP"   # 5.13.0: auto-init needs a git repo (or the plugin option)
     CLAUDE_PROJECT_DIR="$NR_TMP" bash "$SESSION_HOOK" > "$NR_TMP/out.json" 2>/dev/null
     NR_EXIT=$?
     if [ "$NR_EXIT" -ne 0 ]; then
@@ -804,8 +805,9 @@ echo ""
 echo "-- session-start.sh JSON output validity --"
 SS_SCRIPT="$PLUGIN_ROOT/scripts/session-start.sh"
 if [ -f "$SS_SCRIPT" ]; then
-    # Run in a temp dir to test auto-init path
+    # Run in a temp git repo to test the auto-init path (5.13.0: a folder without git gets no store)
     TMPDIR_TEST=$(mktemp -d)
+    git init -q "$TMPDIR_TEST"
     SS_OUTPUT=$(CLAUDE_PROJECT_DIR="$TMPDIR_TEST" bash "$SS_SCRIPT" 2>/dev/null || true)
     if echo "$SS_OUTPUT" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null; then
         pass "session-start.sh: produces valid JSON output"
@@ -828,6 +830,7 @@ echo ""
 echo "-- session-start.sh auto-init directory structure --"
 if [ -f "$SS_SCRIPT" ]; then
     TMPDIR_TEST=$(mktemp -d)
+    git init -q "$TMPDIR_TEST"   # 5.13.0: auto-init needs a git repo (or the plugin option)
     CLAUDE_PROJECT_DIR="$TMPDIR_TEST" bash "$SS_SCRIPT" > /dev/null 2>&1 || true
     MISSING=""
     for subdir in identity context iterations patterns learnings generated-skills; do

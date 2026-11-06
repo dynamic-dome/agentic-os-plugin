@@ -79,7 +79,12 @@ if [ ! -d "$MEMORY_DIR" ] && is_windows_system_dir "$PROJECT_DIR"; then
 fi
 
 # Guard (V7, 2026-09-09): a subdirectory of a git repo is not a project root -
-# 25+ stub stores grew in scratch/proof/work dirs. Non-git dirs still init (AI workspace).
+# 25+ stub stores grew in scratch/proof/work dirs.
+# Guard (5.13.0, F22): a folder without git gets no store of its own either - the hook would start one
+# in any directory a session happens to open in. /agentic-os:init is the explicit way, and the plugin
+# option auto_init_non_git (env CLAUDE_PLUGIN_OPTION_AUTO_INIT_NON_GIT; true|1|yes, because the export
+# format of a boolean option is only proven by a real run) restores the old behaviour. Only a MISSING
+# store is judged here: an existing one is served as before.
 if [ ! -d "$MEMORY_DIR" ]; then
   GIT_TOP="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
   if [ -n "$GIT_TOP" ]; then
@@ -96,11 +101,20 @@ if [ ! -d "$MEMORY_DIR" ]; then
         exit 0
       fi
     fi
+  else
+    case "$(printf '%s' "${CLAUDE_PLUGIN_OPTION_AUTO_INIT_NON_GIT:-}" | tr 'A-Z' 'a-z')" in
+      true|1|yes) ;;
+      *)
+        echo "[Agentic OS] no git repo here - skipping auto-init (run /agentic-os:init to create a store)."
+        exit 0 ;;
+    esac
   fi
 fi
 
 if [ ! -d "$MEMORY_DIR" ] && [ "$SCHEMA_OK" = true ]; then
   create_memory_structure "$MEMORY_DIR"
+  # Fresh store only (never in the Phase 2 backfill): keep it out of `git status` via the local exclude.
+  exclude_store_from_git "$PROJECT_DIR"
 
   # project-context.md is hook-specific (inline stack auto-detect, no LLM/user).
   # Deliberately NOT in mem-schema.sh — /init writes it differently (LLM + confirm).
@@ -289,7 +303,7 @@ if [ -d "$MEMORY_DIR" ]; then
   # Env-Vars setzen
   if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
     echo "export AGENTIC_OS_ACTIVE=true" >> "$CLAUDE_ENV_FILE"
-    echo "export AGENTIC_OS_MEMORY_DIR=$MEMORY_DIR" >> "$CLAUDE_ENV_FILE"
+    printf 'export AGENTIC_OS_MEMORY_DIR=%q\n' "$MEMORY_DIR" >> "$CLAUDE_ENV_FILE"
   fi
 fi
 

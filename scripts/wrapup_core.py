@@ -512,11 +512,29 @@ def _review_sweep(mem, project_root, home):
     return text.strip().splitlines()[-1] if rc == 0 and text.strip() else f"failed(exit {rc})"
 
 
+def _trace_failure(measured):
+    warning = (measured or {}).get("trace_warning")  # measured, but the trace line was not written
+    return f"failed(trace: {_cut(warning, 120)})" if warning else None
+
+
 def _cost_trace(mem, session_id, cwd):
-    """Measured from the transcript; without one an estimate, so the trace never has a hole (T-016). Fail-soft."""
-    rc, measured, _ = _child("measure_session_cost.py", ["--locate", session_id, "--append-trace", mem, "--task", "wrap-up"], cwd)
+    """Two measured rows: the wrap-up window (`wrap-up`) and the whole session (`session`). Without a wrap-up
+    start in the transcript the first row already IS the session row and carries that label, so the second call
+    is skipped. Without a transcript an estimate, so the trace never has a hole (T-016). Fail-soft."""
+    rc, measured, _ = _child("measure_session_cost.py", ["--locate", session_id, "--append-trace", mem, "--task", "wrap-up",
+                                                          "--since-wrapup"], cwd)
+    if rc == 0 and measured is None:  # exit 0 without a parsable answer is no confirmation of a written row
+        return "failed(trace: no JSON)"
     if rc == 0 and (measured or {}).get("ok", True):
-        return "ok"
+        failed = _trace_failure(measured)
+        if failed or (measured or {}).get("window") == "session":
+            return failed or "ok"
+        rc, measured, _ = _child("measure_session_cost.py", ["--locate", session_id, "--append-trace", mem, "--task", "session"], cwd)
+        if rc == 0 and measured is None:
+            return "failed(trace: session row: no JSON)"
+        if rc == 0 and (measured or {}).get("ok", True):
+            return _trace_failure(measured) or "ok"
+        return f"failed(trace: session row: {_cut((measured or {}).get('error') or f'exit {rc}', 100)})"
     bash = shutil.which("bash")
     if not bash:
         return "skipped(no transcript, no bash)"
@@ -600,9 +618,10 @@ def cmd_pre(args):
     project_root = os.path.abspath(args.project_root or os.path.dirname(mem))
     session_id = _session_id(args)
     extra = ["--identity-store", args.identity_store] if args.identity_store else []
-    _, state, _ = _child("preprocess_state.py", [mem, "--session-id", session_id, *extra], project_root)
+    rc, state, _ = _child("preprocess_state.py", [mem, "--session-id", session_id, *extra], project_root)
+    errors = [] if state is not None else [f"stage0 failed(exit {rc})"]  # no state: the brief would look clean
     state = state or {}
-    errors = list(state.get("validation_errors") or [])
+    errors += list(state.get("validation_errors") or [])
     dirty, err = _dirty_sessions(mem)
     if err:
         errors.append(err)
@@ -690,8 +709,9 @@ def cmd_apply_plan(args):
     titles = [_cut(t.get("title", "")) for t in tasks]
     top = titles[0] if titles else "keine"
     errors = sum(len(it.get("errors") or []) for it in iterations)
-    done, open_items, active = _fit_summary(summary["what_was_done"], titles[:5],
-                                            [str(x) for x in summary.get("warnings") or []])
+    plan_warnings = [str(x) for x in summary.get("warnings") or []]
+    done, open_items, active = _fit_summary(summary["what_was_done"], titles[:5], plan_warnings)
+    reports["summary_warnings_dropped"] = plan_warnings[len(active):]  # beyond the at most three the summary keeps, named in the report
     session_summary = {"what_was_done": done, "open_items": open_items,
                        "next_steps": [f"Projekt-Next-Steps: .agent-memory/context/open-tasks.json "
                                       f"({len(tasks)} offen; Top: {top})"],

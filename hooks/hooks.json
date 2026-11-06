@@ -1,5 +1,5 @@
 {
-  "description": "Agentic OS Lifecycle Hooks v11: SessionStart (command: auto-init + briefing via hookSpecificOutput.additionalContext) and PostToolUse (command: mechanical dirty-state tracker). The former prompt hooks (UserPromptSubmit, PreCompact, SessionEnd) were removed in 4.21.0 — measured dead: SessionEnd hooks cannot invoke skills, PreCompact output is compacted away, a UserPromptSubmit prompt hook costs one model call per prompt and injects nothing on approve.",
+  "description": "Agentic OS Lifecycle Hooks v11: SessionStart (command: auto-init only in git repos, elsewhere via the auto_init_non_git option or /agentic-os:init, plus briefing via hookSpecificOutput.additionalContext) and PostToolUse (command: mechanical dirty-state tracker). The former prompt hooks (UserPromptSubmit, PreCompact, SessionEnd) were removed in 4.21.0 — measured dead: SessionEnd hooks cannot invoke skills, PreCompact output is compacted away, a UserPromptSubmit prompt hook costs one model call per prompt and injects nothing on approve.",
   "hooks": {
     "SessionStart": [
       {

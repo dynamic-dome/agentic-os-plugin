@@ -25,20 +25,37 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "scripts", "measure_session_cost.py")
 
 
-def rec(mid, cache_read=0, cache_write=0, inp=0, out=0, rtype="assistant"):
-    return {
-        "type": rtype,
-        "message": {
-            "id": mid,
-            "role": "assistant",
-            "usage": {
-                "input_tokens": inp,
-                "output_tokens": out,
-                "cache_read_input_tokens": cache_read,
-                "cache_creation_input_tokens": cache_write,
-            },
+def rec(mid, cache_read=0, cache_write=0, inp=0, out=0, rtype="assistant", model=None, content=None):
+    message = {
+        "id": mid,
+        "role": "assistant",
+        "usage": {
+            "input_tokens": inp,
+            "output_tokens": out,
+            "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": cache_write,
         },
     }
+    if model is not None:
+        message["model"] = model
+    if content is not None:
+        message["content"] = content
+    return {"type": rtype, "message": message}
+
+
+SLASH = ("<command-message>agentic-os:wrap-up</command-message>\n"
+         "<command-name>/agentic-os:wrap-up</command-name>")
+
+
+def slash_rec(as_blocks=False, text=SLASH):
+    """A slash command as the transcript stores it: a user message, content a string or a list of blocks."""
+    content = [{"type": "text", "text": text}] if as_blocks else text
+    return {"type": "user", "message": {"role": "user", "content": content}}
+
+
+def skill_rec(mid, skill="agentic-os:wrap-up", name="Skill", **kw):
+    block = {"type": "tool_use", "id": "toolu_" + mid, "name": name, "input": {"skill": skill}}
+    return rec(mid, content=[block], **kw)
 
 
 def write_jsonl(path, records):
@@ -165,8 +182,8 @@ class TestMeasureSessionCost(unittest.TestCase):
     def test_append_trace_writes_measured_record(self):
         """The point of the script: replace cost-trace.sh's estimate:true guesses."""
         mem = os.path.join(self.tmp, ".agent-memory")
-        write_jsonl(self.transcript, [rec("m1", cache_read=1000, cache_write=50000, out=10)])
-        p = run(self.transcript, "--append-trace", mem, "--task", "wrap-up")
+        write_jsonl(self.transcript, [slash_rec(), rec("m1", cache_read=1000, cache_write=50000, out=10)])
+        p = run(self.transcript, "--append-trace", mem, "--task", "wrap-up", "--since-wrapup")
         self.assertEqual(p.returncode, 0, p.stderr)
         trace = os.path.join(mem, "metrics", "cost-trace.jsonl")
         self.assertTrue(os.path.isfile(trace))
@@ -275,6 +292,142 @@ class TestMeasureSessionCost(unittest.TestCase):
         self.assertIn("output", d["cost_usd"])
         self.assertGreater(d["cost_usd"]["total"], 0)
         self.assertIn("transport_share", d)
+
+
+class TestWrapupWindow(unittest.TestCase):
+    """F18: a wrap-up row measures the wrap-up, a session row the whole session, and both say what they priced."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="measure-window-")
+        self.transcript = os.path.join(self.tmp, "session.jsonl")
+        self.mem = os.path.join(self.tmp, ".agent-memory")
+
+    def measure(self, *args):
+        p = run(self.transcript, *args)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)
+
+    def trace_rows(self):
+        with open(os.path.join(self.mem, "metrics", "cost-trace.jsonl"), encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def three_then_two(self, start):
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1), rec("a2", cache_read=10, out=1),
+                                      rec("a3", cache_read=10, out=1), start,
+                                      rec("w1", cache_read=100, out=2), rec("w2", cache_read=100, out=2)])
+
+    def test_since_wrapup_counts_only_the_window(self):
+        self.three_then_two(slash_rec())
+        d = self.measure("--since-wrapup")
+        self.assertEqual(d["api_calls"], 2)
+        self.assertEqual(d["window"], "wrap-up")
+        self.assertEqual(d["totals"]["cache_read"], 200)
+
+    def test_without_the_flag_the_whole_session_is_measured(self):
+        self.three_then_two(slash_rec())
+        d = self.measure()
+        self.assertEqual(d["api_calls"], 5)
+        self.assertEqual(d["window"], "session")
+
+    def test_slash_content_as_list_of_blocks(self):
+        self.three_then_two(slash_rec(as_blocks=True))
+        d = self.measure("--since-wrapup")
+        self.assertEqual((d["api_calls"], d["window"]), (2, "wrap-up"))
+
+    def test_quoted_marker_in_assistant_text_is_not_a_start(self):
+        quote = "<command-name>/agentic-os:wrap-up</command-name>"
+        write_jsonl(self.transcript, [
+            rec("a1", cache_read=10, out=1, content=[{"type": "text", "text": "Ich zitiere: " + quote}]),
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": quote}]}},
+            {"type": "user", "message": {"role": "user", "content": "Notiz: " + quote}},
+            rec("a2", cache_read=10, out=1)])
+        d = self.measure("--since-wrapup")
+        self.assertEqual((d["api_calls"], d["window"]), (2, "session"))
+
+    def test_skill_tool_marks_the_start(self):
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1), skill_rec("s1", cache_read=20, out=1),
+                                      rec("w1", cache_read=100, out=2)])
+        d = self.measure("--since-wrapup")
+        self.assertEqual((d["api_calls"], d["window"]), (2, "wrap-up"))
+
+    def test_only_the_full_skill_name_counts(self):
+        write_jsonl(self.transcript, [
+            skill_rec("s1", skill="wrap-up", cache_read=10, out=1),
+            skill_rec("s2", skill="agentic-os:wrap-up-extra", cache_read=10, out=1),
+            skill_rec("s3", skill="agentic-os:wrap-up", name="Task", cache_read=10, out=1),
+            rec("a1", cache_read=10, out=1)])
+        d = self.measure("--since-wrapup")
+        self.assertEqual((d["api_calls"], d["window"]), (4, "session"))
+
+    def test_a_message_split_across_records_counts_when_its_tool_use_is_in_the_window(self):
+        text = rec("m1", cache_read=20, out=1, content=[{"type": "text", "text": "ich starte wrap-up"}])
+        tool = skill_rec("m1", cache_read=20, out=1)
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1), text, tool, rec("w1", cache_read=100, out=2)])
+        d = self.measure("--since-wrapup")
+        self.assertEqual((d["api_calls"], d["window"]), (2, "wrap-up"))
+
+    def test_the_last_start_wins(self):
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1), slash_rec(), rec("w1", cache_read=10, out=1),
+                                      rec("b1", cache_read=10, out=1), skill_rec("s1", cache_read=10, out=1),
+                                      rec("w2", cache_read=10, out=1)])
+        d = self.measure("--since-wrapup")
+        self.assertEqual(d["api_calls"], 2)
+
+    def test_wrapup_start_line_is_the_line_index(self):
+        sys.path.insert(0, os.path.dirname(SCRIPT))
+        import measure_session_cost as m
+        self.three_then_two(slash_rec())
+        self.assertEqual(m.wrapup_start_line(self.transcript), 3)
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1)])
+        self.assertIsNone(m.wrapup_start_line(self.transcript))
+        self.assertIsNone(m.wrapup_start_line(os.path.join(self.tmp, "nope.jsonl")))
+
+    def test_no_marker_is_labelled_session(self):
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1), rec("a2", cache_read=10, out=1)])
+        d = self.measure("--since-wrapup", "--append-trace", self.mem, "--task", "wrap-up")
+        self.assertTrue(d["ok"])
+        self.assertEqual(d["api_calls"], 2)
+        row = self.trace_rows()[0]
+        self.assertEqual((row["task"], row["window"]), ("session", "session"))
+
+    def test_task_wrapup_without_the_flag_is_labelled_session(self):
+        self.three_then_two(slash_rec())
+        self.measure("--append-trace", self.mem, "--task", "wrap-up")
+        self.assertEqual(self.trace_rows()[0]["task"], "session")
+
+    def test_wrapup_window_keeps_the_wrapup_label(self):
+        self.three_then_two(slash_rec())
+        self.measure("--since-wrapup", "--append-trace", self.mem, "--task", "wrap-up")
+        row = self.trace_rows()[0]
+        self.assertEqual((row["task"], row["window"], row["api_calls"]), ("wrap-up", "wrap-up", 2))
+
+    def test_models_and_price_basis_in_trace(self):
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1, model="claude-b"),
+                                      rec("a2", cache_read=10, out=1, model="claude-a"),
+                                      rec("a3", cache_read=10, out=1, model="claude-b"),
+                                      rec("a4", cache_read=10, out=1)])
+        d = self.measure("--append-trace", self.mem)
+        self.assertEqual(d["models"], ["claude-a", "claude-b"])
+        row = self.trace_rows()[0]
+        self.assertEqual(row["models"], ["claude-a", "claude-b"])
+        self.assertEqual(row["price_basis"], "opus-5-list")
+
+    def test_models_cover_only_the_window(self):
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1, model="claude-old"), slash_rec(),
+                                      rec("w1", cache_read=10, out=1, model="claude-new")])
+        self.assertEqual(self.measure("--since-wrapup")["models"], ["claude-new"])
+
+    def test_custom_rates_say_so(self):
+        write_jsonl(self.transcript, [rec("a1", cache_read=10, out=1)])
+        d = self.measure("--rates", "1,1,1,1", "--append-trace", self.mem)
+        self.assertEqual(d["price_basis"], "custom")
+        self.assertEqual(self.trace_rows()[0]["price_basis"], "custom")
+
+    def test_since_wrapup_on_a_missing_file_stays_fail_soft(self):
+        p = run(os.path.join(self.tmp, "nope.jsonl"), "--since-wrapup")
+        self.assertEqual(p.returncode, 0)
+        self.assertFalse(json.loads(p.stdout)["ok"])
 
 
 if __name__ == "__main__":

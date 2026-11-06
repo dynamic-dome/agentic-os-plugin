@@ -66,7 +66,7 @@ Restore full project context at the start of every coding session.
 
 Read `.agent-memory/session-summary.md`:
 
-- If `.agent-memory/` does not exist → this should not happen (SessionStart hook auto-creates it). If it does, output "Memory system not found. This is unexpected — the SessionStart hook should have created it. Try restarting the session." and stop.
+- If `.agent-memory/` does not exist → the SessionStart hook creates it only in a git repo (or in any folder when the plugin option `auto_init_non_git` is on). Otherwise output "Memory system not found. The SessionStart hook creates a store only in git repos; run /agentic-os:init here to create one." and stop.
 - If it exists but `session-summary.md` is missing → note "No previous session found", continue with other files.
 
 **Authority** (detail in `references/bootstrap-wrapup-rationale.md`): central handoff =

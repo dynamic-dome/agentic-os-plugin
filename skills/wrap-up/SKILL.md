@@ -17,7 +17,7 @@ metadata:
 # Session Wrap-Up
 
 End-of-session sequence. You are the judge: you decide what is worth keeping, a script does
-everything else. Three turns, one plan. Design: `docs/superpowers/specs/2026-11-05-t028b-judge-fortschreibung.md`.
+everything else. Three turns, one plan.
 
 ## Long-Term Memory Routine (long-term-memory-routine)
 
@@ -106,7 +106,8 @@ German, what changes for him, at most 600 characters.
 
 **Summary.** `what_was_done` (up to 8 lines), `current_state`, `active_task`, `blockers`, `checks`. Statistics, open
 items and next steps come from the store. `warnings`: the file is rewritten whole, so carry over every entry of
-`active_warnings` in the brief that still holds. German is fine here, the headers are the script's.
+`active_warnings` in the brief that still holds. The file keeps only three warnings: put the three most important
+first, they are the ones that stay. German is fine here, the headers are the script's.
 
 ```bash
 python "${CLAUDE_PLUGIN_ROOT}/scripts/wrapup_core.py" apply --mem .agent-memory --session-id <session-id> <<'PLAN'
@@ -139,8 +140,12 @@ Emit these lines verbatim from the result, in every run:
 - `bridge_status_line` and `rule_class_status_line` when present, for verdicts one line per case
   `L26 approved — <plain>`; `reports.codex_ingest`; `reports.review_sweep`; every line of
   `reports.threshold_lines` plus `→ run /agentic-os:maintain` when there are any.
+- `reports.cost_trace` when it is not `ok` (`failed(trace: ...)`, `failed(exit ...)`, `skipped(...)`, `estimate`):
+  the cost trace has a hole or only an estimate, say so in one line.
 - `warnings`: contract violations, not noise. One is expected in the AI workspace: its summary IS the central
   handoff, the block arrives through the core.
+- `reports.summary_warnings_dropped`: warnings the summary file did not keep. Name every entry of this list in the
+  report.
 - `near_duplicates`: name a pair that states the same insight; retiring one is `/agentic-os:maintain`.
 - `pattern_proposals` > 0, or skill candidates: recommend the `pattern-extractor` skill, never call it here. The same
   after about 5 sessions with iterations but no new pattern (pattern-starvation-guard): the script sees only the

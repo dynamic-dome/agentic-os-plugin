@@ -32,6 +32,7 @@ import tempfile
 from native_memory_audit import count_lines, load_level
 from projection_text import (BOM, POINTER, gated_pointer, anchor_ok, entry_line, pointer_line, pointer_overflow,
                              read_raw, select_pointers, with_eol)
+from projection_text import UnterminatedBlock
 from projection_text import strip_block as _strip_block
 
 BEGIN = ("<!-- bridge:claude-native:begin — generiert von agentic-os "
@@ -132,6 +133,7 @@ def strip_block(text):
     """Remove the managed block (shared rule in projection_text). A block at the
     START also takes the one separator line the projection put after it."""
     if text.split("\n", 1)[0].startswith(BEGIN_PREFIX):
+        _strip_block(text, BEGIN_PREFIX, END)  # the shared rule decides first: raises on an unclosed block
         lines = text.split("\n")
         end = next((i for i, line in enumerate(lines) if line.strip() == END), None)
         if end is not None:
@@ -205,20 +207,25 @@ def main(argv):
     bom, current, eol = read_raw(target) if exists else (False, "", "\n")
     on_disk = (BOM if bom else "") + current
 
-    if not approved and not pointers:
-        if exists and BEGIN_PREFIX in current:
-            stripped = (BOM if bom else "") + strip_block(current)
-            write_atomic(target, stripped)
-            load, warning = load_report(stripped)
-            print(f"memory-index: 0 approved — block removed from {target}{load}")
-        else:
-            load, warning = load_report(on_disk) if exists else ("", None)
-            print(f"memory-index: no approved learnings, nothing to do{load}")
-        if warning:
-            print(warning)
-        return 0
+    try:
+        if not approved and not pointers:
+            if exists and BEGIN_PREFIX in current:
+                stripped = (BOM if bom else "") + strip_block(current)
+                write_atomic(target, stripped)
+                load, warning = load_report(stripped)
+                print(f"memory-index: 0 approved — block removed from {target}{load}")
+            else:
+                load, warning = load_report(on_disk) if exists else ("", None)
+                print(f"memory-index: no approved learnings, nothing to do{load}")
+            if warning:
+                print(warning)
+            return 0
 
-    new = assemble_top(bom, strip_block(current) if exists else "", render_block(approved, pointers), eol)
+        new = assemble_top(bom, strip_block(current) if exists else "", render_block(approved, pointers), eol)
+    except UnterminatedBlock:
+        # Refuse before the first byte: the file stays exactly as it is.
+        print(f"memory-index: unterminated managed block in {target}, file left untouched")
+        return 3
     load, warning = load_report(new)
     if exists and new == on_disk:
         print(f"memory-index: {len(pointers)} pointers, {len(approved)} approved — block up to date{load}")

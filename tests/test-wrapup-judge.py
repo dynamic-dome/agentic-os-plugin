@@ -431,6 +431,25 @@ def test_summary_limit():
     finally:
         shutil.rmtree(env["base"], ignore_errors=True)
     env = setup()
+    try:  # F20: the cut warnings are named, not dropped silently
+        s = plan()["summary"]
+        s["warnings"] = ["W1", "W2", "W3", "W4"]
+        rc, out = run(env, "apply", plan(summary=s))
+        check(rc == 0 and out.get("reports", {}).get("summary_warnings_dropped") == ["W4"],
+              f"F20: the dropped warning is named {rc} {out.get('reports')}")
+        summ = read(os.path.join(env["mem"], "session-summary.md"))
+        check("W3" in summ and "W4" not in summ, "F20: the file still holds the first three")
+    finally:
+        shutil.rmtree(env["base"], ignore_errors=True)
+    env = setup()
+    try:
+        s = plan()["summary"]
+        s["warnings"] = ["W1", "W2"]
+        rc, out = run(env, "apply", plan(summary=s))
+        check(out.get("reports", {}).get("summary_warnings_dropped") == [], "F20: nothing cut -> empty list")
+    finally:
+        shutil.rmtree(env["base"], ignore_errors=True)
+    env = setup()
     try:  # a small plan loses nothing
         s = plan()["summary"]
         s["warnings"] = ["Einzige Warnung"]
@@ -511,6 +530,53 @@ def test_followup():
         shutil.rmtree(env["base"], ignore_errors=True)
 
 
+def _usage_record(mid, model, read=100, out=5):
+    return {"type": "assistant", "message": {"id": mid, "role": "assistant", "model": model, "usage": {
+        "input_tokens": 1, "output_tokens": out, "cache_read_input_tokens": read, "cache_creation_input_tokens": 0}}}
+
+
+def _trace_rows(mem):
+    return [json.loads(line) for line in read(os.path.join(mem, "metrics", "cost-trace.jsonl")).splitlines() if line.strip()]
+
+
+def test_cost_trace_windows():
+    print("=== cost trace: wrap-up window and whole session (F18) ===")
+    transcript = os.path.join(ISO_HOME, ".claude", "projects", "proj", f"{SID}.jsonl")
+    slash = {"type": "user", "message": {"role": "user", "content":
+             "<command-message>agentic-os:wrap-up</command-message>\n<command-name>/agentic-os:wrap-up</command-name>"}}
+    env = setup()
+    try:
+        os.makedirs(os.path.dirname(transcript), exist_ok=True)
+        with open(transcript, "w", encoding="utf-8", newline="\n") as fh:
+            for rec in (_usage_record("a1", "claude-a"), _usage_record("a2", "claude-a"), slash,
+                        _usage_record("w1", "claude-b")):
+                fh.write(json.dumps(rec) + "\n")
+        rc, out = run(env, "apply", plan())
+        rows = _trace_rows(env["mem"])
+        check(rc == 0 and out.get("reports", {}).get("cost_trace") == "ok", f"two measured rows are ok {rc} {out.get('reports', {}).get('cost_trace')}")
+        check([r.get("task") for r in rows] == ["wrap-up", "session"], f"one wrap-up row, one session row {[r.get('task') for r in rows]}")
+        check(rows and (rows[0]["window"], rows[0]["api_calls"], rows[0]["models"]) == ("wrap-up", 1, ["claude-b"]),
+              f"the wrap-up row counts only the window {rows[:1]}")
+        check(len(rows) > 1 and (rows[1]["window"], rows[1]["api_calls"], rows[1]["models"]) == ("session", 3, ["claude-a", "claude-b"]),
+              f"the session row counts everything {rows[1:]}")
+        check(all(r.get("price_basis") == "opus-5-list" and r.get("estimate") is False for r in rows), "rows name their price basis")
+    finally:
+        shutil.rmtree(env["base"], ignore_errors=True)
+    env = setup()
+    try:  # no wrap-up start in the transcript: one honest session row, never a wrap-up label
+        with open(transcript, "w", encoding="utf-8", newline="\n") as fh:
+            for rec in (_usage_record("a1", "claude-a"), _usage_record("a2", "claude-a")):
+                fh.write(json.dumps(rec) + "\n")
+        rc, out = run(env, "apply", plan())
+        rows = _trace_rows(env["mem"])
+        check(out.get("reports", {}).get("cost_trace") == "ok", f"unmarked transcript is ok {out.get('reports', {}).get('cost_trace')}")
+        check([(r.get("task"), r.get("window")) for r in rows] == [("session", "session")],
+              f"no start: exactly one session row {[(r.get('task'), r.get('window')) for r in rows]}")
+    finally:
+        shutil.rmtree(env["base"], ignore_errors=True)
+        shutil.rmtree(os.path.dirname(transcript), ignore_errors=True)
+
+
 def main():
     if not GIT:
         print("SKIPPED: git not found")
@@ -525,6 +591,7 @@ def main():
         test_summary_limit()
         test_wiki_gate()
         test_followup()
+        test_cost_trace_windows()
     finally:
         shutil.rmtree(PARENT, ignore_errors=True)
     print(f"\n{PASSED}/{TESTS} passed, {ERRORS} failed")

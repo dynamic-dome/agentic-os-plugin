@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 # Same short-form rule as the MEMORY.md block (150 chars, line <= 200).
 from projection_text import (gated_pointer, BOM, LINE_LIMIT, POINTER, anchor_ok, assemble, bounded_line, entry_line,
                              pointer_line, pointer_overflow, read_raw, select_pointers, shorten)
+from projection_text import UnterminatedBlock
 from projection_text import strip_block as _strip_block
 
 END = "<!-- bridge:end -->"
@@ -203,17 +204,24 @@ def main(argv):
     bom, current, eol = read_raw(args.agents_md) if exists else (False, "", "\n")
     on_disk = (BOM if bom else "") + current
 
-    if not approved and not pointers and not tasks:
-        if exists and BEGIN_PREFIX in current:
-            write_atomic(args.agents_md, (BOM if bom else "") + strip_block(current))
-            print(f"bridge: 0 approved/0 tasks — block removed from "
-                  f"{args.agents_md}")
-        else:
-            print("bridge: no approved learnings or open tasks, nothing to do")
-        return 0
+    try:
+        if not approved and not pointers and not tasks:
+            if exists and BEGIN_PREFIX in current:
+                stripped = (BOM if bom else "") + strip_block(current)
+                write_atomic(args.agents_md, stripped)
+                print(f"bridge: 0 approved/0 tasks — block removed from "
+                      f"{args.agents_md}")
+            else:
+                print("bridge: no approved learnings or open tasks, nothing to do")
+            return 0
 
-    block = render_block(approved, tasks, project_label(args.mem_dir), pointers)
-    new = assemble(bom, strip_block(current) if exists else "", block, eol)
+        block = render_block(approved, tasks, project_label(args.mem_dir), pointers)
+        new = assemble(bom, strip_block(current) if exists else "", block, eol)
+    except UnterminatedBlock:
+        # Refuse before the first byte: the file stays exactly as it is.
+        print(f"bridge: unterminated managed block in {args.agents_md}, "
+              f"file left untouched")
+        return 3
     if exists and new == on_disk:
         print(f"bridge: {len(approved)} approved, {len(tasks)} tasks — "
               f"block up to date")

@@ -131,7 +131,39 @@ EOFILE
   # Each consumer writes project-context.md itself after calling this function.
 }
 
-# Allow direct invocation: `bash mem-schema.sh <dir>` (used by commands/init.md)
+# exclude_store_from_git <project_dir>
+# Adds `.agent-memory/` to the repository's LOCAL exclude file (git rev-parse --git-path info/exclude:
+# .git/info/exclude, or the shared one in a worktree), so a freshly created store does not show up in
+# `git status`. No .gitignore is touched, nothing is shared. Idempotent and fail-soft (always returns 0;
+# no git, no repo or an unwritable file simply means nothing happens).
+# Call it ONLY after a fresh creation, never from create_memory_structure: that function also runs as
+# the backfill of an existing store, and a repo that tracks its store on purpose must stay untouched.
+exclude_store_from_git() {
+  local dir="$1" excl
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  command -v git > /dev/null 2>&1 || return 0
+  excl="$(git -C "$dir" rev-parse --git-path info/exclude 2>/dev/null)" || return 0
+  [ -n "$excl" ] || return 0
+  case "$excl" in /*|[A-Za-z]:*) ;; *) excl="$dir/$excl" ;; esac   # relative to the git -C directory
+  mkdir -p "$(dirname "$excl")" 2>/dev/null || return 0
+  grep -qxF '.agent-memory/' "$excl" 2>/dev/null && return 0
+  # an exclude file whose last line has no newline must not swallow our line
+  if [ -s "$excl" ] && [ -n "$(tail -c1 "$excl" 2>/dev/null)" ]; then
+    printf '\n' >> "$excl" 2>/dev/null || return 0
+  fi
+  printf '.agent-memory/\n' >> "$excl" 2>/dev/null
+  return 0
+}
+
+# Allow direct invocation: `bash mem-schema.sh <dir>` (used by commands/init.md).
+# The store counts as fresh only when the directory did not exist before this call.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  _store_existed=false
+  [ -d "$1" ] && _store_existed=true
   create_memory_structure "$1"
+  _rc=$?
+  if [ "$_rc" -eq 0 ] && [ "$_store_existed" = false ] && [ "$(basename "$1")" = ".agent-memory" ]; then
+    exclude_store_from_git "$(dirname "$1")"
+  fi
+  exit "$_rc"
 fi

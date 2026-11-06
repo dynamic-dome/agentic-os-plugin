@@ -151,7 +151,7 @@ stays deliberately on-demand:
 | Covered by the bracket (automatic) | How |
 |---|---|
 | Context restore, health checks, salience learnings, wiki context, Sharepoint pull | bootstrap (learnings_top.py / Atlas-RAG, memory-thresholds.sh) |
-| Auto-init, model-visible start briefing (tasks SSoT, recovery, root-drift, handoff head; re-fires after /compact), dirty-state tracking | hooks (2 command hooks; prompt hooks removed 4.21.0) |
+| Auto-init (only in git repos, elsewhere via the `auto_init_non_git` option or `/agentic-os:init`), model-visible start briefing (tasks SSoT, recovery, root-drift, handoff head; re-fires after /compact), dirty-state tracking | hooks (2 command hooks; prompt hooks removed 4.21.0) |
 | Iteration logging | wrap-up session-harvest → plan → `scripts/wrapup_core.py` → `scripts/apply_wrapup.py` |
 | Pattern extraction | `scripts/wrapup_core.py` → `scripts/extract_patterns.py --update` on every run |
 | Skill-candidate generation, rueckfluss drafts | wrap-up recommends the pattern-extractor skill when the extractor reports candidates; the user runs it |

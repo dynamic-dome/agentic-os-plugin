@@ -14,6 +14,10 @@ echo '{"cwd":"'"$TMP/proj/.agent-memory/working"'","session_id":"t"}' | \
   CLAUDE_PROJECT_DIR="$TMP/proj/.agent-memory/working" bash "$DIR/scripts/session-start.sh" > "$TMP/out.txt" 2>&1
 RC=$?
 FAIL=0
+# Since 5.13.0 a folder without git gets no store unless the plugin option is set. The cases below that
+# exercise the init path itself (system directory guard, write verification, partial writes) run with
+# the option on, so they still reach the code under test; the new section at the end covers the default.
+export CLAUDE_PLUGIN_OPTION_AUTO_INIT_NON_GIT=true
 if [ -d "$TMP/proj/.agent-memory/working/.agent-memory" ] || [ -d "$TMP/proj/.agent-memory/.agent-memory" ]; then
   echo "  FAIL: nested .agent-memory created"; FAIL=1
 else
@@ -33,7 +37,7 @@ else
 fi
 
 # Third case (V7): a subdirectory of a git repo must not get its own store;
-# a plain non-git directory still auto-inits (the AI workspace is not a repo).
+# a plain non-git directory inits only with the option (the section at the end covers the default).
 mkdir -p "$TMP/repo/scripts/work" "$TMP/plain"
 git -C "$TMP/repo" init -q
 echo '{"cwd":"x","session_id":"t"}' | CLAUDE_PROJECT_DIR="$TMP/repo/scripts/work" bash "$DIR/scripts/session-start.sh" > "$TMP/sub-out.txt" 2>&1
@@ -47,7 +51,7 @@ grep -q "subdirectory of git repo" "$TMP/sub-out.txt" && echo "  PASS: subdirect
 [ "$RC" -eq 0 ] && echo "  PASS: exit 0 (fail-soft)" || { echo "  FAIL: exit $RC"; FAIL=1; }
 echo '{"cwd":"x","session_id":"t"}' | CLAUDE_PROJECT_DIR="$TMP/plain" bash "$DIR/scripts/session-start.sh" > "$TMP/plain-out.txt" 2>&1
 if [ -d "$TMP/plain/.agent-memory" ]; then
-  echo "  PASS: non-git directory still auto-inits"
+  echo "  PASS: non-git directory auto-inits with the option"
 else
   echo "  FAIL: non-git directory not initialised"; FAIL=1
 fi
@@ -285,6 +289,118 @@ cp -r "$DIR/scripts" "$TMP/mut-c"; echo 'return 0 2>/dev/null; exit 0' > "$TMP/m
 DRIFT_C="$(schema_drift "$TMP/mut-c")"
 grep -qF "created set is empty" <<< "$DRIFT_C" \
   && echo "  PASS: drift test fails on a mem-schema.sh that defines nothing" || { echo "  FAIL: drift test passed on an empty schema"; FAIL=1; }
+
+# ---------------------------------------------------------------------------------------------
+# 5.13.0 (F22): safe hook start. No store without git unless the option is set; a fresh store in a git
+# repo is excluded locally (.git/info/exclude, no user file touched); the env file is shell-quoted.
+# ---------------------------------------------------------------------------------------------
+NOOPT=(env -u CLAUDE_PLUGIN_OPTION_AUTO_INIT_NON_GIT)
+start_hook() { # <project dir> [VAR=value ...] -> hook stdout+stderr in $TMP/s-out.txt, rc in $RC
+  local proj="$1"; shift
+  echo '{"cwd":"x","session_id":"t"}' | "${NOOPT[@]}" "$@" CLAUDE_PROJECT_DIR="$proj" bash "$DIR/scripts/session-start.sh" > "$TMP/s-out.txt" 2>&1
+  RC=$?
+}
+# Without git and without the option: no store, exit 0, reason named (plain echo like the other skip branches).
+mkdir -p "$TMP/nogit"
+start_hook "$TMP/nogit"
+[ -e "$TMP/nogit/.agent-memory" ] && { echo "  FAIL: store created without git and without the option"; FAIL=1; } || echo "  PASS: no store without git and without the option"
+[ "$RC" -eq 0 ] && echo "  PASS: exit 0 (no git, no option)" || { echo "  FAIL: exit $RC (no git, no option)"; FAIL=1; }
+grep -q "no git repo here - skipping auto-init (run /agentic-os:init to create a store)" "$TMP/s-out.txt" \
+  && echo "  PASS: the skip reason is named" || { echo "  FAIL: no skip reason"; FAIL=1; head -3 "$TMP/s-out.txt"; }
+# The option accepts true, 1 and yes; anything else keeps the default.
+for val in true 1 yes; do
+  rm -rf "$TMP/nogit/.agent-memory"
+  start_hook "$TMP/nogit" "CLAUDE_PLUGIN_OPTION_AUTO_INIT_NON_GIT=$val"
+  [ -d "$TMP/nogit/.agent-memory" ] && echo "  PASS: option '$val' creates the store without git" || { echo "  FAIL: option '$val' did not create the store"; FAIL=1; }
+done
+for val in false 0 ""; do
+  rm -rf "$TMP/nogit/.agent-memory"
+  start_hook "$TMP/nogit" "CLAUDE_PLUGIN_OPTION_AUTO_INIT_NON_GIT=$val"
+  [ -e "$TMP/nogit/.agent-memory" ] && { echo "  FAIL: option '$val' created a store"; FAIL=1; } || echo "  PASS: option '$val' keeps the default (no store)"
+done
+rm -rf "$TMP/nogit/.agent-memory"
+# An existing store in a folder without git is served unchanged, with or without the option (the AI workspace).
+mkdir -p "$TMP/nogit-store/.agent-memory"
+start_hook "$TMP/nogit-store"
+if grep -q '"additionalContext"' "$TMP/s-out.txt" && ! grep -q "no git repo here" "$TMP/s-out.txt"; then
+  echo "  PASS: existing store without git still gets its briefing"
+else
+  echo "  FAIL: existing store without git was skipped"; FAIL=1; head -3 "$TMP/s-out.txt"
+fi
+# A folder inside a repo is judged by the repo, never by the option: the subdirectory guard stays as it was.
+start_hook "$TMP/repo/scripts/work" "CLAUDE_PLUGIN_OPTION_AUTO_INIT_NON_GIT=true"
+[ -d "$TMP/repo/scripts/work/.agent-memory" ] && { echo "  FAIL: option created a store in a git subdirectory"; FAIL=1; } || echo "  PASS: option does not override the git subdirectory guard"
+
+# Git toplevel: store created and excluded locally; git does not see it; a second creation adds no second line.
+mkdir -p "$TMP/g1"; git -C "$TMP/g1" init -q
+start_hook "$TMP/g1"
+[ -d "$TMP/g1/.agent-memory" ] && echo "  PASS: git toplevel creates the store without the option" || { echo "  FAIL: git toplevel got no store"; FAIL=1; }
+grep -qxF '.agent-memory/' "$TMP/g1/.git/info/exclude" && echo "  PASS: .agent-memory/ is in .git/info/exclude" || { echo "  FAIL: no exclude line"; FAIL=1; }
+if git -C "$TMP/g1" status --porcelain --untracked-files=all | grep -q 'agent-memory'; then
+  echo "  FAIL: git status still lists the store"; FAIL=1
+else
+  echo "  PASS: git status does not list the store"
+fi
+[ -e "$TMP/g1/.gitignore" ] && { echo "  FAIL: the hook created a .gitignore"; FAIL=1; } || echo "  PASS: no .gitignore touched or created"
+rm -rf "$TMP/g1/.agent-memory"
+start_hook "$TMP/g1"
+[ "$(grep -cxF '.agent-memory/' "$TMP/g1/.git/info/exclude")" -eq 1 ] && echo "  PASS: second fresh start leaves the line exactly once" || { echo "  FAIL: exclude line duplicated"; FAIL=1; }
+# A pre-existing exclude without a trailing newline keeps its last line intact.
+mkdir -p "$TMP/g2"; git -C "$TMP/g2" init -q
+printf 'mine.tmp' >> "$TMP/g2/.git/info/exclude"
+start_hook "$TMP/g2"
+grep -qxF 'mine.tmp' "$TMP/g2/.git/info/exclude" && grep -qxF '.agent-memory/' "$TMP/g2/.git/info/exclude" \
+  && echo "  PASS: exclude without trailing newline keeps its own line" || { echo "  FAIL: exclude file mangled"; FAIL=1; }
+# Worktree: .git is a file, the rule lands in the shared info/exclude.
+mkdir -p "$TMP/g3"; git -C "$TMP/g3" init -q
+git -C "$TMP/g3" -c user.email=t@example.invalid -c user.name=t commit -q --allow-empty -m init
+git -C "$TMP/g3" worktree add -q "$TMP/g3wt" -b wtbranch
+start_hook "$TMP/g3wt"
+[ -f "$TMP/g3wt/.git" ] && echo "  PASS: worktree has a .git file" || { echo "  FAIL: worktree .git is not a file"; FAIL=1; }
+[ -d "$TMP/g3wt/.agent-memory" ] && echo "  PASS: worktree gets its store" || { echo "  FAIL: worktree got no store"; FAIL=1; }
+grep -qxF '.agent-memory/' "$TMP/g3/.git/info/exclude" && echo "  PASS: worktree rule stands in the shared info/exclude" || { echo "  FAIL: worktree rule missing in the shared exclude"; FAIL=1; }
+git -C "$TMP/g3wt" status --porcelain --untracked-files=all | grep -q 'agent-memory' && { echo "  FAIL: worktree status lists the store"; FAIL=1; } || echo "  PASS: worktree status does not list the store"
+# A repo with a deliberately tracked store: the hook (backfill) and the CLI on the existing store leave the exclude alone.
+mkdir -p "$TMP/g4/.agent-memory/working"; git -C "$TMP/g4" init -q
+echo '[]' > "$TMP/g4/.agent-memory/working/x.json"
+git -C "$TMP/g4" add .agent-memory/working/x.json 2>/dev/null
+cp "$TMP/g4/.git/info/exclude" "$TMP/g4-exclude.before"
+start_hook "$TMP/g4"
+bash "$DIR/scripts/mem-schema.sh" "$TMP/g4/.agent-memory" > /dev/null 2>&1
+cmp -s "$TMP/g4/.git/info/exclude" "$TMP/g4-exclude.before" && echo "  PASS: tracked store: exclude unchanged (hook backfill + CLI)" || { echo "  FAIL: exclude changed for a tracked store"; FAIL=1; }
+# CLI path (/agentic-os:init): a fresh store in a repo is excluded too, a folder without git still works.
+mkdir -p "$TMP/g5" "$TMP/g6"; git -C "$TMP/g5" init -q
+bash "$DIR/scripts/mem-schema.sh" "$TMP/g5/.agent-memory" > /dev/null 2>&1; RC=$?
+[ "$RC" -eq 0 ] && grep -qxF '.agent-memory/' "$TMP/g5/.git/info/exclude" && echo "  PASS: CLI init excludes a fresh store" || { echo "  FAIL: CLI init did not exclude (rc $RC)"; FAIL=1; }
+bash "$DIR/scripts/mem-schema.sh" "$TMP/g6/.agent-memory" > /dev/null 2>&1; RC=$?
+[ "$RC" -eq 0 ] && [ -d "$TMP/g6/.agent-memory/identity" ] && echo "  PASS: CLI init in a folder without git still creates the store (the opt-in)" || { echo "  FAIL: CLI init without git (rc $RC)"; FAIL=1; }
+# Sourcing the schema (the hook's path) must not run the exclude by itself.
+mkdir -p "$TMP/g7"; git -C "$TMP/g7" init -q
+bash -c 'source "$1/scripts/mem-schema.sh"; create_memory_structure "$2/.agent-memory"' _ "$DIR" "$TMP/g7" > /dev/null 2>&1
+grep -qxF '.agent-memory/' "$TMP/g7/.git/info/exclude" && { echo "  FAIL: create_memory_structure itself wrote the exclude (backfill would too)"; FAIL=1; } || echo "  PASS: create_memory_structure never touches the exclude"
+
+# CLAUDE_ENV_FILE: the memory path is shell-quoted. A path with a space and a command substitution must
+# come back exactly and execute nothing when the env file is sourced.
+PWNPROJ="$TMP/Mein Projekt \$(touch pwned)"
+mkdir -p "$PWNPROJ" "$TMP/envcwd"
+ENVF="$TMP/claude-env.sh"; : > "$ENVF"
+start_hook "$PWNPROJ" "CLAUDE_PLUGIN_OPTION_AUTO_INIT_NON_GIT=true" "CLAUDE_ENV_FILE=$ENVF"
+(cd "$TMP/envcwd" && source "$ENVF" && printf '%s' "$AGENTIC_OS_MEMORY_DIR" > "$TMP/env-value.txt")
+[ "$(cat "$TMP/env-value.txt" 2>/dev/null)" = "$PWNPROJ/.agent-memory" ] \
+  && echo "  PASS: AGENTIC_OS_MEMORY_DIR survives sourcing with space and \$(...) in the path" || { echo "  FAIL: env value differs: $(cat "$TMP/env-value.txt" 2>/dev/null)"; FAIL=1; }
+[ -e "$TMP/envcwd/pwned" ] && { echo "  FAIL: sourcing the env file executed the path"; FAIL=1; } || echo "  PASS: sourcing the env file executed nothing"
+grep -q '^export AGENTIC_OS_ACTIVE=true$' "$ENVF" && echo "  PASS: AGENTIC_OS_ACTIVE still exported" || { echo "  FAIL: AGENTIC_OS_ACTIVE missing"; FAIL=1; }
+
+# Manifest: the option is declared as a plain boolean (no options field, so the minimum version stays).
+python - "$DIR/.claude-plugin/plugin.json" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+o = (d.get("userConfig") or {}).get("auto_init_non_git")
+ok = isinstance(o, dict) and o.get("type") == "boolean" and o.get("default") is False \
+    and "options" not in o and o.get("title") and o.get("description")
+sys.exit(0 if ok else 1)
+PYEOF
+[ $? -eq 0 ] && echo "  PASS: plugin.json declares userConfig.auto_init_non_git (boolean, default false)" || { echo "  FAIL: userConfig.auto_init_non_git missing or malformed"; FAIL=1; }
 
 rm -rf "$TMP"
 exit $FAIL

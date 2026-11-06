@@ -40,13 +40,24 @@ def _ends_with_blank_line(text):
     return text.endswith("\n\n") or text.endswith("\n\r\n")
 
 
+class UnterminatedBlock(ValueError):
+    """A managed block opens but its end marker never comes."""
+
+
 def strip_block(text, begin_prefix, end):
     """Remove a managed block; every other line keeps its bytes. Trailing blank
     lines left behind are trimmed - that is the separator the projection itself
     inserted before the block, for LF and CRLF alike (otherwise a CRLF file would
-    grow one blank line per run). Returns text unchanged if no block exists."""
+    grow one blank line per run). Returns text unchanged if no block exists.
+    Raises UnterminatedBlock if the block is still open at the end of the text:
+    cutting to the end of the file would destroy everything below the begin line.
+    A second begin marker inside an open block means the first block never closed
+    (the end marker that follows belongs to the second one), so it raises as well:
+    taking it as the first block's end would swallow the foreign lines between."""
     out, inside, found, after, cut = [], False, False, False, 0
     for line in text.split("\n"):
+        if inside and line.startswith(begin_prefix):
+            raise UnterminatedBlock(begin_prefix)
         if not inside and line.startswith(begin_prefix):
             inside, found = True, True
             continue
@@ -58,6 +69,8 @@ def strip_block(text, begin_prefix, end):
         if found and line.strip():
             after = True
         out.append(line)
+    if inside:
+        raise UnterminatedBlock(begin_prefix)
     if not found:
         return text
     if after:

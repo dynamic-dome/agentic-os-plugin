@@ -4,9 +4,18 @@ Algorithm and templates: skills/wrap-up/references/handoff-template.md (SSoT). R
 drift detection reuses handoff_write_guard.file_state (sha256) in-process: hash at read, re-hash
 right before the write; on drift re-read, merge the own block into the NEW content, write once,
 report `drift-merged`. A second drift in the same run is reported as failed, never forced.
+
+Parallel writers (F12): the drift check only SEES a foreign write, it cannot stop two writers that
+both pass it. The read-check-write stretch of the handoff and the board therefore also runs under
+the OS lock `working/handoff.lock` of the central store (store_lock.py). It is a lock of its own,
+not `store.lock`: a wrap-up in the AI workspace holds that one for its whole run while it
+publishes here. Held only around one _guarded_write, never across a subprocess, never nested
+(rescue_dropped only reads; the write is rescue_blocks'). Order: project lock, then handoff lock.
+Without `<central>/.agent-memory` there is no lock and no new folder.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import sys
@@ -14,6 +23,10 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from handoff_write_guard import file_state  # noqa: E402
+from store_lock import store_lock  # noqa: E402
+
+HANDOFF_LOCK = "working/handoff.lock"
+LOCK_TIMEOUT = 10.0
 
 HEAD_RE = re.compile(r"^# (Letzte Session|Vorherige Session\b.*)$")
 DEMOTED_RE = re.compile(r"^# Vorherige Session \((\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?) (.+), erhalten\)\s*$")
@@ -174,6 +187,15 @@ def replace_board_section(existing, project, section):
     return f"{base}\n\n" + "\n".join(sec) + "\n"
 
 
+def _central_guard(central_dir):
+    """OS lock around one handoff/board write; a busy lock raises LockTimeout (an OSError, which every
+    writer below already reports as failed(LockTimeout)). No central .agent-memory -> no lock, no folder."""
+    folder = os.path.join(central_dir, ".agent-memory")
+    if not os.path.isdir(folder):
+        return contextlib.nullcontext()
+    return store_lock(folder, LOCK_TIMEOUT, HANDOFF_LOCK)
+
+
 def _guarded_write(path, compute, _before_write=None):
     """compute(old_text_or_None) -> new text. Write with one drift-merge retry."""
     digest, _ = file_state(path)
@@ -207,7 +229,8 @@ def write_central(central_dir, project, new_block, _before_write=None, dropped_o
         return text
 
     try:
-        return _guarded_write(os.path.join(folder, "session-summary.md"), compute, _before_write)
+        with _central_guard(central_dir):
+            return _guarded_write(os.path.join(folder, "session-summary.md"), compute, _before_write)
     except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         return f"failed({type(exc).__name__})"
 
@@ -243,7 +266,8 @@ def rescue_blocks(central_dir, blocks, _before_write=None):
         compute(_read(board) if os.path.isfile(board) else None)
         if not rescued:
             return {"rescued": [], "lost": list(lost), "status": "none"}
-        status = _guarded_write(board, compute, _before_write)
+        with _central_guard(central_dir):
+            status = _guarded_write(board, compute, _before_write)
     except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         status = f"failed({type(exc).__name__})"
     if status not in ("written", "drift-merged"):
@@ -270,7 +294,8 @@ def write_board(central_dir, project, section, _before_write=None):
     if not os.path.isdir(central_dir):
         return "skipped(no central dir)"
     try:
-        return _guarded_write(os.path.join(central_dir, "cross-project-status.md"),
-                              lambda old: replace_board_section(old, project, section), _before_write)
+        with _central_guard(central_dir):
+            return _guarded_write(os.path.join(central_dir, "cross-project-status.md"),
+                                  lambda old: replace_board_section(old, project, section), _before_write)
     except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         return f"failed({type(exc).__name__})"

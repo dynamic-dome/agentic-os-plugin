@@ -27,7 +27,7 @@ wahrnimmt → MINOR; was "verhaelt sich jetzt korrekt" ist → PATCH.
    skill-lokale Zahl: bei jeder inhaltlichen Skill-Aenderung minor bumpen. Sie ersetzt
    nie die Plugin-Version.
 4. **Deploy-Zweischritt:** `git push origin main` → `claude plugin update agentic-os`.
-   Vorher: `bash tests/run-all.sh` gruen (Circuit-Breaker-Suite darf >2 min brauchen).
+   Vorher: `python tests/run-isolated.py` gruen (Circuit-Breaker-Suite darf >2 min brauchen).
 5. **Aenderungen greifen erst in neu gestarteten Sessions** — laufende Sessions
    behalten Hooks/Skills ihrer Start-Version. Nie im Cache patchen.
 6. **Rollback:** alte Cache-Versionen bleiben liegen; im Notfall Quellrepo-Revert

@@ -108,7 +108,7 @@ echo "$OUT" | grep -q "additionalContext" && fail "headless: must not brief" || 
 # 5. Routing: session-start.sh unter /.codex/-Pfad -> Codex-Zweig, KEIN Auto-Init
 FAKE="$TMP/fakehome/.codex/plugins/cache/m/agentic-os/9.9.9/scripts"; mkdir -p "$FAKE"
 cp "$SS" "$CB" "$FAKE/"
-PROJ5="$TMP/proj-route"; mkdir -p "$PROJ5"
+PROJ5="$TMP/proj-route"; mkdir -p "$PROJ5"; git init -q "$PROJ5"   # a git repo: only the codex routing may keep the store away
 OUT=$(cd "$PROJ5" && echo '{}' | CLAUDE_PROJECT_DIR="$PROJ5" bash "$FAKE/session-start.sh" 2>/dev/null); RC=$?
 [ "$RC" -eq 0 ] && pass "route: exit 0" || fail "route: exit $RC"
 [ -d "$PROJ5/.agent-memory" ] && fail "route: codex path MUST NOT auto-init" || pass "route: no auto-init under codex"
@@ -122,7 +122,7 @@ OUT=$(cd "$PROJ7" && echo '{}' | CLAUDE_PROJECT_DIR="$PROJ7" bash "$CB" 2>/dev/n
 echo "$OUT" | grep -q "T-77" && pass "bom: open task id present" || fail "bom: T-77 missing: $OUT"
 
 # 6. Claude-Pfad unveraendert: session-start.sh AUSSERHALB /.codex/ initialisiert weiterhin
-PROJ6="$TMP/proj-claude"; mkdir -p "$PROJ6"
+PROJ6="$TMP/proj-claude"; mkdir -p "$PROJ6"; git init -q "$PROJ6"   # 5.13.0: auto-init needs a git repo (or the plugin option)
 OUT=$(cd "$PROJ6" && echo '{}' | CLAUDE_PROJECT_DIR="$PROJ6" bash "$SS" 2>/dev/null); RC=$?
 [ "$RC" -eq 0 ] && pass "claude: exit 0" || fail "claude: exit $RC"
 [ -d "$PROJ6/.agent-memory" ] && pass "claude: auto-init still works" || fail "claude: auto-init broken"

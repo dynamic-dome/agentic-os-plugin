@@ -1,5 +1,14 @@
 {
   "name": "agentic-os",
-  "version": "5.12.0",
-  "description": "Persistent per-project agent memory for Claude Code (.agent-memory/): session-bootstrap + wrap-up as the supported two-call bracket, deterministic scripts for every store write, five judgment skills, three script-core commands and two command hooks."
+  "version": "5.13.0",
+  "author": {"name": "Dominic Meiser"},
+  "description": "Persistent per-project agent memory for Claude Code (.agent-memory/): session-bootstrap + wrap-up as the supported two-call bracket, deterministic scripts for every store write, five judgment skills, two script-core commands and two command hooks.",
+  "userConfig": {
+    "auto_init_non_git": {
+      "type": "boolean",
+      "title": "Auto-init outside git repos",
+      "description": "Create .agent-memory in folders that are not git repositories",
+      "default": false
+    }
+  }
 }

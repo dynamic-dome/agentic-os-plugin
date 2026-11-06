@@ -153,7 +153,7 @@ CTX3=$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP/bom" bash "$DIR/scripts/session-star
 echo "$CTX3" | grep -q "T-BOM" && pass "next steps: BOM open-tasks.json is read" || fail "next steps: BOM open-tasks.json ignored"
 
 # Fresh init path still works and still uses the same contract.
-mkdir -p "$TMP/fresh" && cd "$TMP/fresh"
+mkdir -p "$TMP/fresh" && cd "$TMP/fresh" && git init -q   # 5.13.0: a folder without git no longer auto-inits
 OUT2=$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP/fresh" bash "$DIR/scripts/session-start.sh" 2>/dev/null)
 printf '%s' "$OUT2" | grep -q '"additionalContext"' && [ -d "$TMP/fresh/.agent-memory" ] && pass "fresh init: store created + additionalContext" || fail "fresh init: broken"
 

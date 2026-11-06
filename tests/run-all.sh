@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 # Runs all plugin validation tests.
-# Exit codes: 0 = all pass, 1 = any failures
+# Exit codes: 0 = all pass, 1 = any failures, 2 = refused (real home, see the lock below)
+#
+# Run it isolated: python tests/run-isolated.py (redirected HOME, before/after check of the stores).
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOTAL_ERRORS=0
+
+# Lock against a run in the real home (5.13.0): a test run that inherits a home holding Claude Code
+# session data can touch the real stores. tests/run-isolated.py redirects HOME and sets
+# AGENTIC_OS_TEST_HOME=1; without that variable this script refuses. `--check-home` checks only the lock
+# (exit 0 or 2) and starts no tests.
+if [ -z "${AGENTIC_OS_TEST_HOME:-}" ] && [ -d "${HOME:-}/.claude/projects" ]; then
+    echo "REFUSED: HOME=${HOME:-} holds Claude Code session data (.claude/projects)." >&2
+    echo "A test run against the real home can touch the real stores." >&2
+    echo "Run the suite isolated instead: python tests/run-isolated.py" >&2
+    exit 2
+fi
+[ "${1:-}" = "--check-home" ] && exit 0
 
 echo "========================================"
 echo "  Agentic-OS Plugin Test Suite"
@@ -572,6 +586,17 @@ if bash "$SCRIPT_DIR/eval/run-eval.sh"; then
     echo ">>> Skill-redesign eval harness: ALL PASSED"
 else
     echo ">>> Skill-redesign eval harness: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run real-home lock and isolated-runner tests (5.13.0)
+echo ">>> Running run-isolated tests..."
+if bash "$SCRIPT_DIR/test-run-isolated.sh"; then
+    echo ">>> Run-isolated tests: ALL PASSED"
+else
+    echo ">>> Run-isolated tests: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 

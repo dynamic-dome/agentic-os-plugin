@@ -21,6 +21,9 @@ Contract:
     (`lock_rel=identity/profile.lock`), in this order only. apply_wrapup takes it
     right after the project lock and holds it for the whole run (< 1 s), but only
     when the run writes identity data into an active central profile.
+    Second exception (F12): the project lock may enclose the central handoff lock
+    (`lock_rel=working/handoff.lock` of the central store, wrapup_parts/handoff.py),
+    in this order only. It is held around one handoff/board write, never longer.
   - Waiting longer than `timeout` raises LockTimeout. It is an OSError on
     purpose: every writer already reports OSError as "io error", exit 2, no
     marker - a busy store is a visible failure, never a silent skip.

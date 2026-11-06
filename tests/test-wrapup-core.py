@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import json
 import os
+import io
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
@@ -254,6 +257,117 @@ def test_handoff():
         r = rescue_dropped(central, "F", block("F", "2026-09-24 03:00"))
         check(r["rescued"] == [] and r["lost"] == ["E"], f"no state line -> E reported lost {r}")
     finally:
+        shutil.rmtree(central, ignore_errors=True)
+
+
+def test_handoff_real_overlap():
+    print("=== handoff lock: real overlap (F12) ===")
+    from wrapup_parts.handoff import write_central
+    central = tempfile.mkdtemp(prefix="wrapupcore-overlap-")
+    try:
+        os.makedirs(os.path.join(central, ".agent-memory"))
+        hand = os.path.join(central, ".agent-memory", "session-summary.md")
+        put(hand, block("Q", "2026-09-23 10:00"))
+        a_in, release_a, b_done = threading.Event(), threading.Event(), threading.Event()
+        res = {}
+
+        def hold():  # A stands between read and write, exactly where a parallel writer would slip in
+            a_in.set()
+            release_a.wait(10)
+
+        def run_a():
+            res["a"] = write_central(central, "A", block("A", "2026-09-24 03:00"), _before_write=hold)
+
+        def run_b():
+            res["b"] = write_central(central, "B", block("B", "2026-09-24 03:01"))
+            b_done.set()
+
+        ta = threading.Thread(target=run_a)
+        ta.start()
+        check(a_in.wait(10), "A reached the point between read and write")
+        tb = threading.Thread(target=run_b)
+        tb.start()
+        check(not b_done.wait(0.5), "B waits while A holds the handoff lock")
+        release_a.set()
+        ta.join(15)
+        tb.join(15)
+        body = open(hand, encoding="utf-8").read()
+        check("*Projekt: A*" in body and "*Projekt: B*" in body, "both blocks survive a real overlap")
+        check(res.get("a") == "written" and res.get("b") == "written",
+              f"both write cleanly, nobody had to drift-merge ({res})")
+    finally:
+        release_a.set()
+        shutil.rmtree(central, ignore_errors=True)
+
+
+def test_handoff_inside_project_lock():
+    print("=== handoff lock: inside the central store lock (F12) ===")
+    import store_lock
+    from wrapup_parts.handoff import rescue_blocks, rescue_dropped, write_board, write_central
+    central = tempfile.mkdtemp(prefix="wrapupcore-inside-")
+    try:
+        mem = os.path.join(central, ".agent-memory")
+        os.makedirs(mem)
+        hand = os.path.join(mem, "session-summary.md")
+        e_block = block("E", "2026-09-14 10:00", "Vorherige Session (2026-09-14 10:00 E, erhalten)") \
+            + "\n## Aktueller Stand\n- E wartet\n"
+        put(hand, "\n\n".join([block("A", "2026-09-20 10:00")] + [
+            block(p, f"2026-09-1{i} 10:00", f"Vorherige Session (2026-09-1{i} 10:00 {p}, erhalten)")
+            for i, p in enumerate("BCD")] + [e_block]))
+        # the wrap-up in the AI workspace holds store.lock of this very store while it publishes
+        t0 = time.time()
+        with store_lock.store_lock(mem):
+            pre = rescue_dropped(central, "F", block("F", "2026-09-24 03:00"))
+            dropped = []
+            status = write_central(central, "F", block("F", "2026-09-24 03:00"), dropped_out=dropped)
+            post = rescue_blocks(central, dropped)
+            board = write_board(central, "F", "## F\n- State: s\n\n---\n")
+        check(status == "written" and board == "written", f"handoff and board written under store.lock ({status}, {board})")
+        check(pre["status"] == "written" and pre["rescued"] == ["E"], f"rescue pass under store.lock ({pre})")
+        check(post["status"] == "none", f"second rescue pass finds nothing left ({post})")
+        check(time.time() - t0 < 5, "no waiting on its own lock (default timeout is 10 s)")
+    finally:
+        shutil.rmtree(central, ignore_errors=True)
+
+
+def test_handoff_lock_timeout():
+    print("=== handoff lock: busy lock fails visibly (F12) ===")
+    import store_lock
+    from wrapup_parts import handoff
+    central = tempfile.mkdtemp(prefix="wrapupcore-busy-")
+    old_timeout = handoff.LOCK_TIMEOUT
+    try:
+        mem = os.path.join(central, ".agent-memory")
+        os.makedirs(mem)
+        hand = os.path.join(mem, "session-summary.md")
+        bpath = os.path.join(central, "cross-project-status.md")
+        put(hand, block("Q", "2026-09-23 10:00"))
+        put(bpath, "# Cross-Project Status Board\n\n---\n")
+        handoff.LOCK_TIMEOUT = 0.3
+        gone = block("E", "2026-09-14 10:00", "Vorherige Session (2026-09-14 10:00 E, erhalten)") \
+            + "\n## Aktueller Stand\n- E wartet\n"
+        hand_before, board_before = open(hand, "rb").read(), open(bpath, "rb").read()
+        with store_lock.store_lock(mem, lock_rel=handoff.HANDOFF_LOCK):
+            s_central = handoff.write_central(central, "A", block("A", "2026-09-24 03:00"))
+            s_board = handoff.write_board(central, "A", "## A\n- State: s\n\n---\n")
+            s_rescue = handoff.rescue_blocks(central, [gone])
+        check(s_central == "failed(LockTimeout)", f"write_central -> {s_central}")
+        check(s_board == "failed(LockTimeout)", f"write_board -> {s_board}")
+        check(s_rescue["status"] == "failed(LockTimeout)" and s_rescue["rescued"] == [] and s_rescue["lost"] == ["E"],
+              f"rescue_blocks reports E as lost, not rescued ({s_rescue})")
+        check(open(hand, "rb").read() == hand_before and open(bpath, "rb").read() == board_before,
+              "handoff and board unchanged after the timeout")
+        # without the outside holder the same calls go through
+        check(handoff.write_central(central, "A", block("A", "2026-09-24 03:00")) == "written", "free lock -> written")
+        # no central .agent-memory: no lock file, no new folder, board still written as before
+        bare = tempfile.mkdtemp(prefix="wrapupcore-bare-")
+        try:
+            check(handoff.write_board(bare, "A", "## A\n- State: s\n\n---\n") == "written", "board without .agent-memory still written")
+            check(not os.path.exists(os.path.join(bare, ".agent-memory")), "no folder and no lock file created")
+        finally:
+            shutil.rmtree(bare, ignore_errors=True)
+    finally:
+        handoff.LOCK_TIMEOUT = old_timeout
         shutil.rmtree(central, ignore_errors=True)
 
 
@@ -790,16 +904,59 @@ def test_collision():
             shutil.rmtree(d, ignore_errors=True)
 
 
+def test_silent_failures():
+    print("=== stage-0 and cost-trace failures are visible (F19, F21) ===")
+    import contextlib
+    from unittest import mock
+    import wrapup_core as wc
+    proj, mem = make_project()
+    try:
+        buf = io.StringIO()
+        with mock.patch.object(wc, "_child", return_value=(1, None, "boom")), contextlib.redirect_stdout(buf):
+            wc.main(["pre", "--mem", mem, "--session-id", "s1"])
+        errs = json.loads(buf.getvalue()).get("validation_errors", [])
+        check(any("stage0 failed(exit 1)" in str(e) for e in errs), f"F21: stage-0 failure is visible {errs}")
+        with mock.patch.object(wc, "_child", return_value=(0, {"ok": True, "trace_warning": "blocked"}, "")):
+            res = wc._cost_trace(mem, "s1", proj)
+        check(res == "failed(trace: blocked)", f"F19: a trace that was not written is not ok {res}")
+        with mock.patch.object(wc, "_child", return_value=(0, {"ok": True}, "")):
+            check(wc._cost_trace(mem, "s1", proj) == "ok", "F19: a written trace stays ok")
+        # F18: two rows (wrap-up window, whole session); ok only when both were written
+        answers = [(0, {"ok": True, "window": "wrap-up"}, ""), (0, {"ok": True, "trace_warning": "blocked"}, "")]
+        with mock.patch.object(wc, "_child", side_effect=answers) as child:
+            res = wc._cost_trace(mem, "s1", proj)
+        check(res == "failed(trace: blocked)", f"F18: a session row that was not written is not ok {res}")
+        check("--since-wrapup" in child.call_args_list[0][0][1] and "session" in child.call_args_list[1][0][1],
+              f"F18: first call asks for the wrap-up window, second for the session {child.call_args_list}")
+        with mock.patch.object(wc, "_child", return_value=(0, {"ok": True, "window": "session"}, "")) as child:
+            res = wc._cost_trace(mem, "s1", proj)
+        check(res == "ok" and child.call_count == 1, f"F18: no wrap-up start, the first row IS the session row {res} {child.call_count}")
+        # V-03: exit 0 without a parsable JSON answer proves nothing - not ok, for either call
+        with mock.patch.object(wc, "_child", return_value=(0, None, "garbage")):
+            res = wc._cost_trace(mem, "s1", proj)
+        check(res == "failed(trace: no JSON)", f"V-03: first call exit 0 but no JSON is not ok {res}")
+        answers = [(0, {"ok": True, "window": "wrap-up"}, ""), (0, None, "garbage")]
+        with mock.patch.object(wc, "_child", side_effect=answers):
+            res = wc._cost_trace(mem, "s1", proj)
+        check(res == "failed(trace: session row: no JSON)", f"V-03: second call exit 0 but no JSON is not ok {res}")
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
+
+
 def main():
     if not GIT:
         print("SKIPPED: git not found")
         return 0
     test_harvest()
     test_handoff()
+    test_handoff_real_overlap()
+    test_handoff_inside_project_lock()
+    test_handoff_lock_timeout()
     test_wikinote()
     test_core()
     test_nightly()
     test_collision()
+    test_silent_failures()
     print(f"\n{PASSED}/{TESTS} passed, {ERRORS} failed")
     return 1 if ERRORS else 0
 

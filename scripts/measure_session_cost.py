@@ -20,9 +20,17 @@ The two facts it is built to surface:
 Contract: fail-soft. Always exit 0, always exactly one JSON object on stdout (except
 `--help`, which prints help and no JSON so stdout stays parseable).
 
+Two windows: the whole session (default) or only the wrap-up (`--since-wrapup`: from the LAST
+real wrap-up start in the transcript, a slash command or a Skill-tool call, to the end). A trace
+row says which one it measured (`window`), which models answered in it (`models`) and which price
+table the dollars come from (`price_basis`). The token counts are measured; the dollars are the
+tokens times ONE price table, whatever model actually answered.
+
 Usage:
   python scripts/measure_session_cost.py <transcript.jsonl> [--rewrite-threshold N]
-                                         [--top N] [--human] [--append-trace <mem-dir>]
+                                         [--top N] [--human] [--since-wrapup]
+                                         [--rates in,cache_read,cache_creation,out]
+                                         [--append-trace <mem-dir> [--task LABEL]]
 
 Transcripts live in ~/.claude/projects/<project-slug>/<session-id>.jsonl
 """
@@ -56,6 +64,12 @@ DEFAULT_RATES = {
 }
 
 DEFAULT_REWRITE_THRESHOLD = 20_000
+DEFAULT_PRICE_BASIS = "opus-5-list"
+
+WRAPUP_SKILL = "agentic-os:wrap-up"
+# A slash command is stored as a user message that BEGINS with the command tags.
+_SLASH_RE = re.compile(r"\A\s*(?:<command-message>.*?</command-message>\s*)?<command-name>\s*/?" + re.escape(WRAPUP_SKILL)
+                       + r"\s*</command-name>", re.S)
 
 
 def _harden_stdout():
@@ -82,53 +96,100 @@ def _fail(msg, **extra):
     return _emit(payload)
 
 
-def parse_transcript(path, rewrite_threshold):
-    """Return (calls, malformed) where calls is an ordered list of per-API-call usage.
+def _is_wrapup_start(rec):
+    """True for a REAL wrap-up start. Quoted text (assistant answer, tool_result, pasted note) is not one."""
+    msg = rec.get("message")
+    if not isinstance(msg, dict):
+        return False
+    content = msg.get("content")
+    if rec.get("type") == "user":
+        if isinstance(content, str):
+            return bool(_SLASH_RE.match(content))
+        if isinstance(content, list):
+            return any(isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+                       and bool(_SLASH_RE.match(b["text"])) for b in content)
+        return False
+    if rec.get("type") == "assistant" and isinstance(content, list):
+        return any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill"
+                   and isinstance(b.get("input"), dict) and b["input"].get("skill") == WRAPUP_SKILL
+                   for b in content)
+    return False
 
-    Dedup key is `message.id`: the transcript writes one record per content block
-    (text / thinking / tool_use) and repeats the SAME usage object in each. Summing
-    over records instead of over ids is exactly the 2.77x error (err-010).
-    """
-    calls = []
-    seen = set()
-    malformed = 0
 
-    # utf-8-sig: a BOM would otherwise glue itself to the first record's JSON
-    # and silently drop that line as malformed (Codex review 2026-07-27).
+def _records(path):
+    """Yield (line index, record dict or None for a malformed line). Blank lines count as lines, so the
+    index is the same for wrapup_start_line and parse_transcript. utf-8-sig: a BOM would otherwise glue
+    itself to the first record's JSON and silently drop that line as malformed (Codex review 2026-07-27)."""
     with open(path, "r", encoding="utf-8-sig", errors="replace") as fh:
-        for line in fh:
+        for idx, line in enumerate(fh):
             line = line.strip()
             if not line:
                 continue
             try:
                 rec = json.loads(line)
             except Exception:
-                malformed += 1
+                yield idx, None
                 continue
-            if not isinstance(rec, dict):
-                malformed += 1
-                continue
-            msg = rec.get("message")
-            if not isinstance(msg, dict):
-                continue
-            usage = msg.get("usage")
-            mid = msg.get("id")
-            if not isinstance(usage, dict) or not mid or mid in seen:
-                continue
-            seen.add(mid)
-            calls.append({
-                "call": len(calls) + 1,
-                "message_id": mid,
-                "input": int(usage.get("input_tokens") or 0),
-                "cache_read": int(usage.get("cache_read_input_tokens") or 0),
-                "cache_creation": int(usage.get("cache_creation_input_tokens") or 0),
-                "output": int(usage.get("output_tokens") or 0),
-            })
-
-    return calls, malformed
+            yield idx, rec if isinstance(rec, dict) else None
 
 
-def analyse(calls, rates, rewrite_threshold, top):
+def wrapup_start_line(path):
+    """Index of the LAST line that really starts a wrap-up, or None. A session can hold several wrap-ups;
+    the last one is the one being measured. Structural, not a substring search."""
+    last = None
+    try:
+        for idx, rec in _records(path):
+            if rec is not None and _is_wrapup_start(rec):
+                last = idx
+    except OSError:
+        return None
+    return last
+
+
+def parse_transcript(path, rewrite_threshold, start_line=0):
+    """Return (calls, malformed) where calls is an ordered list of per-API-call usage.
+
+    Dedup key is `message.id`: the transcript writes one record per content block
+    (text / thinking / tool_use) and repeats the SAME usage object in each. Summing
+    over records instead of over ids is exactly the 2.77x error (err-010).
+
+    `start_line` keeps only the calls with a record at or after that line index. A message whose blocks
+    straddle the start (text before it, the Skill tool_use on it) belongs to the window.
+    """
+    calls = {}
+    malformed = 0
+
+    for idx, rec in _records(path):
+        if rec is None:
+            malformed += 1
+            continue
+        msg = rec.get("message")
+        if not isinstance(msg, dict):
+            continue
+        usage = msg.get("usage")
+        mid = msg.get("id")
+        if not isinstance(usage, dict) or not mid:
+            continue
+        if mid in calls:
+            calls[mid]["last_line"] = idx
+            continue
+        calls[mid] = {
+            "message_id": mid,
+            "model": msg.get("model") if isinstance(msg.get("model"), str) else None,
+            "last_line": idx,
+            "input": int(usage.get("input_tokens") or 0),
+            "cache_read": int(usage.get("cache_read_input_tokens") or 0),
+            "cache_creation": int(usage.get("cache_creation_input_tokens") or 0),
+            "output": int(usage.get("output_tokens") or 0),
+        }
+
+    kept = [c for c in calls.values() if c["last_line"] >= start_line]
+    for n, c in enumerate(kept, 1):
+        c["call"] = n
+    return kept, malformed
+
+
+def analyse(calls, rates, rewrite_threshold, top, window="session", price_basis=DEFAULT_PRICE_BASIS):
     totals = {"input": 0, "cache_read": 0, "cache_creation": 0, "output": 0}
     for c in calls:
         for k in totals:
@@ -158,6 +219,9 @@ def analyse(calls, rates, rewrite_threshold, top):
     result = {
         "ok": True,
         "estimate": False,
+        "window": window,
+        "models": sorted({c["model"] for c in calls if c.get("model")}),
+        "price_basis": price_basis,
         "api_calls": len(calls),
         "totals": totals,
         "cost_usd": {
@@ -188,7 +252,10 @@ def analyse(calls, rates, rewrite_threshold, top):
 
 def append_trace(mem_dir, result, task):
     """Write a MEASURED record next to cost-trace.sh's estimates ("estimate": false).
+    A row labelled "wrap-up" must have measured the wrap-up window; otherwise it is a "session" row.
     Fail-soft: a failed trace never changes the exit code or the stdout payload."""
+    if task == "wrap-up" and result.get("window") != "wrap-up":
+        task = "session"
     if _nested_store_guard(mem_dir):
         return (f"refusing to create a store inside .agent-memory "
                 f"({os.path.abspath(mem_dir)}) — nested-store guard")
@@ -199,6 +266,9 @@ def append_trace(mem_dir, result, task):
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "task": task,
             "estimate": False,
+            "window": result["window"],
+            "models": result["models"],
+            "price_basis": result["price_basis"],
             "api_calls": result["api_calls"],
             "context_tokens_sum": result["context_len"]["sum"],
             "output_tokens": result["totals"]["output"],
@@ -215,6 +285,7 @@ def append_trace(mem_dir, result, task):
 
 def human_report(r):
     lines = [
+        f"Fenster: {r['window']}  Modelle: {', '.join(r['models']) or 'unbekannt'}  Preisbasis: {r['price_basis']}",
         f"API-Calls (dedup message.id): {r['api_calls']}",
         f"Kontext-Transport: {r['transport_share'] * 100:.1f}% des Token-Volumens",
         f"Kosten: ${r['cost_usd']['total']:.2f}  "
@@ -246,6 +317,9 @@ def main(argv):
                              "instead of passing a path (wrap-up knows only its id, T-016)")
     parser.add_argument("--projects-root", default=None,
                         help="transcript root for --locate (default: ~/.claude/projects)")
+    parser.add_argument("--since-wrapup", action="store_true",
+                        help="measure only from the last real wrap-up start (slash command or Skill call); "
+                             "without one the whole session is measured and labelled 'session'")
     parser.add_argument("--append-trace", metavar="MEM_DIR", default=None,
                         help="append a measured record to <MEM_DIR>/metrics/cost-trace.jsonl")
     parser.add_argument("--task", default="session", help="task label for --append-trace")
@@ -283,6 +357,7 @@ def main(argv):
         return _fail("no transcript given")
 
     rates = dict(DEFAULT_RATES)
+    price_basis = DEFAULT_PRICE_BASIS
     if args.rates:
         try:
             vals = [float(x) for x in args.rates.split(",")]
@@ -290,18 +365,24 @@ def main(argv):
                 raise ValueError
             for key, val in zip(("input", "cache_read", "cache_creation", "output"), vals):
                 rates[key] = val / 1_000_000
+            price_basis = "custom"
         except Exception:
             return _fail("--rates needs 4 comma-separated numbers (USD per 1M tokens)")
 
     if not os.path.isfile(args.transcript):
         return _fail("transcript not found", transcript=args.transcript)
 
+    window, start_line = "session", 0
     try:
-        calls, malformed = parse_transcript(args.transcript, args.rewrite_threshold)
+        if args.since_wrapup:
+            found = wrapup_start_line(args.transcript)
+            if found is not None:
+                window, start_line = "wrap-up", found
+        calls, malformed = parse_transcript(args.transcript, args.rewrite_threshold, start_line)
     except Exception as exc:
         return _fail("transcript unreadable: %s" % exc, transcript=args.transcript)
 
-    result = analyse(calls, rates, args.rewrite_threshold, args.top)
+    result = analyse(calls, rates, args.rewrite_threshold, args.top, window, price_basis)
     result["transcript"] = args.transcript
     result["malformed_lines"] = malformed
 

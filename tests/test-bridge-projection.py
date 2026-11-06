@@ -190,6 +190,28 @@ def pointer_tests():
           callable(getattr(bp, "shown", None)))
 
 
+def unterminated_tests():
+    """A managed block without its end marker must never swallow foreign lines."""
+    raw = ("Praeambel\n" + BEGIN + " x -->\nalt\nEIGENE REGEL\n").encode("utf-8")
+    # V-01: a second begin marker inside an open block means the first block never closed -
+    # a later end marker must not be taken as its end (it would swallow EIGENE REGEL)
+    nested = ("Praeambel\n" + BEGIN + " x -->\nEIGENE REGEL\n" + BEGIN + " y -->\ngeneriert\n"
+              + END + "\nNachwort\n").encode("utf-8")
+    approved = [learning("L1", "2026-07-17", "Regel eins", bridge="approved")]
+    for label, rows, raw in (("approved learnings", approved, raw), ("0 approved", [], raw),
+                             ("nested begin, approved learnings", approved, nested),
+                             ("nested begin, 0 approved", [], nested)):
+        with tempfile.TemporaryDirectory() as tmp:
+            mem, agents = setup(tmp, rows)
+            with open(agents, "wb") as f:
+                f.write(raw)
+            r = run([mem, "--agents-md", agents], cwd=tmp)
+            check(f"unterminated block ({label}): exit 3", r.returncode == 3, r.stdout + r.stderr)
+            with open(agents, "rb") as f:
+                check(f"unterminated block ({label}): file untouched", f.read() == raw)
+            check(f"unterminated block ({label}): reason named", "unterminated" in r.stdout, r.stdout + r.stderr)
+
+
 def main():
     print("=== bridge_projection.py tests ===")
     check("script exists", os.path.isfile(SCRIPT))
@@ -533,6 +555,7 @@ def main():
     check("BOM store: AGENTS.md identical to the BOM-less result", outs["bom"] == outs["plain"])
 
     pointer_tests()
+    unterminated_tests()
 
     n = len(FAILURES)
     print(f"=== {n} failure(s) ===" if n else "=== all tests passed ===")

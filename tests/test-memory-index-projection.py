@@ -348,6 +348,37 @@ def main():
         check("shown(): pointers first, then the listed learnings",
               [e["id"] for e in mip.shown(mem)][:3] == ["PB", "PA", "PC"], str(mip.shown(mem)))
 
+    # 12. a managed block without its end marker must never swallow foreign lines
+    for label, rows, raw in (
+            ("approved learnings", [learning("L1", "2026-08-01", "Eine Regel")],
+             ("Praeambel\n" + BEGIN + " x -->\nalt\nEIGENE ZEILE\n").encode("utf-8")),
+            ("0 approved", [],
+             ("Praeambel\n" + BEGIN + " x -->\nalt\nEIGENE ZEILE\n").encode("utf-8")),
+            ("block on line 1", [learning("L1", "2026-08-01", "Eine Regel")],
+             (BEGIN + " x -->\nalt\nEIGENE ZEILE\n").encode("utf-8")),
+            # V-01: a second begin inside an open block - a later end marker is not the first block's end
+            ("nested begin", [learning("L1", "2026-08-01", "Eine Regel")],
+             ("Praeambel\n" + BEGIN + " x -->\nEIGENE ZEILE\n" + BEGIN + " y -->\ngeneriert\n"
+              + END + "\nNachwort\n").encode("utf-8")),
+            ("nested begin, 0 approved", [],
+             ("Praeambel\n" + BEGIN + " x -->\nEIGENE ZEILE\n" + BEGIN + " y -->\ngeneriert\n"
+              + END + "\nNachwort\n").encode("utf-8")),
+            ("nested begin, block on line 1", [learning("L1", "2026-08-01", "Eine Regel")],
+             (BEGIN + " x -->\nEIGENE ZEILE\n" + BEGIN + " y -->\ngeneriert\n"
+              + END + "\nNachwort\n").encode("utf-8")),
+            ("nested begin, block on line 1, 0 approved", [],
+             (BEGIN + " x -->\nEIGENE ZEILE\n" + BEGIN + " y -->\ngeneriert\n"
+              + END + "\nNachwort\n").encode("utf-8"))):
+        with tempfile.TemporaryDirectory() as tmp:
+            mem, md = setup(tmp, rows, memory_body="")
+            with open(md, "wb") as f:
+                f.write(raw)
+            r = run([mem, "--memory-md", md], cwd=tmp)
+            check(f"unterminated block ({label}): exit 3", r.returncode == 3, r.stdout + r.stderr)
+            with open(md, "rb") as f:
+                check(f"unterminated block ({label}): file untouched", f.read() == raw)
+            check(f"unterminated block ({label}): reason named", "unterminated" in r.stdout, r.stdout + r.stderr)
+
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")
     return 1 if FAILURES else 0

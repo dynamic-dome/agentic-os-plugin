@@ -22,6 +22,10 @@ Bootstrap the `.agent-memory/` knowledge system in the current project directory
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/mem-schema.sh" "$PWD/.agent-memory"
    ```
 
+   For a store it creates fresh inside a git repo the script also adds `.agent-memory/` to the
+   local `.git/info/exclude` (no `.gitignore` is touched); an existing store is never excluded.
+   In a folder without git this command still creates the store - running it is the opt-in.
+
    `scripts/mem-schema.sh` is the ONE definition of the memory schema — the SessionStart
    hook sources the same file. This guarantees `/init` and the hook can never drift
    (the historical L4 bug). If you add a new memory file, add it in `mem-schema.sh` only.

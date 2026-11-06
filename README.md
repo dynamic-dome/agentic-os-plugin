@@ -34,8 +34,8 @@ Two calls bracket a session:
 - **End** (`wrap-up`) writes what happened back through deterministic scripts: iterations, decisions,
   learnings, open tasks and a session summary. What the agent notices about how you work is queued as a
   candidate first. It moves into `identity/user.md` once you confirm it or the same signal comes up twice,
-  and every change is logged before the edit. The agent's self-description (`identity/soul.md`) changes
-  only on your explicit yes.
+  and every change is logged before the edit. `identity/soul.md` is readable history, not a growth path:
+  it no longer changes.
 
 Everything in between is normal Claude Code work. Two command hooks do bookkeeping only (the briefing at
 start, a dirty-tracker after edits). No hook calls a language model.
@@ -46,7 +46,7 @@ start, a dirty-tracker after edits). No hook calls a language model.
 ├── iterations/     what was done, including what failed
 ├── learnings/      lessons that should outlive the session
 ├── patterns/       recurring patterns extracted from iterations
-├── identity/       gated candidate traits for user and agent
+├── identity/       gated candidate traits for the user profile
 ├── working/        short-lived session state
 └── session-summary.md
 ```
@@ -62,6 +62,16 @@ repository.
 claude plugin marketplace add dynamic-dome/agentic-os-plugin
 claude plugin install agentic-os@agentic-os-marketplace
 ```
+
+On Claude Code 2.1.275 or later one line does both:
+
+```
+/plugin install agentic-os --marketplace dynamic-dome/agentic-os-plugin
+```
+
+The start hook creates `.agent-memory/` on its own only at the top level of a git repository, and adds it
+to `.git/info/exclude` so it stays out of `git status`. In a folder without git, run `/agentic-os:init` or
+switch on the plugin option `auto_init_non_git`.
 
 Then run `/agentic-os:init` in a project. `/agentic-os:status` shows the health of the store,
 `/agentic-os:memory-audit` reports drift and stale entries.
@@ -93,6 +103,6 @@ are fixed in this version.
   session transcript.
 - Some comments and the changelog refer to `membrain`, a private research repository in which several of
   the designs were worked out. Those references cannot be followed from here.
-- Tests: `bash tests/run-all.sh`.
+- Tests: `python tests/run-isolated.py` (runs the suite against a throwaway home; `tests/run-all.sh` refuses to start in a home that holds Claude Code session data).
 
 License: MIT

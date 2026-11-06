@@ -283,16 +283,18 @@ def main():
           "projection guard: a hand-written pointer over an unreleased rule-class member is not projected")
 
     print("== 'by: owner' is described as the honor system it is (DCO #10057 (3))")
-    # CLAUDE.md is not part of the public export (release/freigabe.txt): skip its checks there.
-    has_claude_md = os.path.exists(os.path.join(ROOT, "CLAUDE.md"))
-    for rel in ("skills/wrap-up/SKILL.md", "skills/wrap-up/references/wrapup-schemas.md", "CLAUDE.md"):
-        if rel == "CLAUDE.md" and not has_claude_md:
-            print("  SKIP: CLAUDE.md not found (public export)")
+    # The long conventions (formerly in CLAUDE.md) live in the private conventions file. It is not part
+    # of the public export (release/freigabe.txt): skip its checks there.
+    INTERN = "docs/konventionen-intern.md"
+    has_claude_md = os.path.exists(os.path.join(ROOT, INTERN))
+    for rel in ("skills/wrap-up/SKILL.md", "skills/wrap-up/references/wrapup-schemas.md", INTERN):
+        if rel == INTERN and not has_claude_md:
+            print("  SKIP: private conventions file not found (public export)")
             continue
         with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
             check("honor system" in fh.read().lower(), f"{rel} calls 'by: owner' an honor system / self-commitment")
     if has_claude_md:
-        with open(os.path.join(ROOT, "CLAUDE.md"), encoding="utf-8") as fh:
+        with open(os.path.join(ROOT, INTERN), encoding="utf-8") as fh:
             claude_md = fh.read()
         check("not a lock the script enforces" in claude_md, "CLAUDE.md: 'never on the agent's say-so' is stated as a commitment, not a technical lock (DCO #10062 (3))")
     import re as _re
