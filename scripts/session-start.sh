@@ -298,6 +298,12 @@ if [ -d "$MEMORY_DIR" ]; then
   ERR_COUNT="${ERR_COUNT:-0}"; ITER_COUNT="${ITER_COUNT:-0}"; PAT_COUNT="${PAT_COUNT:-0}"
   context="$context | Stats: ${ITER_COUNT} iter, ${ERR_COUNT} errors, ${PAT_COUNT} patterns"
 
+  # Grep does not see a git-ignored store, only an explicit path does: a fact that stood only in the store
+  # was found in 5 of 10 runs (eval 2026-11-07). Said only when true, and outside the compact status block.
+  if git -C "$(dirname "$MEMORY_DIR")" check-ignore -q .agent-memory 2>/dev/null; then
+    context="$context\nMemory search: .agent-memory/ is git-ignored, so Grep finds it only with an explicit path. Before you debug an error or change a design, search it for earlier attempts and decisions: context/decisions.json, learnings/learnings.json, iterations/iteration-log.md."
+  fi
+
   [ "${ERR_COUNT:-0}" -gt 15 ] 2>/dev/null && context="$context\nNote: Many errors logged — consider running pattern-extractor."
 
   # Env-Vars setzen
@@ -319,9 +325,20 @@ fi
 # session-summary.md, whose "Next Steps" is only a rendering of that file.
 # Fail-soft: no python or unreadable JSON -> fall back to the summary section.
 BRIEFING=""
+# On Windows python comes first: python3 is often only a launcher of the Python manager, which
+# downloads and registers a runtime when LOCALAPPDATA is redirected (plugin eval). Elsewhere
+# python3 stays first, python can be missing or Python 2.
 PY=""
-command -v python3 > /dev/null 2>&1 && PY=python3
-[ -z "$PY" ] && command -v python > /dev/null 2>&1 && PY=python
+case "$OSTYPE" in
+  msys*|cygwin*) PY_ORDER="python python3" ;;
+  *) PY_ORDER="python3 python" ;;
+esac
+for PY_CANDIDATE in $PY_ORDER; do
+  if command -v "$PY_CANDIDATE" > /dev/null 2>&1; then
+    PY="$PY_CANDIDATE"
+    break
+  fi
+done
 NEXT_STEPS=""
 if [ -n "$PY" ] && [ -f "$MEMORY_DIR/context/open-tasks.json" ]; then
   NEXT_STEPS=$("$PY" - "$MEMORY_DIR/context/open-tasks.json" 2>/dev/null <<'PYEOF'

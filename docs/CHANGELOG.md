@@ -4,6 +4,12 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-07] Release v5.13.1 — Suchhinweis im Briefing
+
+- **Das Briefing sagt, wo das Gedächtnis liegt.** Ist `.agent-memory/` git-ignoriert, findet Grep den Store nur mit ausdrücklichem Pfad. Eine Zeile hinter dem Statusblock nennt das und die Dateien, in denen frühere Versuche und Entscheidungen stehen. Für einen getrackten Store oder außerhalb von Git erscheint sie nicht, dort wäre sie falsch.
+
+- **Der SessionStart-Hook ruft unter Windows zuerst `python` auf.** `python3` ist dort oft nur ein Launcher des Python-Managers. Zeigt `LOCALAPPDATA` woanders hin, wie in `claude plugin eval`, lädt er eine Laufzeit herunter und trägt sie in die Registry ein. Außerhalb von Windows bleibt `python3` vorn, weil `python` dort fehlen oder Python 2 sein kann.
+
 ## [2026-11-06] Release v5.13.0 — Robustheit
 
 - **Testläufe im echten Home sind gesperrt.** `tests/run-all.sh` bricht mit Exit 2 ab, wenn `AGENTIC_OS_TEST_HOME` leer ist und das Home Claude-Code-Sitzungsdaten (`.claude/projects`) enthält; `--check-home` prüft nur diese Sperre. Anlass: ein versehentlicher Lauf gegen das echte Home.

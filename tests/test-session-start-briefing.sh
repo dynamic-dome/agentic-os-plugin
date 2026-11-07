@@ -152,6 +152,85 @@ printf '\xef\xbb\xbf[{"id": "T-BOM", "title": "BOM task", "status": "open"}]\n' 
 CTX3=$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP/bom" bash "$DIR/scripts/session-start.sh" 2>/dev/null | PYTHONIOENCODING=utf-8 python -c "import sys,json; print(json.loads(sys.stdin.read())['hookSpecificOutput']['additionalContext'])" 2>/dev/null)
 echo "$CTX3" | grep -q "T-BOM" && pass "next steps: BOM open-tasks.json is read" || fail "next steps: BOM open-tasks.json ignored"
 
+# Interpreter choice: on Windows `python3` is often only a launcher of the Python manager. With a redirected
+# LOCALAPPDATA (plugin eval) it downloads and registers a runtime, so the hook must not call it while a plain
+# `python` exists. Elsewhere python3 stays first: `python` can be missing or Python 2.
+REAL_PY=$(command -v python || command -v python3)
+make_py() {  # make_py <dir> <name> <log>: a wrapper that logs its name, then runs the real interpreter
+  mkdir -p "$1"
+  printf '#!/bin/bash\necho %s >> "%s"\nexec "%s" "$@"\n' "$2" "$3" "$REAL_PY" > "$1/$2"
+  chmod +x "$1/$2"
+}
+mkdir -p "$TMP/pysel/.agent-memory/context" && cd "$TMP/pysel"
+echo '[{"id": "T-PY", "title": "interpreter", "status": "open"}]' > "$TMP/pysel/.agent-memory/context/open-tasks.json"
+PYLOG="$TMP/py-both.log"
+make_py "$TMP/bin-both" python "$PYLOG"
+make_py "$TMP/bin-both" python3 "$PYLOG"
+echo '{}' | PATH="$TMP/bin-both:$PATH" CLAUDE_PROJECT_DIR="$TMP/pysel" "$BASH" "$DIR/scripts/session-start.sh" > /dev/null 2>&1
+USED=$(sort -u "$PYLOG" 2>/dev/null | tr '\n' ' ')
+case "$OSTYPE" in
+  msys*|cygwin*)
+    grep -qx python "$PYLOG" 2>/dev/null && ! grep -qx python3 "$PYLOG" 2>/dev/null \
+      && pass "interpreter: Windows uses python, never the python3 launcher" \
+      || fail "interpreter on Windows: used $USED" ;;
+  *)
+    [ "$(head -1 "$PYLOG" 2>/dev/null)" = python3 ] \
+      && pass "interpreter: python3 stays first outside Windows" \
+      || fail "interpreter outside Windows: used $USED" ;;
+esac
+
+# Only one interpreter on PATH: the hook still finds it and still briefs. Needs a PATH that keeps the shell
+# tools without any python, which a Linux /usr/bin does not allow.
+NOPY=""
+OLD_IFS=$IFS; IFS=:
+for d in $PATH; do
+  [ -e "$d/python" ] || [ -e "$d/python.exe" ] || [ -e "$d/python3" ] || [ -e "$d/python3.exe" ] || NOPY="$NOPY:$d"
+done
+IFS=$OLD_IFS
+if PATH="${NOPY#:}" command -v sed > /dev/null 2>&1; then
+  for only in python python3; do
+    PYLOG="$TMP/py-$only.log"
+    make_py "$TMP/bin-$only" "$only" "$PYLOG"
+    CTX4=$(echo '{}' | PATH="$TMP/bin-$only$NOPY" CLAUDE_PROJECT_DIR="$TMP/pysel" "$BASH" "$DIR/scripts/session-start.sh" 2>/dev/null)
+    printf '%s' "$CTX4" | grep -q 'T-PY' && grep -qx "$only" "$PYLOG" 2>/dev/null \
+      && pass "interpreter: only $only on PATH still briefs" \
+      || fail "interpreter: only $only on PATH, no briefing"
+  done
+else
+  echo "  SKIP: interpreter fallback needs shell tools outside the python directories"
+fi
+
+# Memory search hint: Grep does not see a git-ignored store. Measured 2026-11-07: a fact that stood only in the store
+# was found in 5 of 10 runs. The hint is true only for an ignored store and stays out of the compact status block.
+hint_context() {  # hint_context <dir>: the additionalContext of a session started in <dir>
+  (cd "$1" && echo '{}' | CLAUDE_PROJECT_DIR="$1" bash "$DIR/scripts/session-start.sh" 2>/dev/null) \
+    | PYTHONIOENCODING=utf-8 python -c "import sys,json; print(json.loads(sys.stdin.read())['hookSpecificOutput']['additionalContext'])" 2>/dev/null
+}
+for kind in gitignore exclude tracked plain; do
+  H="$TMP/hint-$kind"
+  mkdir -p "$H/.agent-memory/context"
+  echo '[]' > "$H/.agent-memory/context/open-tasks.json"
+  [ "$kind" = plain ] || git -C "$H" init -q
+  [ "$kind" = gitignore ] && echo '.agent-memory/' > "$H/.gitignore"
+  [ "$kind" = exclude ] && echo '.agent-memory/' >> "$H/.git/info/exclude"
+  [ "$kind" = tracked ] && git -C "$H" add .agent-memory
+  CTX5=$(hint_context "$H")
+  [ "$kind" = tracked ] && [ -z "$(git -C "$H" ls-files .agent-memory)" ] && fail "memory search hint: tracked fixture tracks nothing"
+  case "$kind" in
+    gitignore|exclude)
+      printf '%s' "$CTX5" | sed -n '/^Then answer the user/,$p' | grep -q 'Memory search:' \
+        && pass "memory search hint: $kind store gets it after the status block" \
+        || fail "memory search hint: missing for a $kind store"
+      printf '%s' "$CTX5" | sed '/^Then answer the user/,$d' | grep -q 'Memory search:' \
+        && fail "memory search hint: inside the status block ($kind)" \
+        || pass "memory search hint: status block stays compact ($kind)" ;;
+    *)
+      printf '%s' "$CTX5" | grep -q 'Memory search:' \
+        && fail "memory search hint: a $kind store is visible to Grep, the hint would be false" \
+        || pass "memory search hint: none for a $kind store" ;;
+  esac
+done
+
 # Fresh init path still works and still uses the same contract.
 mkdir -p "$TMP/fresh" && cd "$TMP/fresh" && git init -q   # 5.13.0: a folder without git no longer auto-inits
 OUT2=$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP/fresh" bash "$DIR/scripts/session-start.sh" 2>/dev/null)
