@@ -4,6 +4,12 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-11] Release v5.13.2 — Codex-Briefing nachgezogen
+
+- **Das Codex-Briefing folgt denselben Regeln wie der SessionStart-Hook.** Es ruft unter Windows zuerst `python` auf (nicht den Launcher `python3`) und zeigt die Zeile `Memory search:`, wenn `.agent-memory/` git-ignoriert ist; für einen getrackten Store oder außerhalb von Git erscheint sie nicht.
+- **Task-Titel im Codex-Briefing behalten ihre Zeichen.** Die Task-Liste wurde unter Windows als cp1252 ausgegeben: Umlaute wurden zu `U+FFFD`, ein Zeichen außerhalb von cp1252 (etwa ein Emoji) ließ die ganze Liste wegfallen. Die Ausgabe ist jetzt UTF-8. Der Test ruft den Hook ohne das `PYTHONIOENCODING` des isolierten Runners auf, das den Fehler sonst verdeckt.
+- `release/`: `abschluss` wertet die Sitzungsmarken `.in_use/<pid>` im Claude-Cache nicht mehr als fremde Dateien; der Isolationsvergleich des Exports lässt einen Wiki-Unterordner aus, den nur andere Sitzungen beschreiben, und ein Test sichert, dass der Plugin-Code dort nie schreibt.
+
 ## [2026-11-07] Release v5.13.1 — Suchhinweis im Briefing
 
 - **Das Briefing sagt, wo das Gedächtnis liegt.** Ist `.agent-memory/` git-ignoriert, findet Grep den Store nur mit ausdrücklichem Pfad. Eine Zeile hinter dem Statusblock nennt das und die Dateien, in denen frühere Versuche und Entscheidungen stehen. Für einen getrackten Store oder außerhalb von Git erscheint sie nicht, dort wäre sie falsch.

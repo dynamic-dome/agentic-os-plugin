@@ -127,5 +127,91 @@ OUT=$(cd "$PROJ6" && echo '{}' | CLAUDE_PROJECT_DIR="$PROJ6" bash "$SS" 2>/dev/n
 [ "$RC" -eq 0 ] && pass "claude: exit 0" || fail "claude: exit $RC"
 [ -d "$PROJ6/.agent-memory" ] && pass "claude: auto-init still works" || fail "claude: auto-init broken"
 
+# 7. Interpreter choice, same rule as session-start.sh: on Windows `python3` is often only a launcher of the
+#    Python manager (downloads and registers a runtime under a redirected LOCALAPPDATA), so `python` comes first.
+#    Elsewhere python3 stays first: `python` can be missing or Python 2.
+REAL_PY=$(command -v python || command -v python3)
+make_py() {  # make_py <dir> <name> <log>: a wrapper that logs its name, then runs the real interpreter
+  mkdir -p "$1"
+  printf '#!/bin/bash\necho %s >> "%s"\nexec "%s" "$@"\n' "$2" "$3" "$REAL_PY" > "$1/$2"
+  chmod +x "$1/$2"
+}
+PYLOG="$TMP/py-both.log"
+make_py "$TMP/bin-both" python "$PYLOG"
+make_py "$TMP/bin-both" python3 "$PYLOG"
+OUT=$(cd "$PROJ2" && echo '{}' | PATH="$TMP/bin-both:$PATH" CLAUDE_PROJECT_DIR="$PROJ2" "$BASH" "$CB" 2>/dev/null)
+USED=$(sort -u "$PYLOG" 2>/dev/null | tr '\n' ' ')
+echo "$OUT" | grep -q "T-99" && pass "interpreter: briefing still built" || fail "interpreter: no briefing: $OUT"
+case "$OSTYPE" in
+  msys*|cygwin*)
+    grep -qx python "$PYLOG" 2>/dev/null && ! grep -qx python3 "$PYLOG" 2>/dev/null \
+      && pass "interpreter: Windows uses python, never the python3 launcher" \
+      || fail "interpreter on Windows: used $USED" ;;
+  *)
+    [ "$(head -1 "$PYLOG" 2>/dev/null)" = python3 ] \
+      && pass "interpreter: python3 stays first outside Windows" \
+      || fail "interpreter outside Windows: used $USED" ;;
+esac
+
+# 8. Memory search hint, same rule as session-start.sh: rg and Grep skip a git-ignored store, so the hint is
+#    given only when it is true (ignored via .gitignore or .git/info/exclude), never for a tracked or non-git store.
+codex_context() {  # codex_context <dir>: the additionalContext of a Codex session started in <dir>
+  (cd "$1" && echo '{}' | CLAUDE_PROJECT_DIR="$1" bash "$CB" 2>/dev/null) \
+    | PYTHONIOENCODING=utf-8 python -c "import sys,json; print((json.loads(sys.stdin.read()).get('hookSpecificOutput') or {}).get('additionalContext',''))" 2>/dev/null
+}
+for kind in gitignore exclude tracked plain; do
+  H="$TMP/hint-$kind"
+  mkdir -p "$H/.agent-memory/context"
+  echo '[{"id": "T-H", "title": "hint", "status": "open"}]' > "$H/.agent-memory/context/open-tasks.json"
+  case "$kind" in
+    gitignore) git init -q "$H"; echo ".agent-memory/" > "$H/.gitignore" ;;
+    exclude)   git init -q "$H"; echo ".agent-memory/" >> "$H/.git/info/exclude" ;;
+    tracked)   git init -q "$H"; git -C "$H" add .agent-memory   # really in the index, not just untracked
+               git -C "$H" ls-files --error-unmatch .agent-memory/context/open-tasks.json >/dev/null 2>&1 \
+                 || fail "memory search hint: tracked fixture is not in the index" ;;
+    plain)     ;;
+  esac
+  CTX=$(codex_context "$H")
+  # a missing hint counts only if the briefing itself was built
+  printf '%s' "$CTX" | grep -q 'T-H' || fail "memory search hint: no briefing for the $kind store: $CTX"
+  case "$kind" in
+    gitignore|exclude)
+      printf '%s' "$CTX" | grep -q 'Memory search:' \
+        && pass "memory search hint: $kind store gets it" \
+        || fail "memory search hint: missing for a $kind store: $CTX" ;;
+    *)
+      printf '%s' "$CTX" | grep -q 'Memory search:' \
+        && fail "memory search hint: a $kind store is visible to rg, the hint would be false" \
+        || pass "memory search hint: none for a $kind store" ;;
+  esac
+done
+
+# 9. Task titles keep their characters: the task list is printed by python, whose pipe encoding on Windows is
+#    cp1252 unless set. Umlauts then became U+FFFD, and a character outside cp1252 dropped the whole list.
+PROJ9="$TMP/proj-utf8"; mkdir -p "$PROJ9/.agent-memory/context"
+printf '[{"id": "T-U", "title": "T\xc3\xbcr pr\xc3\xbcfen \xf0\x9f\x9a\xaa", "status": "open"}]\n' > "$PROJ9/.agent-memory/context/open-tasks.json"
+# A real hook start has no PYTHONIOENCODING; the isolated runner sets it and would hide the fault.
+OUT=$(cd "$PROJ9" && echo '{}' | env -u PYTHONIOENCODING -u PYTHONUTF8 CLAUDE_PROJECT_DIR="$PROJ9" bash "$CB" 2>/dev/null)
+CTX=$OUT
+printf '%s' "$OUT" | PYTHONIOENCODING=utf-8 python -c "
+import sys, json
+ac = (json.loads(sys.stdin.buffer.read().decode('utf-8')).get('hookSpecificOutput') or {}).get('additionalContext', '')
+assert 'T-U: Tür prüfen \U0001f6aa' in ac, ascii(ac[-200:])
+" 2>/dev/null && pass "utf8: task title keeps umlauts and non-cp1252 characters" || fail "utf8: task title damaged: $CTX"
+
+# 10. payload.cwd with a non-ASCII path (a user folder like "Jürgen") resolves the store too; again without
+#     the runner's PYTHONIOENCODING, because the path is printed by python through the same pipe. Measured
+#     2026-11-11 on Git Bash: python hands over cp1252 bytes (and CRLF), yet bash maps them to the right folder
+#     and strips the CR, so this is a behaviour guard, not the proof of a fix (it is green on the old code too).
+PROJ10="$TMP/proj-j$(printf '\xc3\xbc')rgen"; mkdir -p "$PROJ10/.agent-memory/context"
+echo '[{"id": "T-NA", "title": "non-ascii cwd", "status": "open"}]' > "$PROJ10/.agent-memory/context/open-tasks.json"
+CWD10=$(cd "$PROJ10" && (pwd -W 2>/dev/null || pwd))
+PYTHONIOENCODING=utf-8 python -c "
+import json, sys
+open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({'cwd': sys.argv[2]}, ensure_ascii=False))
+" "$TMP/payload10.json" "$CWD10"
+OUT=$(cd "$TMP" && env -u CLAUDE_PROJECT_DIR -u PYTHONIOENCODING -u PYTHONUTF8 bash "$CB" < "$TMP/payload10.json" 2>/dev/null)
+echo "$OUT" | grep -q "T-NA" && pass "payload-cwd: non-ASCII path resolves the store" || fail "payload-cwd: non-ASCII path lost: $OUT"
+
 echo "=== Results: $PASSED/$TESTS passed, $ERRORS failures ==="
 [ "$ERRORS" -eq 0 ] && exit 0 || exit 1

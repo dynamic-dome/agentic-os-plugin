@@ -12,8 +12,18 @@ emit_minimal() { echo '{"continue": true}'; exit 0; }
 
 [ -n "${AGENTIC_OS_CODEX_HEADLESS:-}" ] && emit_minimal
 
-PYBIN="python3"; command -v python3 >/dev/null 2>&1 || PYBIN="python"
-command -v "$PYBIN" >/dev/null 2>&1 || emit_minimal
+# Same order as session-start.sh: on Windows python first, because python3 is often only a launcher of the
+# Python manager, which downloads and registers a runtime when LOCALAPPDATA is redirected. Elsewhere python3
+# stays first, python can be missing or Python 2.
+case "$OSTYPE" in
+  msys*|cygwin*) PY_ORDER="python python3" ;;
+  *) PY_ORDER="python3 python" ;;
+esac
+PYBIN=""
+for PY_CANDIDATE in $PY_ORDER; do
+  command -v "$PY_CANDIDATE" >/dev/null 2>&1 && { PYBIN="$PY_CANDIDATE"; break; }
+done
+[ -n "$PYBIN" ] || emit_minimal
 
 # Projektpfad-Aufloesung. Normalfall (interaktive TUI, `codex exec`, Desktop im Projekt):
 # der Hook laeuft mit $PWD = Projekt -> KEIN stdin-Lesen noetig (schnell, kein Hang-Risiko,
@@ -57,12 +67,20 @@ try:
     raw = json.load(open(sys.argv[1], encoding="utf-8-sig"))  # BOM-tolerant (#9695)
     tasks = raw if isinstance(raw, list) else raw.get("tasks", [])
     items = [t for t in tasks if isinstance(t, dict) and t.get("status") in ("open", "blocked")]
+    # the pipe is cp1252 on Windows unless set: umlauts became U+FFFD, a non-cp1252 character dropped the list
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print("; ".join(f"{t.get('id','?')}: {str(t.get('title',''))[:120]}" for t in items[:5]))
 except Exception:
     pass
 EOPY
 )
 [ -n "$OPEN_TASKS" ] && ctx="$ctx\nOffene Tasks: $OPEN_TASKS"
+
+# Memory search hint, same rule as session-start.sh: rg and Grep skip a git-ignored store, only an explicit
+# path finds it (eval 2026-11-07: a fact that stood only in the store was found in 5 of 10 runs). Said only when true.
+if git -C "$PROJECT_DIR" check-ignore -q .agent-memory 2>/dev/null; then
+  ctx="$ctx\nMemory search: .agent-memory/ is git-ignored, so rg and Grep find it only with an explicit path. Before you debug an error or change a design, search it for earlier attempts and decisions: context/decisions.json, learnings/learnings.json, iterations/iteration-log.md."
+fi
 
 # 3) Statischer Atlas-Hinweis (Pull-Pfad aus T-14, membrain/membridge.md §3.5)
 ATLAS_HINT="Vor Spezialaufgaben Atlas fragen: curl -s -X POST http://127.0.0.1:7801/search -H \"Content-Type: application/json\" -d '{\"query\": \"<thema>\", \"top_k\": 5}'"

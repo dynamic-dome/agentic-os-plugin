@@ -285,7 +285,7 @@ def main():
     print("== 'by: owner' is described as the honor system it is (DCO #10057 (3))")
     # The long conventions (formerly in CLAUDE.md) live in the private conventions file. It is not part
     # of the public export (release/freigabe.txt): skip its checks there.
-    INTERN = "docs/konventionen-intern.md"
+    INTERN = "docs/private-conventions.md"
     has_claude_md = os.path.exists(os.path.join(ROOT, INTERN))
     for rel in ("skills/wrap-up/SKILL.md", "skills/wrap-up/references/wrapup-schemas.md", INTERN):
         if rel == INTERN and not has_claude_md:
