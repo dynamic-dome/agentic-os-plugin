@@ -83,6 +83,49 @@ def _dirty_sessions(mem):
     return out, None
 
 
+def _own_marker(mem, session_id):
+    """This session's dirty file, dirty or not: work done ONLY in other stores leaves it clean (the tracker sets
+    dirty only for own work), and that is exactly the case the store hint is for. Same name rule as the tracker."""
+    sid = "".join(c for c in str(session_id or "")[:64] if c.isalnum() or c in "-_")
+    try:
+        with open(os.path.join(mem, "working", f"dirty-{sid}.json"), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return data if sid and isinstance(data, dict) else None
+
+
+def _suggested_store(mem, session_id, dirty):
+    """T-079: name the store that got more of this wrap-up's work than its own store - a wrap-up started in ~ that
+    consolidates mostly DCO work belongs in the DCO store. Counts distinct files (own: touched_files outside
+    .agent-memory; foreign: foreign_touched per store root) over this session's marker and every dirty marker.
+    A hint only: a tie or more own work -> None; nothing is moved or written."""
+    markers = [d for _, d in dirty]
+    own_marker = _own_marker(mem, session_id)
+    if own_marker is not None and not any(d is own_marker or d.get("session_id") == own_marker.get("session_id")
+                                          for d in markers):
+        markers.append(own_marker)
+    own, foreign = set(), {}
+    for data in markers:
+        touched = data.get("touched_files")
+        for p in touched if isinstance(touched, list) else []:  # a broken field type never breaks pre
+            if isinstance(p, str) and "/.agent-memory/" not in p.replace("\\", "/").lower() + "/":
+                own.add(os.path.normcase(p))
+        record = data.get("foreign_touched")
+        for store, paths in (record.items() if isinstance(record, dict) else []):
+            if isinstance(paths, list):  # key: compare case-insensitively on Windows, value: show as written
+                foreign.setdefault(store, {}).update((os.path.normcase(p), p) for p in paths if isinstance(p, str))
+    if not foreign:
+        return None
+    ranked = sorted(foreign.items(), key=lambda kv: len(kv[1]), reverse=True)
+    store, paths = ranked[0]
+    # a clear majority only: more than own work AND more than the runner-up store (no insert-order winner)
+    if len(paths) <= len(own) or (len(ranked) > 1 and len(ranked[1][1]) == len(paths)):
+        return None
+    return {"store": store, "mem": os.path.join(store, ".agent-memory"), "files": len(paths), "own_files": len(own),
+            "examples": sorted(paths.values())[:3]}
+
+
 def _is_tail(data):
     """True when the dirty file only holds wrap-up's own writes after its marker (session-start.sh rule).
     One definition: harvest_state.is_tail (the harvest rules need the same answer)."""
@@ -525,14 +568,18 @@ def _cost_trace(mem, session_id, cwd):
                                                           "--since-wrapup"], cwd)
     if rc == 0 and measured is None:  # exit 0 without a parsable answer is no confirmation of a written row
         return "failed(trace: no JSON)"
-    if rc == 0 and (measured or {}).get("ok", True):
+    if rc == 0 and not isinstance(measured.get("ok"), bool):  # R2-01: {} confirms nothing, and no estimate on top
+        return "failed(trace: no ok)"
+    if rc == 0 and measured["ok"] is True:
         failed = _trace_failure(measured)
-        if failed or (measured or {}).get("window") == "session":
+        if failed or measured.get("window") == "session":
             return failed or "ok"
         rc, measured, _ = _child("measure_session_cost.py", ["--locate", session_id, "--append-trace", mem, "--task", "session"], cwd)
         if rc == 0 and measured is None:
             return "failed(trace: session row: no JSON)"
-        if rc == 0 and (measured or {}).get("ok", True):
+        if rc == 0 and not isinstance(measured.get("ok"), bool):
+            return "failed(trace: session row: no ok)"
+        if rc == 0 and measured["ok"] is True:
             return _trace_failure(measured) or "ok"
         return f"failed(trace: session row: {_cut((measured or {}).get('error') or f'exit {rc}', 100)})"
     bash = shutil.which("bash")
@@ -649,6 +696,7 @@ def cmd_pre(args):
                   "user_candidates": state.get("user_candidates", []),
                   "user_candidates_total": state.get("user_candidates_total", 0),
                   "bridge_candidates": candidates, "rule_class_open": rule_open,
+                  "suggested_store": _suggested_store(mem, session_id, real),
                   "active_warnings": _active_warnings(mem), "threshold_events": state.get("threshold_events", []), "validation_errors": errors}, 0)
 
 

@@ -231,6 +231,19 @@ for kind in gitignore exclude tracked plain; do
   esac
 done
 
+# T-088 (REGELKREISE L1): the briefing names commits made after the last summary, inside the compact block.
+R="$TMP/reentry"
+mkdir -p "$R/.agent-memory/context"
+printf '# Last Session\n\n*Date: 2026-01-01 10:00*\n*Agent: Claude Code*\n' > "$R/.agent-memory/session-summary.md"
+echo '[{"id": "T-009", "title": "reentry", "status": "open"}]' > "$R/.agent-memory/context/open-tasks.json"
+git -C "$R" init -q && echo x > "$R/x.txt" && git -C "$R" add x.txt \
+  && git -C "$R" -c user.name=t -c user.email=t@t commit -q -m "fix: T-009 erledigt"
+CTX6=$(hint_context "$R")
+printf '%s' "$CTX6" | sed -n '/^---$/,/^---$/p' | grep -qxF "Stand-Abgleich: 1 Commits seit der letzten Zusammenfassung (2026-01-01 10:00); offen, aber in Commits genannt: T-009" \
+  && pass "reentry: compact block has an OWN line naming commits since the summary and open tasks they mention" \
+  || fail "reentry: Stand-Abgleich line missing: $(printf '%s' "$CTX6" | head -8)"
+echo "$CTX" | grep -q "Stand-Abgleich" && fail "reentry: line shown without a git repo" || pass "reentry: no line without a git repo"
+
 # Fresh init path still works and still uses the same contract.
 mkdir -p "$TMP/fresh" && cd "$TMP/fresh" && git init -q   # 5.13.0: a folder without git no longer auto-inits
 OUT2=$(echo '{}' | CLAUDE_PROJECT_DIR="$TMP/fresh" bash "$DIR/scripts/session-start.sh" 2>/dev/null)

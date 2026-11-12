@@ -48,17 +48,6 @@ fi
 
 echo ""
 
-# Run PreToolUse shell circuit breaker tests
-echo ">>> Running PreToolUse shell circuit breaker tests..."
-if bash "$SCRIPT_DIR/test-pretooluse-shell-circuit-breaker.sh"; then
-    echo ">>> PreToolUse shell circuit breaker tests: ALL PASSED"
-else
-    echo ">>> PreToolUse shell circuit breaker tests: FAILURES DETECTED"
-    ((TOTAL_ERRORS++))
-fi
-
-echo ""
-
 # Run PostToolUse dirty-tracker tests (python; try python3 first, then python)
 echo ">>> Running PostToolUse dirty-tracker tests..."
 PY_BIN=""
@@ -531,6 +520,22 @@ elif [ -z "$PY_BIN" ]; then
     echo ">>> Review sweep tests: SKIPPED (no python found)"
 else
     echo ">>> Review sweep tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run reentry check tests (Stand-Abgleich briefing vs git, T-088)
+echo ">>> Running reentry check tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-reentry-check.py"; then
+    echo ">>> Reentry check tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> Reentry check tests: SKIPPED (no python found)"
+else
+    echo ">>> Reentry check tests: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 

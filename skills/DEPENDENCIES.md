@@ -25,8 +25,8 @@ SESSION START (SessionStart hook → session-bootstrap)
   │  ├── health: bash scripts/memory-thresholds.sh (exit 10 → THRESHOLD lines in briefing)
   │  ├── wiki (optional, if config.json sync_enabled): entity + entrypoints (≤5 pages)
   │  └── Step 6.5 IDENTITY GATES (consumer side of wrap-up's identity plan section):
-  │        (a) soul-candidates.md → "[j/n]" gate — soul.md write ONLY on explicit `j`
-  │        (b) user-candidates.json fallback promotion gate — also only on explicit `j`
+  │        (a) soul candidate gate — retired 5.11.0, soul.md is read-only history
+  │        (b) user-candidates.json fallback promotion gate — only on explicit `j`, via apply_wrapup.py
   │        (c) starvation warning (read-only) when the identity pipeline is stale
   │
   ▼
@@ -135,7 +135,7 @@ Removed agents: `improvement-scout`, `fix-reviewer` (2026-04-30); `improvement-a
 
 1. **No circular dependencies** — DAG only.
 2. **No auto-triggers on code changes** — user/CLAUDE.md driven (the only hook-driven skill is session-bootstrap on start; wrap-up is a manual slash command).
-3. **session-bootstrap is read-only** — never writes during startup, with ONE exception: the user-confirmed identity gates (Step 6.5) write soul.md/user.md + user-changelog.json + the queues, but only on an explicit `j` from the user (never autonomously).
+3. **session-bootstrap is read-only** — never writes during startup. The soul gate is retired (5.11.0, soul.md is read-only history); the one remaining write is the user-candidate fallback gate (Step 6.5b), only on an explicit `j` from the user and only through `scripts/apply_wrapup.py`.
 4. **Skills that invoke other skills:** none since T-028b. `wrap-up` is a judge over `scripts/wrapup_core.py`: it recommends pattern-extractor and /agentic-os:maintain and leaves obsidian-sync to the user. All skills are leaf nodes.
 5. **No cross-project auto-sync** — the global layer and its manual command sync-context are archived (5.11.0); nothing syncs between projects.
 6. **docs/ is the source of truth for project-context.md** — context-keeper (and context-detective, /init) read docs first; project-context.md is a cache (Regel 13 / L9).

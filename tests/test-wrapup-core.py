@@ -939,8 +939,87 @@ def test_silent_failures():
         with mock.patch.object(wc, "_child", side_effect=answers):
             res = wc._cost_trace(mem, "s1", proj)
         check(res == "failed(trace: session row: no JSON)", f"V-03: second call exit 0 but no JSON is not ok {res}")
+        # R2-01: a JSON answer without a boolean "ok" confirms nothing either - not ok, and no estimate row on top
+        for bad in ({}, {"ok": "true"}, {"window": "session"}):
+            with mock.patch.object(wc, "_child", return_value=(0, bad, "")) as child:
+                res = wc._cost_trace(mem, "s1", proj)
+            check(res == "failed(trace: no ok)" and child.call_count == 1,
+                  f"R2-01: first call answers {bad} without a boolean ok is not ok {res} {child.call_count}")
+            with mock.patch.object(wc, "_child", side_effect=[(0, {"ok": True, "window": "wrap-up"}, ""), (0, bad, "")]):
+                res = wc._cost_trace(mem, "s1", proj)
+            check(res == "failed(trace: session row: no ok)", f"R2-01: second call answers {bad} is not ok {res}")
     finally:
         shutil.rmtree(proj, ignore_errors=True)
+
+
+def test_suggested_store():
+    print("=== pre names the store that holds most of the work (T-079) ===")
+    import contextlib
+    import wrapup_core as wc
+    proj, mem = make_project(touched=[])
+    other = tempfile.mkdtemp(prefix="wrapupcore-other-")
+    work = os.path.join(mem, "working")
+
+    def pre(sid):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            wc.main(["pre", "--mem", mem, "--session-id", sid])
+        return json.loads(buf.getvalue())
+
+    def marker(sid, dirty, own, foreign):
+        put(os.path.join(work, f"dirty-{sid}.json"), json.dumps({
+            "session_id": sid, "dirty": dirty, "updated": "2000-01-01T00:00:00+00:00",
+            "touched_files": own, "foreign_touched": {other: foreign} if foreign else {}}))
+
+    try:
+        os.remove(os.path.join(work, "dirty-s1.json"))
+        foreign = [os.path.join(other, f"f{i}.txt") for i in range(3)]
+        # the main case: a session in this store worked only elsewhere - its marker is not dirty
+        marker("s9", False, [], foreign)
+        res = pre("s9").get("suggested_store")
+        check(isinstance(res, dict) and res.get("store") == other and res.get("files") == 3 and res.get("own_files") == 0,
+              f"foreign-only session: pre names the other store {res}")
+        check(res and res.get("mem") == os.path.join(other, ".agent-memory"), f"the hint carries the --mem path {res}")
+        # own work outweighs: no hint
+        marker("s9", True, [os.path.join(proj, f"o{i}.txt") for i in range(4)], foreign)
+        check(pre("s9").get("suggested_store") is None, "own work is the larger part: no hint")
+        # a tie is not "mostly elsewhere"
+        marker("s9", True, [os.path.join(proj, f"o{i}.txt") for i in range(3)], foreign)
+        check(pre("s9").get("suggested_store") is None, "tie: no hint")
+        # another session's clean marker does not count, its dirty marker does
+        marker("s9", True, [os.path.join(proj, "o.txt")], [])
+        marker("s8", False, [], foreign)
+        check(pre("s9").get("suggested_store") is None, "a clean marker of another session is not this wrap-up's work")
+        marker("s8", True, [], foreign)
+        check((pre("s9").get("suggested_store") or {}).get("files") == 3, "a dirty marker of another session counts")
+        # store files themselves are no work
+        marker("s8", False, [], [])
+        marker("s9", True, [os.path.join(mem, "context", f"x{i}.json") for i in range(5)], foreign[:1])
+        check((pre("s9").get("suggested_store") or {}).get("own_files") == 0, "files inside .agent-memory do not count as own work")
+        # 5.14.0 Codex V1-01: two foreign stores tied at the top is no clear majority, in either insert order
+        third = tempfile.mkdtemp(prefix="wrapupcore-third-")
+        try:
+            in_third = [os.path.join(third, f"t{i}.txt") for i in range(3)]
+            for order in ((other, foreign), (third, in_third)), ((third, in_third), (other, foreign)):
+                put(os.path.join(work, "dirty-s9.json"), json.dumps({
+                    "session_id": "s9", "dirty": True, "updated": "2000-01-01T00:00:00+00:00",
+                    "touched_files": [os.path.join(proj, "o.txt")], "foreign_touched": dict(order)}))
+                res = pre("s9").get("suggested_store")
+                check(res is None, f"two foreign stores tied at the top: no hint (order {order[0][0] == other}) {res}")
+        finally:
+            shutil.rmtree(third, ignore_errors=True)
+        # 5.14.0 Codex V1-02: a valid JSON marker with broken field types never breaks pre
+        put(os.path.join(work, "dirty-s9.json"), json.dumps({
+            "session_id": "s9", "dirty": True, "updated": "2000-01-01T00:00:00+00:00",
+            "touched_files": 7, "foreign_touched": {other: foreign}}))
+        try:
+            res = pre("s9").get("suggested_store")
+            check(isinstance(res, dict) and res.get("own_files") == 0, f"touched_files not a list: pre still briefs {res}")
+        except TypeError as exc:
+            check(False, f"touched_files not a list: pre raised {exc!r}")
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
+        shutil.rmtree(other, ignore_errors=True)
 
 
 def main():
@@ -957,6 +1036,7 @@ def main():
     test_nightly()
     test_collision()
     test_silent_failures()
+    test_suggested_store()
     print(f"\n{PASSED}/{TESTS} passed, {ERRORS} failed")
     return 1 if ERRORS else 0
 

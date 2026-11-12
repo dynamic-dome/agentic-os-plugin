@@ -467,6 +467,13 @@ INIT_LINE=""
 [ -n "${INIT_WARN:-}" ] && INIT_LINE="WARNING: auto-init failed - no memory store was created (details below)."
 BRIEF_LINE=""
 [ -n "${BRIEFING:-}" ] && BRIEF_LINE="$BRIEFING"
+# Stand-Abgleich (T-088, REGELKREISE L1): commits since the summary's date line and open tasks they
+# name - the summary may be older than the repo. Read-only, exit always 0, empty when nothing differs.
+# Own line in the compact block; called here because $PY is only known after the next-steps block.
+if [ -n "$PY" ] && [ -f "$SELF_DIR/reentry_check.py" ] && [ -f "$MEMORY_DIR/session-summary.md" ]; then
+  REENTRY_LINE=$("$PY" "$SELF_DIR/reentry_check.py" "$MEMORY_DIR" "$PROJECT_DIR" 2>/dev/null | tr -d '\r' | head -1)
+  [ -n "$REENTRY_LINE" ] && BRIEF_LINE="${BRIEF_LINE:+$BRIEF_LINE\n}$REENTRY_LINE"
+fi
 # Join the two optional lines with a \n separator only when BOTH are present,
 # so they never run together as "Newly initialized!Next steps...".
 OPT_LINES="$INIT_LINE"

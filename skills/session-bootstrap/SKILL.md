@@ -9,7 +9,7 @@ model: sonnet
 effort: low
 metadata:
   author: agentic-os
-  version: '3.7'
+  version: '3.8'
   part-of: agentic-os
   layer: core
 ---
@@ -20,7 +20,7 @@ Restore full project context at the start of every coding session.
 
 ## When to Use
 
-- Start of every new coding session (auto-triggered by SessionStart hook)
+- Start of a coding session, on request (the SessionStart hook injects a short briefing; this skill is the full one)
 - After context-window reset or long pause
 - User asks "Where were we?" or "Project status?"
 - Agent switch (Claude Code <-> other)

@@ -4,6 +4,14 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-12] Release v5.14.0 — Stand-Abgleich beim Start
+
+- **Das Briefing sagt, ob es hinter dem Repo zurückliegt.** Neu: `scripts/reentry_check.py`. Es liest die Datumszeile von `session-summary.md` (`*Date: …*`, `*Datum: …*`, auch `**Date:**`, ohne Uhrzeit oder mit Zusatz), zählt die Commits danach und nennt offene oder blockierte Tasks, deren ID in einem Commit-Betreff steht. Der SessionStart-Hook hängt das als eigene Zeile an den kompakten Block: `Stand-Abgleich: 2 Commits seit der letzten Zusammenfassung (2026-11-12 14:32); offen, aber in Commits genannt: T-087`. Commits, die nur `.agent-memory/` ändern (der Memory-Commit nach wrap-up), zählen nicht; ein Datum ohne Uhrzeit zählt ab Tagesende. Rein lesend, Exit immer 0; ohne `.git` im Projektordner, ohne Commits oder ohne Datumszeile erscheint keine Zeile. Der Hook braucht dafür rund 0,2 s mehr. `--json` liefert `summary_date`, `commits_since`, `open_tasks_in_commits` und `line` für andere Werkzeuge.
+- **wrap-up nennt den Store, der den Großteil der Arbeit bekam.** `wrapup_core.py pre` liefert `suggested_store`, wenn die Dateien dieser Sitzung klar mehrheitlich in einem anderen Store lagen (eigene Dateien gegen `foreign_touched`, auch aus einem nicht dirty Merker). Der Skill sagt das in einer Zeile und fragt, ob dort konsolidiert werden soll; er wechselt nie selbst. Liegen zwei fremde Stores gleichauf vorn, gibt es keinen Hinweis. Ein Merker mit falschem Feldtyp (`touched_files` keine Liste) bricht `pre` nicht mehr ab.
+- **Der Kosten-Trace verlangt ein boolesches `ok`.** Eine Antwort von `measure_session_cost.py` ohne `ok` als Bool (`{}` oder `"true"`) galt bisher als ok oder fiel in den Schätz-Pfad. Jetzt meldet `reports.cost_trace` `failed(trace: no ok)`, für die wrap-up- und die Sitzungszeile, ohne zusätzliche Schätzzeile.
+- **Entfernt: `scripts/pretooluse-shell-circuit-breaker.sh` mit seinem Test.** Das Skript war seit 4.19.0 nicht mehr in `hooks/hooks.json` verdrahtet; die Sperre destruktiver Befehle liegt auf Nutzerebene. Die Suite läuft dadurch kürzer.
+- Doku: `skills/DEPENDENCIES.md` führt das Soul-Gate als retired (5.11.0); session-bootstrap schreibt nur noch über das User-Kandidaten-Gate (Step 6.5b) auf ein ausdrückliches `j`. session-bootstrap läuft auf Anfrage, der Hook liefert die Kurzfassung.
+
 ## [2026-11-11] Release v5.13.2 — Codex-Briefing nachgezogen
 
 - **Das Codex-Briefing folgt denselben Regeln wie der SessionStart-Hook.** Es ruft unter Windows zuerst `python` auf (nicht den Launcher `python3`) und zeigt die Zeile `Memory search:`, wenn `.agent-memory/` git-ignoriert ist; für einen getrackten Store oder außerhalb von Git erscheint sie nicht.

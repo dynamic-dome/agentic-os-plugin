@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '5.0'
+  version: '5.1'
   part-of: agentic-os
   layer: core
 ---
@@ -54,6 +54,9 @@ the identity evidence of the run unverifiable (`tally.session_binding_mismatch`)
 (stage0-preprocess) `pre` runs the stage-0 preprocessor `preprocess_state.py` and adds what you need: harvested
 iterations, today's errors, open tasks, existing identity keys, open bridge candidates, the rule queue. It writes
 nothing. If `validation_errors` is not empty, name them in the report.
+If `suggested_store` is set, most of the work landed in another store: say so in one line before the plan
+(store, `files` vs `own_files`) and ask whether to wrap up there instead (`--mem` from `suggested_store.mem`).
+Never switch on your own; without an answer continue in this store.
 
 (context-diet) Do NOT systematically re-read the transcript or full memory files. Work from the brief and the
 conversation you already hold; targeted lookups only, for a single unresolved point.

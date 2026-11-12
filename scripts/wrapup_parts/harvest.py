@@ -118,7 +118,8 @@ def harvest(project_root: str, mem_dir: str, since: str) -> list[dict]:
                                "summary": _cut(f"Neueste Betreffzeilen: {subjects}", MAX_SUMMARY)})
     for sess in _dirty_sessions(mem_dir):
         files = []
-        for path in sess.get("touched_files") or []:
+        touched = sess.get("touched_files")
+        for path in touched if isinstance(touched, list) else []:  # a broken field type never breaks pre
             rel = _rel(project_root, str(path))
             if rel and os.path.normcase(rel) not in committed and rel not in files:
                 files.append(rel)
