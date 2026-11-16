@@ -91,8 +91,7 @@ EXPL = {"id": "L2", "explained_by": "codex-gpt-5", "plain": "Der Agent darf klei
         "erledigen und muss sie nur melden. Grosse oder unumkehrbare Dinge bleiben beim Owner.",
         "risk": "Der Agent koennte etwas fuer reversibel halten, das es nicht ist.", "verdict": "confirms",
         "affects": ["regeln/gemeinsam.md#delegierte-entscheidungen"]}
-OWNER = {"id": "L2", "by": "owner", "two_sentences": "Claude darf Kleinkram selbst entscheiden und sagt mir danach Bescheid. "
-         "Alles, was sich schwer zurueckdrehen laesst, fragt er vorher."}
+OWNER = {"id": "L2", "by": "owner", "owner_go": "Go, Claude darf Kleinkram selbst entscheiden und sagt mir danach Bescheid."}
 
 
 def with_rule(mem=None, **extra):
@@ -158,15 +157,27 @@ def main():
         code, out = run(m, {"rule_explanations": [e]})
         check(code == 2 and json.dumps(getj(m, "learnings/learnings.json")) == before, f"explanation refused: {name}")
 
-    print("== owner release needs two sentences of his own words")
+    print("== owner release needs a go in his own words (F4 since 2026-11-15)")
+    go_only = {k: v for k, v in OWNER.items() if k != "owner_go"}
     refusals = {
         "not explained yet": (None, OWNER),
         "by agent": (EXPL, dict(OWNER, by="agent")),
-        "one sentence": (EXPL, dict(OWNER, two_sentences="Das ist in Ordnung so wie es dasteht.")),
-        "four sentences": (EXPL, dict(OWNER, two_sentences="Eins ist da. Zwei ist da. Drei ist da. Vier ist da.")),
-        "copied from the sheet": (EXPL, dict(OWNER, two_sentences=EXPL["plain"])),
-        "fragments": (EXPL, dict(OWNER, two_sentences="Ja. Gut.")),
-        "missing": (EXPL, {k: v for k, v in OWNER.items() if k != "two_sentences"}),
+        "bare go": (EXPL, dict(OWNER, owner_go="Go.")),
+        "two words": (EXPL, dict(OWNER, owner_go="Ja, passt.")),
+        "copied from the sheet": (EXPL, dict(OWNER, owner_go=EXPL["plain"])),
+        "copied from the rule": (EXPL, dict(OWNER, owner_go=RULE_TEXT)),
+        "too long": (EXPL, dict(OWNER, owner_go="Das passt so fuer mich. " * 20)),
+        "missing": (EXPL, go_only),
+        "old field two_sentences": (EXPL, dict(go_only, two_sentences="Claude darf Kleinkram selbst entscheiden. "
+                                               "Schweres fragt er vorher.")),
+        "both fields": (EXPL, dict(OWNER, two_sentences="Claude darf Kleinkram selbst entscheiden. "
+                                   "Schweres fragt er vorher.")),
+        # Codex V1-03 (5.14.1): lone punctuation is not a word
+        "punctuation as words": (EXPL, dict(OWNER, owner_go="Go . .")),
+        # Codex V1-02 (5.14.1): the old field is refused on a rejection too
+        "old field on a rejection": (EXPL, dict(go_only, status="rejected", note="passt nicht",
+                                                two_sentences="Claude darf Kleinkram selbst entscheiden. "
+                                                "Schweres fragt er vorher.")),
     }
     for name, (expl, rel) in refusals.items():
         m, _ = with_rule()
@@ -175,6 +186,31 @@ def main():
         before = json.dumps(getj(m, "learnings/learnings.json"))
         code, out = run(m, {"rule_releases": [rel]})
         check(code == 2 and json.dumps(getj(m, "learnings/learnings.json")) == before, f"release refused: {name}")
+
+    # Codex V1-05 (5.14.1): a refused release in a mixed plan leaves EVERY store file byte-identical,
+    # also the sections whose appliers run before the rule gate (iterations, decisions).
+    def store_bytes(m):
+        out = {}
+        for dirpath, _dirs, files in os.walk(m):
+            for f in files:
+                rel = os.path.relpath(os.path.join(dirpath, f), m)
+                if not rel.replace("\\", "/").startswith("working/"):
+                    with open(os.path.join(dirpath, f), "rb") as fh:
+                        out[rel] = fh.read()
+        return out
+    mixed_bad = {
+        "old field": dict(go_only, two_sentences="Claude darf Kleinkram selbst entscheiden. Schweres fragt er vorher."),
+        "bare go": dict(OWNER, owner_go="Go."),
+    }
+    for name, rel in mixed_bad.items():
+        m, _ = with_rule()
+        run(m, {"rule_explanations": [EXPL]})
+        before = store_bytes(m)
+        code, out = run(m, {"iterations": [{"title": "Vorher geschrieben?", "type": "fix", "tags": ["a", "b"]}],
+                            "decisions": [{"title": "Vorher entschieden?", "decision": "x", "rationale": "y"}],
+                            "rule_releases": [rel]})
+        check(code == 2 and store_bytes(m) == before,
+              f"mixed plan with a refused release ({name}): exit 2, every store file byte-identical")
 
     print("== release: approved only now, and visible to the projections")
     mem, _ = with_rule()
@@ -186,8 +222,9 @@ def main():
     code, out = run(mem, {"date": "2026-10-25", "rule_releases": [OWNER]})
     r = rows(mem)["L2"]
     check(code == 0 and r["release"]["status"] == "released" and r["release"]["released_by"] == "owner"
-          and r["release"]["released_at"] == "2026-10-25" and r["release"]["two_sentences"] == OWNER["two_sentences"],
-          "release stored with owner, date and his two sentences")
+          and r["release"]["released_at"] == "2026-10-25" and r["release"]["owner_go"] == OWNER["owner_go"]
+          and "two_sentences" not in r["release"],
+          "release stored with owner, date and his go in his own words")
     check(r["bridge_status"] == "approved" and r["bridge_note"].startswith("2026-10-25 owner:"), "bridge approved, note names the owner")
     check(out["tally"]["bridge_status_changed"] == 1 and out["tally"]["bridge_approved"] == ["L2"],
           "tally asks for the projections (bridge_status_changed)")
@@ -210,7 +247,7 @@ def main():
     code, out = run(mem, {"date": "2026-10-28", "rule_releases": [{"id": "L2", "by": "owner", "status": "rejected", "note": "ziehe zurueck"}]})
     r = rows(mem)["L2"]
     check(code == 0 and r["release"]["status"] == "rejected" and r["release"]["rejected_by"] == "owner"
-          and r["release"]["released_by"] == "owner" and r["release"]["two_sentences"] == OWNER["two_sentences"],
+          and r["release"]["released_by"] == "owner" and r["release"]["owner_go"] == OWNER["owner_go"],
           "withdrawing the release is the owner's, via rule_releases; the release trail stays on the row")
     for verdict in ("rejected", "approved"):
         before = json.dumps(getj(mem, "learnings/learnings.json"))
@@ -317,8 +354,9 @@ def main():
                        errors="replace", env=ENV)
     sheet = p.stdout
     check(p.returncode == 0 and "L2" in sheet and RULE_TEXT in sheet, "sheet quotes id and full text")
-    check("Zwei Sätze" in sheet and "rule_releases" in sheet and "rule_explanations" in sheet,
-          "sheet has the two-sentence field and both plan snippets")
+    check("> Go:" in sheet and '"owner_go"' in sheet and "two_sentences" not in sheet
+          and "rule_releases" in sheet and "rule_explanations" in sheet,
+          "sheet has the owner-go field (not the old two sentences, F4 2026-11-15) and both plan snippets")
     check("anderes Modell" in sheet or "Zweitmodell" in sheet, "sheet addresses the second model")
     p = subprocess.run([sys.executable, RELEASE, "sheet", mem, "L1"], capture_output=True, encoding="utf-8",
                        errors="replace", env=ENV)

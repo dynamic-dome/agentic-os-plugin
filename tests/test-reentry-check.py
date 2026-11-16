@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -50,8 +51,12 @@ def git(repo, *args):
                    check=True, capture_output=True, text=True, encoding="utf-8", env=ENV)
 
 
+CREATED: list[str] = []  # every throwaway project, removed when the run ends (DCO #10461)
+
+
 def project(summary_head="*Date: 2026-01-01 10:00*", commits=(), tasks=None, init_git=True):
     proj = tempfile.mkdtemp(prefix="reentry-proj-")
+    CREATED.append(proj)
     if init_git:
         git(proj, "init", "-q")
         for i, msg in enumerate(commits):
@@ -83,12 +88,22 @@ def main():
 
     print("Case 2: open task named in a commit message")
     tasks = [{"id": "T-005", "status": "open"}, {"id": "T-006", "status": "blocked"},
-             {"id": "T-007", "status": "done"}]
-    proj, mem = project(commits=("fix: T-005 erledigt", "chore: T-007 nachgezogen", "feat: T-006"), tasks=tasks)
+             {"id": "T-007", "status": "done"}, {"id": "T-008", "status": "in_progress"},
+             {"id": "T-009", "status": "closed"}, {"id": "T-010", "status": "cancelled"},
+             {"id": "T-011", "status": "deferred"},
+             # Codex V1-06 (5.14.1): an unknown status and a missing status count as open as well
+             {"id": "T-012", "status": "custom_pending"}, {"id": "T-013"}]
+    proj, mem = project(commits=("fix: T-005 erledigt", "chore: T-007 nachgezogen", "feat: T-006",
+                                 "wip: T-008", "fix: T-009 T-010 T-011", "wip: T-012 T-013"), tasks=tasks)
     r = rc.check(mem, proj)
-    check(r["open_tasks_in_commits"] == ["T-005", "T-006"],
-          f"open and blocked tasks listed, closed not (got {r['open_tasks_in_commits']})")
-    check(r["line"].endswith("; offen, aber in Commits genannt: T-005, T-006"), f"task part in line (got {r['line']!r})")
+    check(r["open_tasks_in_commits"] == ["T-005", "T-006", "T-008", "T-012", "T-013"],
+          f"open, blocked, in_progress, unknown and missing status listed, closed ones not "
+          f"(got {r['open_tasks_in_commits']})")
+    check(r["line"].endswith("; offen, aber in Commits genannt: T-005, T-006, T-008, T-012, T-013"),
+          f"task part in line (got {r['line']!r})")
+    import preprocess_state
+    check(rc.CLOSED_TASK_STATUSES == preprocess_state.CLOSED_TASK_STATUSES,
+          "closed statuses are the same as the briefing's (preprocess_state)")
 
     print("Case 3: closed task is not listed")
     proj, mem = project(commits=("fix: T-005 erledigt",), tasks=[{"id": "T-005", "status": "done"}])
@@ -142,6 +157,18 @@ def main():
     git(proj, "commit", "-q", "-m", "now")
     r = rc.check(mem, proj)
     check(r["commits_since"] == 1, f"same-day commit before the day boundary not counted (got {r['commits_since']})")
+    # 5.14.0 Codex V2-01: git fills a date without time with the current clock time, so the commit check above
+    # cannot catch a dropped boundary between 23:30 and 23:59 - check the argument that reaches git directly
+    seen, real_run = [], rc.subprocess.run
+    def spy(cmd, *a, **kw):
+        seen.append(list(cmd))
+        return real_run(cmd, *a, **kw)
+    rc.subprocess.run = spy
+    try:
+        rc.check(mem, proj)
+    finally:
+        rc.subprocess.run = real_run
+    check(any("--since=2026-01-01 23:59" in c for c in seen), f"git gets the day boundary (got {seen})")
 
     print("Case 6c: commits that only touch .agent-memory do not count (wrap-up's memory commit)")
     proj, mem = project(commits=("feat: code",))
@@ -167,5 +194,18 @@ def main():
     return 1 if ERRORS else 0
 
 
+def _remove(path):
+    """git writes its objects read-only; on Windows rmtree fails on them unless the bit is cleared."""
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            os.chmod(os.path.join(root, name), stat.S_IWRITE)
+    shutil.rmtree(path, ignore_errors=True)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        rc_main = main()
+    finally:
+        for path in CREATED:
+            _remove(path)
+    sys.exit(rc_main)

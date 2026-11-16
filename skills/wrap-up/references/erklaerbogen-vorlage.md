@@ -4,7 +4,7 @@
 
 Dieses Learning ändert eine Regel oder die Verfassung. Es kommt erst in AGENTS.md und MEMORY.md, wenn
 (1) ein **anderes Modell** (Zweitmodell, nicht das Modell, das es geschrieben hat) es verständlich erklärt hat und
-(2) Dominic es in **zwei eigenen Sätzen** wiedergeben kann.
+(2) Dominic es mit einem **Go in eigenen Worten** freigibt (Regel F4, seit 15.11.2026 statt zwei Sätzen).
 
 ## Das Learning (Volltext, unverändert)
 
@@ -39,14 +39,14 @@ PLAN
 
 Erst lesen, wenn Teil 1 im Store steht (`{{status}}` = `explained`).
 
-- **Meine zwei Sätze (eigene Worte, nicht kopiert):**
+- **Mein Go (eigene Worte, nicht kopiert, mindestens drei Wörter):**
 
-  > Zwei Sätze: ______________________________________________________________
+  > Go: ______________________________________________________________
 
-Kann Dominic es nicht in zwei Sätzen sagen, wird **nicht** freigegeben. Dann bleibt das Learning im Zustand `explained`, oder er lehnt es ab (`"status": "rejected"`).
+Ein nacktes „Go“ oder „Ja“ reicht nicht, und eine Kopie des Erklärbogens auch nicht. Ohne Go in eigenen Worten wird **nicht** freigegeben. Dann bleibt das Learning im Zustand `explained`, oder er lehnt es ab (`"status": "rejected"`).
 
 ```json
-{"rule_releases": [{"id": "{{id}}", "by": "owner", "two_sentences": "<seine zwei Sätze>"}]}
+{"rule_releases": [{"id": "{{id}}", "by": "owner", "owner_go": "<sein Go, wörtlich>"}]}
 ```
 
 Ablehnen: `{"rule_releases": [{"id": "{{id}}", "by": "owner", "status": "rejected", "note": "<warum>"}]}`.

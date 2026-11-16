@@ -2,8 +2,8 @@
 """Rule-class learnings: read-only queue and Erklaerbogen (DCO #9869, owner decision F4).
 
 A learning that changes a rule or the constitution is held back from AGENTS.md and
-MEMORY.md until a second model explained it and the owner put it into two sentences
-of his own. This script never writes and never calls a model: it lists the queue and
+MEMORY.md until a second model explained it and the owner gave his go in his own
+words (F4 since 2026-11-15, before: two sentences). This script never writes and never calls a model: it lists the queue and
 renders the sheet the session hands to the second model. The verdicts reach the store
 only through apply_wrapup.py (plan sections `rule_explanations`, `rule_releases`).
 

@@ -9,7 +9,7 @@ model: sonnet
 effort: low
 metadata:
   author: agentic-os
-  version: '3.8'
+  version: '3.9'
   part-of: agentic-os
   layer: core
 ---
@@ -366,8 +366,9 @@ This step surfaces the user candidate queue (`working/user-candidates.json`, or 
 Retired in 5.11.0 (owner go 2026-11-03): the agent's character lives in the global rules
 `~/.claude/CLAUDE.md`, `soul.md` is read-only history. Do NOT ask a soul `[j/n]` question,
 never write `soul.md` and never write `identity/soul-candidates.md`. Old candidates stay where they are; if the owner wants one of them,
-it becomes a rule change in the owner's global rule source, not a soul.md write. Session-bootstrap is
-read-only again without exception.
+it becomes a rule change in the owner's global rule source, not a soul.md write. Session-bootstrap
+writes nothing of its own; the only write it can trigger is gate (b) below, on an explicit `j` and
+through `apply_wrapup.py` (plus the escalation note of the Escalation Rules).
 
 ### (b) User candidate fallback gate
 
@@ -417,6 +418,6 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/cost-trace.sh" append --mem .agent-memory \
 ## What NOT to Do
 
 - Do NOT dump full file contents to the user
-- Do NOT write to any files (bootstrap is read-only, without exception since 5.11.0 - the soul.md gate is retired)
+- Do NOT write to any files yourself (the soul.md gate is retired since 5.11.0). Two narrow exceptions: gate 6.5(b) on an explicit `j`, through `apply_wrapup.py`, and the escalation note under `working/`
 - Do NOT scan skill registries or build context matrices (Claude already knows available skills)
 - Do NOT estimate token budgets (unreliable, leads to false warnings)

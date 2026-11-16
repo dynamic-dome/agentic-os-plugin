@@ -81,21 +81,21 @@ agent's say-so alone - the agent commits to the procedure below (the script chec
    and enter its JSON answer as `rule_explanations` (own call; needs `explained_by`,
    `plain` (plain German, at most 600 characters - longer is rejected), `risk`, `verdict`). No second model at hand: the learning stays
    `needs_explanation` and is reported again next time (fail closed).
-3. **Owner release.** Show Dominic the `plain` text and the verdict. He releases only when he
-   can say it in **two sentences of his own** - record them as `rule_releases`
-   (`{"id","by":"owner","two_sentences":"..."}`). The script refuses `by` other than `owner`,
-   a state other than `explained`, anything but 2 (at most 3) real sentences and a copy of the
-   sheet. Rejecting (`"status":"rejected"`) is always possible. Never release on the owner's
+3. **Owner release.** Show Dominic the `plain` text and the verdict. He releases with a **go in
+   his own words** (rule F4 since 2026-11-15, replacing the former two sentences) - record it
+   verbatim as `rule_releases` (`{"id","by":"owner","owner_go":"..."}`). The script refuses `by`
+   other than `owner`, a state other than `explained`, fewer than 3 words, more than 400
+   characters, a copy of the sheet or the rule, and the retired field `two_sentences`. Rejecting (`"status":"rejected"`) is always possible. Never release on the owner's
    behalf and never infer a release from silence.
 
    **`"by": "owner"` is an honor system, not an authentication.** The script checks the form
-   (the field value, state `explained`, 2-3 real sentences, no copy of the sheet) and nothing
+   (the field value, state `explained`, 3+ words, no copy of the sheet) and nothing
    else: the agent writes the plan itself, so it can neither know nor prove that Dominic said
    those sentences. The gate binds the agent by **self-commitment**. Enter a release only when
-   Dominic wrote the two sentences in THIS conversation, copy them verbatim into
-   `two_sentences`, and never compose them from the sheet, from memory or from his silence. A
+   Dominic wrote his go in THIS conversation, copy it verbatim into
+   `owner_go`, and never compose it from the sheet, from memory or from his silence. A
    release the agent invented would pass every technical check; what remains is the audit
-   trail (`release.two_sentences`, `released_at` in the store) that lets the owner see and
+   trail (`release.owner_go`, `released_at` in the store) that lets the owner see and
    revert it afterwards. The same holds for every other `by: owner` in the plan (`bridge_decisions`,
    `corrections`): it is a recorded claim, not a verified identity.
 4. After a release `tally.bridge_status_changed > 0` -> both projections (3d.6).

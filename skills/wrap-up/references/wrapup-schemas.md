@@ -48,7 +48,7 @@ model is stateless, so cost is the sum of context length over calls).
                        "learnings": [ { "id": "L154", "text": "...", "summary": "...", "reason": "...", "by": "agent" } ] },
   "rule_explanations": [ { "id": "L26", "explained_by": "<model>", "plain": "...", "risk": "...",
                            "verdict": "confirms", "affects": [] } ],
-  "rule_releases":   [ { "id": "L26", "by": "owner", "two_sentences": "..." } ],
+  "rule_releases":   [ { "id": "L26", "by": "owner", "owner_go": "..." } ],
   "user_candidates": [ { "key": "kebab-key", "observation": "...", "signal_type": "preference",
                          "confidence": 0.5, "evidence": [], "confirmed": false, "quote": "",
                          "status": "observed", "trust_source": "conversation" } ],
@@ -319,11 +319,12 @@ rule-class learning stores `rule_class: true` and `release` = `{status: needs_ex
 released|rejected, ...}`; it is always a bridge candidate, never in `tally.bridge_candidates`, and
 `bridge_decisions` cannot approve it. `rule_explanations` (second model): `explained_by`, `plain` (1..600 characters, like every owner-facing proposal),
 `risk`, `verdict` (`confirms|contradicts|unsure`), optional `affects`/`why`/`counter_note`; only while the gate is open.
-`rule_releases` (owner): `by` must be `owner`, state `explained`, `two_sentences` = 2..3 real sentences of
->= 3 words, <= 400 characters, not a copy of the sheet or the rule; `"status":"rejected"` + `note` is
+`rule_releases` (owner): `by` must be `owner`, state `explained`, `owner_go` = the owner's go in his own words
+(>= 3 words, <= 400 characters, not a copy of the sheet or the rule; F4 since 2026-11-15, the retired field
+`two_sentences` is refused, releases stored before keep it); `"status":"rejected"` + `note` is
 allowed from any state. **`by: owner` is an honor system:** the script checks the value of the field, not who
 typed it - the agent writes the plan. The gate is a self-commitment of the agent (release only on sentences the
-owner wrote in this conversation, verbatim), made visible afterwards by `release.two_sentences` / `released_at`
+owner wrote in this conversation, verbatim), made visible afterwards by `release.owner_go` / `released_at`
 in the store; it is not an authentication and must not be described as one. A principle pointer
 (`principles`) over a rule-class learning needs the same gate: the plan is refused until every rule-class
 member is `released` (DCO #10057), and a pointer written by hand around that is not projected. `tally.rule_class_open` = `{needs_explanation: [ids], explained: [ids]}`;

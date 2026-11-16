@@ -23,7 +23,10 @@ import sys
 # stores: **Date:** 2026-..., a date without time, a trailing note like "(abends)".
 DATE_RE = re.compile(r"^\*{1,2}(?:Date|Datum):?\*{0,2}:?\s*(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}))?")
 TASK_RE = re.compile(r"\bT-\d+\b")
-OPEN_STATES = ("open", "blocked")
+# A task is open unless it carries one of the statuses that end it - the same set the briefing uses
+# (preprocess_state.CLOSED_TASK_STATUSES; a test keeps both equal). Kept here so the hook check stays
+# standalone; in_progress and unknown statuses count as open (DCO #10461).
+CLOSED_TASK_STATUSES = frozenset({"done", "closed", "cancelled", "deferred"})
 
 
 def _summary_date(mem: str) -> str | None:
@@ -48,7 +51,7 @@ def _open_task_ids(mem: str) -> set[str]:
         data = json.load(fh)
     tasks = data.get("tasks", []) if isinstance(data, dict) else data
     return {str(t.get("id")) for t in tasks
-            if isinstance(t, dict) and t.get("status") in OPEN_STATES and t.get("id")}
+            if isinstance(t, dict) and t.get("status") not in CLOSED_TASK_STATUSES and t.get("id")}
 
 
 def _subjects_since(root: str, since: str) -> list[str]:

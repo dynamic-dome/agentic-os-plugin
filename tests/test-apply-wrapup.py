@@ -474,6 +474,15 @@ d = load(mem, "working/dirty-sess-A.json")
 check(d["dirty"] is False and d["consolidated_by"] == "wrap-up", "dirty flag flipped, file kept")
 check(d["last_consolidated_by"] == "wrap-up" and marker.get("mode") == "wrap-up",
       "interactive run: dirty file and marker name the wrap-up mode")
+# 5.14.0 Codex V2-01b: a valid JSON marker whose touched_files is not a list never breaks the consolidation
+mem = make_mem()
+broken = load(mem, "working/dirty-sess-A.json")
+broken["touched_files"] = 7
+put(mem, "working/dirty-sess-A.json", broken)
+rc, out = run(mem, {"date": "2026-07-27", "consolidate": True})
+check(rc == 0 and load(mem, "consolidation-marker.json")["touched_files_seen"] == 0
+      and load(mem, "working/dirty-sess-A.json")["dirty"] is False,
+      "touched_files not a list: consolidation runs, counts 0 files")
 
 # --- 7b. headless consolidation says so (Lebenszyklus Phase 2, slice 1) -----
 # The night run used to stamp "wrap-up" although no wrap-up ran; GC and readers

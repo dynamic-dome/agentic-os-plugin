@@ -1968,13 +1968,15 @@ def apply_user_md_retire(mem, plan, date, dry, touched, tally, session_id="", tr
 # a rule or the constitution - is held back from both projections until
 #   1. a second model has explained it in plain words (`rule_explanations`, the
 #      Erklaerbogen), and
-#   2. the owner has put it into two sentences of his own (`rule_releases`).
+#   2. the owner has given his go in his own words (`rule_releases`, field
+#      `owner_go`; owner decision F4 2026-11-15 replaced the former two sentences).
 # No live model call: the script only marks, stores the explanation it is handed and
 # checks the shape; who explains is the session's job (wrap-up Step 3f).
 RULE_TAGS = {"regel", "regeln", "rule", "rules", "verfassung", "constitution"}
 RELEASE_OPEN = ("needs_explanation", "explained")
 EXPLAIN_VERDICTS = ("confirms", "contradicts", "unsure")
-TWO_SENTENCES_MAX = 400
+OWNER_GO_MAX = 400
+OWNER_GO_MIN_WORDS = 3  # a bare "Go" or "Ja" is not "in his own words"
 SHEET_COPY_MAX = 0.9
 
 
@@ -1991,11 +1993,6 @@ def rule_class_open(rows):
             if st in out:
                 out[st].append(str(r.get("id")))
     return out
-
-
-def sentence_count(text: str):
-    parts = [p for p in re.split(r"(?<=[.!?])\s+", str(text or "").strip()) if p.strip()]
-    return len(parts), all(len(p.split()) >= 3 for p in parts)
 
 
 def validate_rule_gate(mem, plan):
@@ -2048,24 +2045,27 @@ def validate_rule_gate(mem, plan):
         if ("rel", lid) in seen:
             raise PlanError(f"rule release {lid} appears twice")
         seen.add(("rel", lid))
+        if "two_sentences" in it:  # before the rejected branch: the old field is refused in every plan
+            raise PlanError(f"rule release {lid}: 'two_sentences' was replaced by 'owner_go' "
+                            f"(F4 since 2026-11-15: the owner's go in his own words, verbatim)")
         if status == "rejected":
             continue
         rel = row.get("release") or {}
         if rel.get("status") != "explained":
             raise PlanError(f"rule release {lid}: release state is {rel.get('status')!r} - the second "
                             f"model's explanation must be on file first")
-        text = it.get("two_sentences")
+        text = it.get("owner_go")
         if not isinstance(text, str) or not text.strip():
-            raise PlanError(f"rule release {lid}: 'two_sentences' (the owner's own words) is required")
-        n, wordy = sentence_count(text)
-        if not (2 <= n <= 3) or not wordy:
-            raise PlanError(f"rule release {lid}: 'two_sentences' must be 2 (at most 3) real sentences "
-                            f"of 3+ words, got {n}")
-        if len(text) > TWO_SENTENCES_MAX:
-            raise PlanError(f"rule release {lid}: 'two_sentences' longer than {TWO_SENTENCES_MAX} characters")
+            raise PlanError(f"rule release {lid}: 'owner_go' (the owner's go in his own words) is required")
+        # a word holds at least one letter or digit: "Go . ." is one word, not three
+        if sum(1 for w in text.split() if any(ch.isalnum() for ch in w)) < OWNER_GO_MIN_WORDS:
+            raise PlanError(f"rule release {lid}: 'owner_go' needs at least {OWNER_GO_MIN_WORDS} words of the "
+                            f"owner's own - a bare go does not show he understood the rule")
+        if len(text) > OWNER_GO_MAX:
+            raise PlanError(f"rule release {lid}: 'owner_go' longer than {OWNER_GO_MAX} characters")
         for source in ((rel.get("sheet") or {}).get("plain"), row.get("text")):
             if source and difflib.SequenceMatcher(None, norm(text), norm(source)).ratio() >= SHEET_COPY_MAX:
-                raise PlanError(f"rule release {lid}: 'two_sentences' is a copy of the sheet or the rule - "
+                raise PlanError(f"rule release {lid}: 'owner_go' is a copy of the sheet or the rule - "
                                 f"the point is that the owner says it in his own words")
 
 
@@ -2104,9 +2104,9 @@ def apply_rule_releases(mem, plan, date, dry, touched, tally):
         rel = dict(row.get("release") or {})
         if status == "released":
             rel.update({"status": "released", "released_by": "owner", "released_at": date,
-                        "two_sentences": " ".join(it["two_sentences"].split())})
+                        "owner_go": " ".join(it["owner_go"].split())})
             row["bridge_status"] = "approved"
-            row["bridge_note"] = f"{date} owner: Regel-Freigabe nach Zwei-Saetze-Erklaerung"
+            row["bridge_note"] = f"{date} owner: Regel-Freigabe per Go in eigenen Worten"
             tally["bridge_approved"].append(str(row["id"]))
         else:
             rel.update({"status": "rejected", "rejected_by": "owner", "rejected_at": date})
@@ -3328,7 +3328,8 @@ def apply_consolidation(mem, plan, session_id, dry, touched, tally, by="wrap-up"
                 continue
             dirty_files.append((name, d))
             sessions.append(d.get("session_id", name))
-            seen_files += len(d.get("touched_files") or [])
+            marker_files = d.get("touched_files")
+            seen_files += len(marker_files) if isinstance(marker_files, list) else 0  # a broken field type never breaks the run
 
     now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
 

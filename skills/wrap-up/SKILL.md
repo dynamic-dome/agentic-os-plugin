@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '5.1'
+  version: '5.2'
   part-of: agentic-os
   layer: core
 ---
