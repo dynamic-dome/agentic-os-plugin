@@ -2,8 +2,8 @@
 """Tests for scripts/measure_session_cost.py.
 
 The script turns a Claude Code transcript into MEASURED per-call cost facts.
-Its whole reason to exist is that estimates lied: cost-trace.sh writes
-context_bytes/4 guesses, and the first manual transcript analysis was 2.77x too
+Its whole reason to exist is that estimates lied: context_bytes/4 guesses
+(written by a removed script, still present in old traces), and the first manual transcript analysis was 2.77x too
 high because it summed per-content-block records instead of per-API-call.
 
 Contract under test:
@@ -180,7 +180,7 @@ class TestMeasureSessionCost(unittest.TestCase):
 
     # --- 7. measured trace records -----------------------------------------
     def test_append_trace_writes_measured_record(self):
-        """The point of the script: replace cost-trace.sh's estimate:true guesses."""
+        """The point of the script: a MEASURED row (estimate:false), never a guess."""
         mem = os.path.join(self.tmp, ".agent-memory")
         write_jsonl(self.transcript, [slash_rec(), rec("m1", cache_read=1000, cache_write=50000, out=10)])
         p = run(self.transcript, "--append-trace", mem, "--task", "wrap-up", "--since-wrapup")
@@ -196,7 +196,7 @@ class TestMeasureSessionCost(unittest.TestCase):
     def test_append_trace_nested_store_guard(self):
         """DCO-9192: a relative default mem-dir with a cwd already inside
         .agent-memory must not create .agent-memory/.agent-memory/metrics
-        (mirrors cost-trace.sh's guard, b34d055)."""
+        (guard b34d055)."""
         write_jsonl(self.transcript, [rec("m1", cache_read=100, out=5)])
         mem = os.path.join(self.tmp, ".agent-memory")
         nested_cwd = os.path.join(mem, "working")

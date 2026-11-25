@@ -7,9 +7,9 @@ or a convention file); a new rule is the exception. This script only does the
 mechanical half and writes nothing:
 
   propose  For every eligible learning, the top catalog sections by TF-IDF
-           cosine. The model classifies (rule / new rule / fact), the owner
-           decides at the gate, the `principles` plan section of
-           apply_wrapup.py writes the pointer (/agentic-os:maintain Step 5c).
+           cosine. Hints, not verdicts: in the Pflegelauf (/agentic-os:maintain)
+           the agent judges each row, the `principles` plan section of
+           apply_wrapup.py writes the pointer.
   report   eligible / anchored / pointers - the share that is already a member
            of a pointer (plan target: >= 60 % after the first run) - and
            lost_anchors: live pointers whose anchor no longer resolves (the
@@ -17,6 +17,9 @@ mechanical half and writes nothing:
 
 Eligible: not superseded, not a pointer, not a codex tip, importance >= N
 (default 4), older than D days (default 30), not yet a member of a pointer.
+--skip-reviewed (Pflegelauf, 6.0.0) also leaves out rows a run judged already:
+review_after after today, or no review_after and an update_log entry by
+"pflegelauf". A "bleibt" row whose review_after has passed comes back.
 
 Catalog: markdown files given with --catalog, or the list "rule_catalog" in
 ~/.claude/agentic-os.local.json (paths stay out of the code - export hygiene).
@@ -25,7 +28,7 @@ apply_wrapup.py resolves.
 
 Usage:
   python learnings_lifecycle.py propose <mem> [--catalog a.md b.md] [--top 3]
-         [--min-importance 4] [--min-age-days 30] [--today YYYY-MM-DD]
+         [--min-importance 4] [--min-age-days 30] [--today YYYY-MM-DD] [--skip-reviewed]
   python learnings_lifecycle.py report <mem> [--min-importance 4] [--min-age-days 30]
 Exit: 0 ok · 1 usage / no catalog · 2 unreadable store.
 """
@@ -146,6 +149,15 @@ def cosine(a, b):
     return sum(x * b.get(w, 0.0) for w, x in a.items())
 
 
+def reviewed(r, today):
+    """Judged by a Pflegelauf already: review date after today, or no review date and a pflegelauf entry in
+    update_log. A passed review date wins over the log entry: a "bleibt" row is due again (final review I1)."""
+    if r.get("review_after"):
+        return str(r.get("review_after"))[:10] > today.isoformat()
+    log = r.get("update_log")
+    return isinstance(log, list) and any(isinstance(e, dict) and e.get("by") == "pflegelauf" for e in log)
+
+
 def cmd_propose(a, rows, today):
     paths = catalog_paths(a.catalog)
     secs = sections(paths)
@@ -157,7 +169,7 @@ def cmd_propose(a, rows, today):
     taken = members_of_pointers(rows)
     proposals = []
     for r in eligible(rows, a.min_importance, a.min_age_days, today):
-        if str(r.get("id")) in taken:
+        if str(r.get("id")) in taken or (a.skip_reviewed and reviewed(r, today)):
             continue
         q = vectorize(r.get("text", ""), idf)
         scored = sorted(((cosine(q, v), i) for i, v in enumerate(vecs)), reverse=True)[:a.top]
@@ -198,6 +210,9 @@ def main(argv) -> int:
     ap.add_argument("--min-importance", type=int, default=4)
     ap.add_argument("--min-age-days", type=int, default=30)
     ap.add_argument("--today")
+    ap.add_argument("--skip-reviewed", action="store_true",
+                    help="propose: leave out rows with a future review_after, or without review_after but with a "
+                         "pflegelauf update_log entry")
     try:
         a = ap.parse_args(argv)
     except SystemExit:

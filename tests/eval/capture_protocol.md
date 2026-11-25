@@ -40,11 +40,10 @@ proves the agent still *acts* on them.
 3. **Emit the side-effect signature** as JSON (schema below). Capture:
    - `briefing_blocks`: which top-level briefing sections the agent produced.
    - `gates_fired`: which gates the agent surfaced (recovery, fast_path,
-     soul_candidate, user_candidate, escalation, ...).
+     soul_candidate, user_candidate, ...).
    - `files_written`: files the agent created/modified in `<TMP>/mem`
-     (bootstrap is read-only except a `j`-confirmed soul write and an escalation
-     append). **Normalize** any session-id in a path to the literal `<sid>`.
-     **Exclude** `metrics/` writes (the fail-soft cost-trace append) — they are
+     (bootstrap is read-only except a `j`-confirmed user-candidate promotion). **Normalize** any session-id in a path to the literal `<sid>`.
+     **Exclude** `metrics/` writes (the fail-soft measured cost trace) — they are
      telemetry, not behavior, and `check_sideeffects.py` drops them anyway.
    - `json_keys_touched`: for each modified JSON file, which top-level keys changed.
    - `questions_asked`: which gate questions the agent posed (by gate name).
@@ -61,7 +60,7 @@ proves the agent still *acts* on them.
 {
   "briefing_blocks": ["HANDOFF", "LAST SESSION", "RECOVERY", "HEALTH"],
   "gates_fired": {"recovery": true, "fast_path": false, "soul_candidate": false},
-  "files_written": [{"path": "working/escalations-<sid>.json", "op": "append"}],
+  "files_written": [],
   "json_keys_touched": {"consolidation-marker.json": ["last_wrapup"]},
   "questions_asked": ["soul_candidate_gate"]
 }

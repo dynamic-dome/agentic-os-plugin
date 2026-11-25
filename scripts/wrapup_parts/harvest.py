@@ -21,7 +21,7 @@ MAX_FILES = 20
 MEM_DIRNAME = ".agent-memory"
 # Above this many commits the harvest groups by type: one iteration per type instead of one per
 # commit. Real-data dry run 2026-09-24: DCO had 145 un-wrapped commits - 145 mechanical log entries
-# would drown the iteration log and feed spurious clusters to extract_patterns.
+# would drown the iteration log.
 GROUP_ABOVE = 8
 MAX_SUBJECTS = 15
 MAX_TITLE = 160      # real DCO commit subjects run to several hundred characters

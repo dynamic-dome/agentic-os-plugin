@@ -4,6 +4,106 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-25] Release v6.0.0 — Schlank: Learnings erreichbar, Wiedereinstieg im Projekt
+
+MAJOR: Skills und Commands entfallen, wrap-up-Plansektionen ändern sich. Jeder verbleibende Baustein dient einem von zwei
+Zielen (Learnings global erreichbar halten, im Projekt wissen, wo man steht) oder schützt den Store. Gestrichen wird Code,
+nie Daten.
+
+### Entfernt
+
+- **Pattern-Mechanik:** Skill `pattern-extractor`, `scripts/extract_patterns.py`, Pattern-Zähler und -Hinweis im
+  Start-Hook, die Pattern-Felder in session-bootstrap, maintain und status, der Pattern-Schritt von obsidian-sync und das
+  Feld `patterns_found` der Session-Note. Neue Stores bekommen weder `patterns/` noch `generated-skills/`.
+- **Fehlerprotokoll:** wrap-up und `/agentic-os:log` schreiben `iterations/errors.json` nicht mehr; die Datei wird auf
+  jedem Schreibweg abgelehnt wie `patterns.*`. Start-Briefing, session-bootstrap und status zählen keine Fehler mehr, die
+  Statistik in `session-summary.md` nennt nur noch die Iterationen.
+- **Identity-Ernte:** Kandidaten wachsen nicht mehr, nichts wird in `user.md` übernommen, die Gates in session-bootstrap
+  entfallen; session-bootstrap ist ohne Ausnahme read-only. Profil, Changelog und die sechs Briefing-Zeilen bleiben
+  lesend; eine Profiländerung geht weiter nur über `user_md_supersede` und `user_md_retire` mit geprüftem Zitat.
+- **Restore aus Archiven:** `scripts/restore_plan.py` und maintain Step 5b. Ein Plan mit `restore` wird vor allen anderen
+  Prüfungen abgelehnt (Exit 2, „removed in 6.0.0“).
+- **Einmalläufe und Meldungen ohne Leser:** `scripts/harvest_backfill.py`, `scripts/migrate_identity.py`,
+  `scripts/cost-trace.sh` und die Eskalationsmarker `working/escalations-<sid>.json`. wrap-up misst Kosten nur noch über
+  `measure_session_cost.py`, ohne Schätzwert.
+- **`/agentic-os:memory-audit`:** Staleness geht in die Kandidaten des Pflegelaufs auf (fällige und nicht
+  verankerte Learnings).
+- **Eigener Bericht von `review_sweep.py` in wrap-up:** wrap-up schreibt `working/review-sweep.md` nicht mehr, und
+  `reports.review_sweep` entfällt. `review_sweep.py` bleibt Kandidatenquelle des Pflegelaufs (`--candidates-json`);
+  der Schlusssatz von `--report` verweist auf `/agentic-os:maintain`.
+
+### Geändert
+
+- **`/agentic-os:maintain` ist der Pflegelauf.** Kandidaten: ähnliche Paare über den Atlas (nur im eigenen Projekt; ohne
+  Atlas entfällt die Paarsuche), fällige Learnings aus `review_sweep.py --candidates-json` und nicht verankerte aus
+  `learnings_lifecycle.py propose --skip-reviewed`. Der Agent urteilt je Kandidat (doppelt, überholt, gegenstandslos,
+  verwandt, global, bleibt) und meldet je Urteil eine Zeile; es gibt keine Prüfkarten und keine `[j/n]`-Fragen. Die
+  Paarmenge lässt abgelehnte und zurückgezogene Learnings (`bridge_status` rejected/retired) aus, Atlas-Treffer mit
+  `outside_filter: true` (andere Stores) werden vor der Paarbildung verworfen. Geschrieben wird in Paketen zu 30 über
+  `apply_wrapup.py`, der Stempel erst im letzten Plan eines vollständigen Laufs. Das erste Paket eines Laufs läuft mit
+  `--snapshot` (unter dem Lock, nach der Planprüfung; scheitert die Kopie, schreibt der Lauf nichts), alle weiteren
+  ohne, damit die Aufbewahrung den Schnappschuss nicht verdrängt. Er ist der Rückholpunkt des ganzen Laufs und steht im
+  Bericht; ist er inzwischen aufgeräumt, sagt der Bericht das und nennt `update_log` (`old`/`new`) als Rückweg. Ein abgebrochener Lauf wird fortgesetzt, ohne
+  fällige Learnings zu verlieren: Die Wiederaufnahme-Regel gilt nur für die Atlas-Paarmenge, und
+  `propose --skip-reviewed` lässt ein `bleibt`-Learning nur aus, solange sein `review_after` in der Zukunft liegt.
+  Kritische globale Regeln laufen weiter über das rule_class-Gate. Die JSON-Reparatur bleibt der einzige Schritt des Owners.
+  Der Applier verweigert `superseded_by`/`obsolete` auf Regel-Learnings (Flag oder Regel-Tag, auch ältere Zeilen ohne
+  Flag), Zeigern und deren Mitgliedern, auf einem Learning, das Nachfolger eines anderen ist (auch paketübergreifend),
+  und bei freigegebenem Feedback jeden Nachfolger, der nicht selbst freigegebenes Feedback ist.
+- **Schwellen erscheinen nur noch im Start-Briefing.** `memory-thresholds.sh` meldet zusätzlich
+  `PFLEGELAUF: n neue Learnings seit <Datum>`, sobald seit dem letzten Stempel 30 Learnings dazugekommen sind (ohne
+  Stempel zählt der ganze Store). wrap-up meldet keine Schwellen mehr und empfiehlt den Pflegelauf nur, wenn er fällig ist
+  (`pflegelauf_due` im `pre`); session-bootstrap und status zeigen die Zeile ebenfalls. Nur die `PFLEGELAUF`-Zeile
+  verweist auf `/agentic-os:maintain`; die übrigen `THRESHOLD`-Zeilen nennen keinen Befehl mehr, weil der Pflegelauf
+  an diesen Zählungen nichts ändert.
+- **MEMORY.md zeigt nur Regelzeiger und freigegebene Feedback-Learnings** (`kind: feedback`, Deckel unverändert). Die
+  übrigen Learnings holt Claude Code über den Atlas auf Abruf; die AGENTS.md-Projektion bleibt unverändert. Die
+  Statuszeile der Projektion zählt `pointers` und `feedback`.
+- **wrap-up verlangt nur noch `summary`.** Alte Sektionen werden ignoriert und gezählt (siehe Migration);
+  `identity_status_line` entfällt, neu ist `ignored_status_line`. Handoff Mode rendert kein `Active patterns` mehr.
+- **session-bootstrap ist kürzer** (rund 240 statt 375 Zeilen): Er läuft auf Abruf und liefert, was der Hook nicht
+  liefert (Status-Board, Key Learnings, Wiki-Kontext, Sharepoint-Pull), ohne Soul- und Identity-Schritte.
+- `apply_wrapup.py` prüft die eingefrorene Kandidaten-Queue vorab nur noch für einen Plan, der sie liest
+  (`identity_expire`, `corrections.profile_candidates`); eine kaputte Queue blockiert keinen anderen Plan mehr.
+
+### Neu
+
+- **Plansektion `learning_updates`:** setzt `superseded_by` (oder hebt es mit `null` auf) oder `review_after`, nie den
+  Text; jede Änderung steht mit Grund, Feld, altem und neuem Wert in `update_log` (`field`, `old`, `new`), so lässt
+  sich jedes Urteil einzeln zurücknehmen. Vor dem ersten Byte abgelehnt: `superseded_by` auf rule_class-Learnings,
+  Regelzeigern und deren Mitgliedern; Ziele, die selbst Zeiger, abgelehnt, zurückgezogen oder nicht freigegebene Regeln
+  sind; Ketten, Paare, fehlende oder zu lange Gründe. Ein wrap-up-Plan mit `learning_updates` oder `pflegelauf_stamp`
+  wird abgelehnt (Exit 2); beide gehören zu `/agentic-os:maintain`.
+- **Urteil „gegenstandslos“:** Ein Learning über Mechanik, die abgebaut ist (etwa Pattern-Sync), geht ohne
+  Nachfolger aus der aktiven Sicht: `learning_updates` `{"id", "obsolete": true, "reason"}` setzt
+  `superseded_by = "obsolete:pflegelauf-<Datum>"` mit Eintrag in `update_log`; gelöscht wird nichts (D-021),
+  zurück geht es mit `superseded_by: null`. Dieselben Sperren wie bei `superseded_by` (rule_class, Regelzeiger und deren
+  Mitglieder) plus: nicht auf ein schon abgelöstes Learning. Zählung `tally.learning_updates.obsolete`.
+- **Plansektion `pflegelauf_stamp`:** schreibt `working/pflegelauf.json` (`date`, `id_keys`), die Basis der
+  PFLEGELAUF-Zeile.
+- `review_sweep.py --candidates-json` (lesend, `[{id, reason}]`) und `learnings_lifecycle.py propose --skip-reviewed`
+  als Kandidatenquellen des Pflegelaufs.
+- **Lückenliste im Brief (`prelude_gaps`, 2026-11-20):** `wrapup_core.py pre` liest das Protokoll des Mods
+  prelude-gate (nur lesend) und listet bis zu 15 Prompts dieser Sitzung, zu denen das Gate kein Learning behielt.
+  Der Judge macht aus übertragbaren Lösungen dazu Learnings mit Tag `luecke` (innerhalb der Obergrenze 3).
+  Einstellung: `config.json` → `prelude_log_dir`, sonst `AGENTIC_OS_PRELUDE_LOG_DIR`; ohne sie steht
+  `nicht eingerichtet` im Brief. Modul `scripts/wrapup_parts/prelude_gaps.py`, Entwurf
+  `docs/superpowers/specs/2026-11-20-prelude-luecken-design.md`.
+
+### Migration
+
+- **Alte wrap-up-Sektionen werden ignoriert, nicht abgelehnt.** Ein Plan mit `identity`, `user_candidates` oder `errors`
+  in einer Iteration läuft durch; für diese Teile wird nichts geschrieben, `tally.ignored_sections` nennt sie, dazu die
+  Zeile `Ignoriert (6.0.0): …`. Leere Listen zählen nicht. So scheitern ältere Skill-Fassungen in anderen Projekten nicht;
+  nach 6.x wird daraus eine Ablehnung.
+- **Vorhandene Store-Dateien bleiben unangetastet:** `patterns.json`/`patterns.md`, `errors.json`,
+  `working/user-candidates.json` und die zentrale Kandidaten-Queue, `soul-candidates.md`, alle `*-archive-*`-Dateien und
+  `generated-skills/`. Keine von ihnen wächst mehr; einzige Ausnahme ist `soul-candidates.md`, wenn ein alter Aufrufer
+  die Sektion `soul_candidates` noch sendet (seit 5.11.0 plant sie kein Skill, niemand liest die Datei). Die Kandidaten-Queue ist nicht ganz still: `identity_expire` und
+  `corrections.profile_candidates` lesen und ändern sie weiter, `preprocess_state.py` liest sie für die Schlüsselliste
+  und die Identity-Zusammenfassung.
+- Ein Plan mit `restore` wird abgelehnt; Archivzeilen holt nur eine Version vor 6.0.0 zurück.
+
 ## [2026-11-15] Release v5.14.1 — Regel-Freigabe per Go in eigenen Worten
 
 - **Ein Regel-Learning gibt der Owner mit einem Go in eigenen Worten frei, nicht mehr mit zwei Sätzen.** Das Feld in `rule_releases` heißt jetzt `owner_go` und wird mit unverändertem Wortlaut gespeichert (`release.owner_go`; Leerraum und Zeilenumbrüche werden wie bei allen Feldern zu einfachen Leerzeichen). Geprüft werden mindestens drei Wörter mit Buchstaben oder Ziffern (ein nacktes „Go“ reicht nicht, „Go . .“ auch nicht), höchstens 400 Zeichen und dass es keine Kopie des Erklärbogens oder der Regel ist; die Satzzählung entfällt. Ein Plan mit dem alten Feld `two_sentences` wird abgelehnt, bevor etwas geschrieben wird, auch bei einer Ablehnung (`status: rejected`); ein Test prüft das an einem gemischten Plan Byte für Byte über alle Store-Dateien. Ein Go darf Wörter der Regel aufgreifen; abgelehnt wird nur eine fast vollständige Kopie von Erklärbogen oder Regel. Freigaben, die schon im Store stehen, behalten ihr `two_sentences`. Erklärbogen-Vorlage, `judge-rules.md` und `wrapup-schemas.md` sind nachgezogen. Der Weg über das Zweitmodell bleibt unverändert.

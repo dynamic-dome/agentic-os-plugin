@@ -10,7 +10,7 @@ Diff semantics (memevalharness.md):
     json_keys_touched                            : EXACT match (behavior invariants)
   - briefing_blocks                              : SET match (order/wording free)
   - free text                                    : ignored
-  - metrics/ writes (fail-soft cost-trace)       : excluded from files_written —
+  - metrics/ writes (fail-soft cost trace)       : excluded from files_written —
     they are telemetry, not a behavioral gate (see capture_protocol.md).
 
     python tests/eval/check_sideeffects.py <scenario> <captured.json>

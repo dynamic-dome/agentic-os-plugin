@@ -2,12 +2,13 @@
 """E2: hub (learnings.json) -> managed block in Claude Code's native MEMORY.md.
 
 MEMORY.md is the ONLY native-memory file Claude loads at session start, so
-approved learnings + feedback rendered here are always present for Claude —
+rule pointers + approved feedback rendered here are always present for Claude —
 including source_agent=codex entries (that is the Codex->Claude half of the
-bridge). Each entry is a short form (~150 chars, line <= 200) behind its [id];
-the full text stays in learnings.json. Everything outside the markers
-(handwritten index lines) stays byte-identical. learnings.json stays canonical;
-regenerate any time.
+bridge). Plain learnings are not rendered here since 6.0.0 (prelude / atlas
+serve them; AGENTS.md keeps its own selection). Each entry is a short form
+(~150 chars, line <= 200) behind its [id]; the full text stays in learnings.json.
+Everything outside the markers (handwritten index lines) stays byte-identical.
+learnings.json stays canonical; regenerate any time.
 
 Usage:
   python memory_index_projection.py <mem-dir> --memory-md <path>
@@ -58,8 +59,9 @@ def native_memory_md(project_root, home=None):
 
 def load_entries(mem_dir):
     """-> (pointers, approved) or None when learnings.json is unreadable. `pointers` is in render
-    order (relevance, P3-A) and complete - the block shows the first POINTER_CAP; `approved` is
-    already without the members of shown pointers. `shown()` is the exact rendered selection."""
+    order (relevance, P3-A) and complete - the block shows the first POINTER_CAP; `approved` holds the
+    approved feedback rows (6.0.0: nothing else is listed), already without the members of shown
+    pointers. `shown()` is the exact rendered selection ("listed in MEMORY.md", not "all approved")."""
     path = os.path.join(mem_dir, "learnings", "learnings.json")
     if not os.path.isfile(path):
         return [], []
@@ -77,11 +79,12 @@ def load_entries(mem_dir):
     # fold only members of pointers that are actually SHOWN (Codex round 2); the cap goes by relevance (P3-A)
     shown, folded, _hidden = select_pointers(pointers, by_id, POINTER_CAP)
     pointers = shown + [p for p in pointers if p not in shown]
-    approved = [e for e in entries if e.get("kind") != "principle"
+    # 6.0.0: only owner corrections (kind "feedback") sit beside the pointers; plain learnings (and rows
+    # without a kind) reach Claude through the prelude / the atlas, AGENTS.md (bridge_projection) keeps them
+    approved = [e for e in entries if e.get("kind") == "feedback"
                 and e.get("bridge_status") == "approved" and str(e.get("id")) not in folded]
     # E14: importance before date (the 20 newest used to win, half of them codex tips)
-    approved.sort(key=lambda e: (_imp(e), e.get("kind", "learning") == "feedback",
-                                 str(e.get("date", ""))), reverse=True)
+    approved.sort(key=lambda e: (_imp(e), str(e.get("date", ""))), reverse=True)
     out, codex = [], 0
     for e in approved:
         if e.get("source_agent") == "codex":
@@ -213,10 +216,10 @@ def main(argv):
                 stripped = (BOM if bom else "") + strip_block(current)
                 write_atomic(target, stripped)
                 load, warning = load_report(stripped)
-                print(f"memory-index: 0 approved — block removed from {target}{load}")
+                print(f"memory-index: no pointers and no feedback — block removed from {target}{load}")
             else:
                 load, warning = load_report(on_disk) if exists else ("", None)
-                print(f"memory-index: no approved learnings, nothing to do{load}")
+                print(f"memory-index: no pointers and no feedback, nothing to do{load}")
             if warning:
                 print(warning)
             return 0
@@ -228,11 +231,11 @@ def main(argv):
         return 3
     load, warning = load_report(new)
     if exists and new == on_disk:
-        print(f"memory-index: {len(pointers)} pointers, {len(approved)} approved — block up to date{load}")
+        print(f"memory-index: {len(pointers)} pointers, {len(approved)} feedback — block up to date{load}")
     else:
         write_atomic(target, new)
         cap = f" (capped at {CAP})" if len(approved) > CAP else ""
-        print(f"memory-index: {len(pointers)} pointers, {len(approved)} approved -> {target}{cap}{load}")
+        print(f"memory-index: {len(pointers)} pointers, {len(approved)} feedback -> {target}{cap}{load}")
     if warning:
         print(warning)
     return 0

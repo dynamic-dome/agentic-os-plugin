@@ -96,24 +96,6 @@ for skill_dir in "$SKILLS_DIR"/*/; do
     fi
 done
 
-# skill-generator folded into pattern-extractor (v4.0.0): the Skill Candidate
-# Generation section must gate on confidence>=0.7 + occurrences>=3 and carry the
-# minimal generated-skill template (name/description/type: skill).
-echo ""
-echo "-- pattern-extractor: skill candidate generation (folded skill-generator) --"
-PE_SCG_FILE="$SKILLS_DIR/pattern-extractor/SKILL.md"
-if [ -f "$PE_SCG_FILE" ]; then
-    if grep -qi "Skill Candidate Generation" "$PE_SCG_FILE" \
-       && grep -qE "confidence >= 0\.7" "$PE_SCG_FILE" \
-       && grep -qE "occurrences >= 3" "$PE_SCG_FILE" \
-       && grep -q "generated-skills" "$PE_SCG_FILE" \
-       && grep -q "type: skill" "$PE_SCG_FILE"; then
-        pass "pattern-extractor: skill candidate generation present (gate + generated-skills path + minimal template)"
-    else
-        fail "pattern-extractor: Skill Candidate Generation section missing or incomplete — must gate on confidence>=0.7 + occurrences>=3, write to .agent-memory/generated-skills/, and include the minimal template (name/description/type: skill)"
-    fi
-fi
-
 # test-validator, code-reviewer, quality-gate skills removed — v3/v4 consolidation
 
 echo ""
@@ -212,17 +194,6 @@ fi
 # tdd, code-reviewer JSON template tests removed — merged into quality-gate in v3
 
 echo ""
-echo "-- pattern-extractor trigger language consistency --"
-PE_FILE="$SKILLS_DIR/pattern-extractor/SKILL.md"
-if [ -f "$PE_FILE" ]; then
-    if grep -q "Muster extrahieren\|Patterns analysieren\|welche Muster erkennst du\|was lief heute schief\|warum passiert das immer wieder\|welche fehler mache ich oft" "$PE_FILE"; then
-        fail "pattern-extractor: description contains German trigger phrases — triggers must use English for consistent auto-matching"
-    else
-        pass "pattern-extractor: description trigger phrases use English (no German triggers)"
-    fi
-fi
-
-echo ""
 echo "-- context-keeper trigger language consistency --"
 CK_FILE="$SKILLS_DIR/context-keeper/SKILL.md"
 if [ -f "$CK_FILE" ]; then
@@ -280,16 +251,6 @@ if [ -f "$WU2_FILE" ]; then
 fi
 
 echo ""
-echo "-- session-bootstrap: errors.json load count consistent with usage --"
-SB2_FILE="$SKILLS_DIR/session-bootstrap/SKILL.md"
-if [ -f "$SB2_FILE" ]; then
-    if grep -q "last 5 entries" "$SB2_FILE" && grep -q "Last 3 errors\|last 3 errors" "$SB2_FILE"; then
-        fail "session-bootstrap: Step 2 loads 'last 5 entries' from errors.json but Step 4/5 only use 'last 3 errors' — inconsistent, causes confusion about buffer size"
-    else
-        pass "session-bootstrap: errors.json load count consistent with usage in Step 4/5"
-    fi
-fi
-
 # retrospective skill removed in v4.0.0 — periodic-retrospective bracket test removed
 
 # --- Memory Growth Engine (Master-Plan 2026-06-03, Sprint user.md + soul.md) ---
@@ -300,37 +261,9 @@ SB_GROW_FILE="$SKILLS_DIR/session-bootstrap/SKILL.md"
 MM_GROW_FILE="$PLUGIN_ROOT/commands/maintain.md"
 
 echo ""
-echo "-- wrap-up: user.md growth engine (candidate queue + 3-stage classification) --"
+echo "-- wrap-up: profile changes — trust boundary (conversation-only) --"
 if [ -f "$WU_GROW_FILE" ]; then
-    # Also pin the promotion rule (inferred + occ>=2 + conf>=0.6) and the changelog-before-write
-    # atomicity — otherwise the test stays green if those guarantees are stripped (Codex MAJOR #1).
-    if grep -qiE "\(user-growth\)" "$WU_GROW_FILE" \
-       && grep -qiE "user-candidates\.json" "$WU_GROW_FILE" \
-       && grep -qiE "observed.*inferred.*confirmed|observed / inferred / confirmed" "$WU_GROW_FILE" \
-       && grep -qiE "inferred.*AND.*occurrences|occurrences.*AND.*confidence" "$WU_GROW_FILE" \
-       && grep -qE "0\.6" "$WU_GROW_FILE" \
-       && grep -qiE "changelog BEFORE|before the user\.md|changelog.*before the|first.*append.*changelog" "$WU_GROW_FILE"; then
-        pass "wrap-up: user.md growth engine present — queue + 3-stage + promotion rule + changelog-before-write"
-    else
-        fail "wrap-up: user.md growth engine missing — Step 6 must use working/user-candidates.json with observed/inferred/confirmed, the promotion rule (inferred + occ>=2 + conf>=0.6) AND changelog-before-write atomicity, replacing the dead '3+ corrections' direct-write"
-    fi
-fi
-
-echo ""
-echo "-- wrap-up: user.md growth — mood never promoted + changelog/rollback --"
-if [ -f "$WU_GROW_FILE" ]; then
-    if grep -qiE "signal:mood|mood.*never promot|never promot.*mood" "$WU_GROW_FILE" \
-       && grep -qiE "user-changelog\.json" "$WU_GROW_FILE"; then
-        pass "wrap-up: user.md growth — mood-marker excluded from promotion + user-changelog.json audit/rollback"
-    else
-        fail "wrap-up: user.md growth missing safeguards — must exclude signal:mood from promotion AND log every change to identity/user-changelog.json (audit + rollback)"
-    fi
-fi
-
-echo ""
-echo "-- wrap-up: user.md growth — trust boundary (conversation-only) --"
-if [ -f "$WU_GROW_FILE" ]; then
-    # Candidates must originate from user conversation, NEVER from web/docs/notebooklm/wiki (poisoning).
+    # Profile changes must originate from user conversation, NEVER from web/docs/notebooklm/wiki (poisoning).
     # Bind the forbidden-source list to the (trust-boundary) marker's own block (grep -A2), so an
     # unrelated 'NotebookLM' elsewhere (Step 7 sync) can't keep this green if the boundary is stripped
     # (Codex MAJOR #2 — verified strip->FAIL on the marker block).
@@ -338,9 +271,9 @@ if [ -f "$WU_GROW_FILE" ]; then
     if [ -n "$TB_BLOCK" ] \
        && echo "$TB_BLOCK" | grep -qiE "trust_source|conversation" \
        && echo "$TB_BLOCK" | grep -qiE "web/docs|NotebookLM|wiki content|untrusted"; then
-        pass "wrap-up: user.md growth — trust boundary enforced (conversation-only, forbidden sources named in marker block)"
+        pass "wrap-up: profile changes — trust boundary enforced (conversation-only, forbidden sources named in marker block)"
     else
-        fail "wrap-up: user.md growth missing trust boundary — the (trust-boundary) block must name the forbidden sources (web/docs/NotebookLM/wiki) candidates may NEVER come from (memory poisoning)"
+        fail "wrap-up: profile changes missing trust boundary — the (trust-boundary) block must name the forbidden sources (web/docs/NotebookLM/wiki) a profile change may NEVER come from (memory poisoning)"
     fi
 fi
 
@@ -359,27 +292,27 @@ if [ -f "$WU_GROW_FILE" ]; then
 fi
 
 echo ""
-echo "-- wrap-up: identity quality (P1/B2) — quote duty, key reuse, supersede, plain text --"
+echo "-- wrap-up: identity quality (P1/B2) — quote duty, supersede, plain text --"
 if [ -f "$WU_GROW_FILE" ]; then
     # Prose anchors for the B2 contract the scripts enforce (tests/test-identity-b2.py proves the code side).
-    # quote duty: confirmed needs a LITERAL quote that is verified against the transcript; the verdict values are named
+    # quote duty: a supersede / retire needs a LITERAL quote that is verified against the transcript; the verdict values are named
     QD_BLOCK=$(grep -A14 -iE "\(quote-duty\)" "$WU_GROW_FILE")
     if [ -n "$QD_BLOCK" ] \
        && echo "$QD_BLOCK" | grep -qE "LITERAL" \
        && echo "$QD_BLOCK" | grep -qE "quote_verified" \
        && echo "$QD_BLOCK" | grep -qE "kein_transkript" \
-       && echo "$QD_BLOCK" | grep -qiE "second mention"; then
-        pass "wrap-up: quote duty present — confirmed needs a literal, verified quote (true|false|kein_transkript), else the second mention"
+       && echo "$QD_BLOCK" | grep -qE "user_md_retire|retire"; then
+        pass "wrap-up: quote duty present — a supersede or retire needs a literal, verified quote (true|false|kein_transkript)"
     else
-        fail "wrap-up: quote duty missing — the (quote-duty) block of Step 6.2 must demand a LITERAL quote, name quote_verified and kein_transkript, and keep the second-mention rule"
+        fail "wrap-up: quote duty missing — the (quote-duty) block of Step 6 must demand a LITERAL quote for supersede and retire and name quote_verified and kein_transkript"
     fi
-    # key reuse: stage 0 hands the existing keys to the model, Step 6.2 tells it to reuse them
-    if grep -qE "\(key-reuse\)" "$WU_GROW_FILE" \
-       && grep -qE "user_candidates" "$WU_GROW_FILE" \
-       && grep -A8 -E "\(key-reuse\)" "$WU_GROW_FILE" | grep -qiE "verbatim"; then
-        pass "wrap-up: key reuse present — Step 0 state lists user_candidates, Step 6.2 reuses the key verbatim"
+    # 6.0.0: the harvest is gone, judge-rules says so and names the ignored sections
+    if grep -qE "\(key-reuse\)|\(queue-re-review\)|\(identity-harvest\)" "$WU_GROW_FILE"; then
+        fail "wrap-up: judge-rules still carries harvest anchors (key-reuse / queue-re-review / identity-harvest) - the harvest was removed in 6.0.0"
+    elif grep -qE "ignored_sections" "$WU_GROW_FILE" && grep -qF 'Ignoriert (6.0.0)' "$WU_GROW_FILE"; then
+        pass "wrap-up: harvest removed — no harvest anchors, old sections are named as ignored (ignored_sections, Ignoriert (6.0.0))"
     else
-        fail "wrap-up: key reuse missing — Step 6.2 (key-reuse) must tell the model to send the existing key verbatim from the stage-0 user_candidates"
+        fail "wrap-up: Step 6 must say that old identity/user_candidates/errors sections are ignored (tally.ignored_sections, 'Ignoriert (6.0.0)')"
     fi
     # supersede: own plan section, changelog first, plain text and reason required
     SS_BLOCK=$(grep -A32 -iE "\(user-supersede\)" "$WU_GROW_FILE")
@@ -421,26 +354,17 @@ if [ -f "$WU_GROW_FILE" ]; then
     else
         fail "wrap-up: quote limits missing — Step 6.2 (quote-limits) must say the check proves the WORDING, not the MEANING, that Dominic calibrates the thresholds, and name CLAUDE_CODE_SESSION_ID / session_binding_mismatch and the .claude/projects/<dir>/<session-id>.jsonl rule / transcript_override_rejected"
     fi
-    # quote duty details (D4, D5): length, word boundaries, negation, which sources do not count
-    QD2_BLOCK=$(grep -A30 -iE "\(quote-duty\)" "$WU_GROW_FILE")
+    # quote duty details (D4, D5): length, word boundaries, negation, which sources do not count, the reasons
+    QD2_BLOCK=$(grep -A30 -iE "\(quote-duty\)" "$WU_GROW_FILE" | tr -s '[:space:]' ' ')
     if echo "$QD2_BLOCK" | grep -qE "8 characters and 3 words" \
        && echo "$QD2_BLOCK" | grep -qiE "word boundaries" \
        && echo "$QD2_BLOCK" | grep -qiE "negation word" \
        && echo "$QD2_BLOCK" | grep -qiE "accepted prompt suggestions" \
        && echo "$QD2_BLOCK" | grep -qiE "pasted text" \
-       && echo "$QD2_BLOCK" | grep -qE "quote_reasons"; then
-        pass "wrap-up: quote duty details present — 3 words, word boundaries, negation neighbour, sources that do not count, quote_reasons"
+       && echo "$QD2_BLOCK" | grep -qE "too_few_words"; then
+        pass "wrap-up: quote duty details present — 3 words, word boundaries, negation neighbour, sources that do not count, the reasons"
     else
-        fail "wrap-up: quote duty details missing — Step 6.2 (quote-duty) must name 3 words, word boundaries, the negation neighbour rule, accepted prompt suggestions and pasted text as non-sources, and tally.quote_reasons"
-    fi
-    # repeat per session (D1)
-    KR_BLOCK=$(grep -A12 -E "\(key-reuse\)" "$WU_GROW_FILE")
-    if echo "$KR_BLOCK" | grep -qE "ONCE per plan" \
-       && echo "$KR_BLOCK" | grep -qE "ANOTHER session" \
-       && echo "$KR_BLOCK" | grep -qE "repeat_not_counted"; then
-        pass "wrap-up: repeat rule present — once per plan, a repeat counts only from ANOTHER session (repeat_not_counted)"
-    else
-        fail "wrap-up: repeat rule missing — Step 6.2 (key-reuse) must say each observation is sent ONCE per plan and a repeat counts only from ANOTHER session (tally.repeat_not_counted)"
+        fail "wrap-up: quote duty details missing — Step 6 (quote-duty) must name 3 words, word boundaries, the negation neighbour rule, accepted prompt suggestions and pasted text as non-sources, and the reasons (too_few_words, ...)"
     fi
     # supersede needs a verified quote (D6, D7)
     SS2_BLOCK=$(grep -A46 -iE "\(user-supersede\)" "$WU_GROW_FILE")
@@ -455,43 +379,25 @@ if [ -f "$WU_GROW_FILE" ]; then
     else
         fail "wrap-up: supersede quote rule missing — Step 6.3b must require a quote, say only a VERIFIED quote applies (else skipped, supersede_skipped_unverified), forbid line separators and the preamble, and reject entries with the same target or new_text"
     fi
-    # lossless promotion and no return of a retracted statement (D8, D9)
-    QR_BLOCK=$(grep -A24 -iE "\(queue-re-review\)" "$WU_GROW_FILE")
-    if echo "$QR_BLOCK" | grep -qE "INSERTED" \
-       && echo "$QR_BLOCK" | grep -qE "NOT promoted" \
-       && echo "$QR_BLOCK" | grep -qE "promotion_blocked_superseded"; then
-        pass "wrap-up: promotion rules present — lines are INSERTED (lossless), a retracted statement is NOT promoted"
-    else
-        fail "wrap-up: promotion rules missing — Step 6.3 must say a promoted line is INSERTED without rewriting user.md and that a statement retracted by a supersede is NOT promoted (promotion_blocked_superseded)"
-    fi
-    # the session id is the real one (D2) and the key list needs --session-id (D10)
+    # the session id is the real one (D2) and pre hands it to stage 0
     if grep -qE "CLAUDE_CODE_SESSION_ID" "$SKILLS_DIR/wrap-up/SKILL.md" \
        && grep -qE "session_binding_mismatch" "$SKILLS_DIR/wrap-up/SKILL.md" \
        && awk '/^def cmd_pre/{f=1} /^def cmd_apply_plan/{f=0} f' "$PLUGIN_ROOT/scripts/wrapup_core.py" | grep -qE '"preprocess_state.py", \[mem, "--session-id", session_id'; then
-        pass "wrap-up: session id rules present — the body names the real session id, pre hands it to stage 0 (candidate keys)"
+        pass "wrap-up: session id rules present — the body names the real session id, pre hands it to stage 0"
     else
         fail "wrap-up: session id rules missing — the body must say the session id is \$CLAUDE_CODE_SESSION_ID (session_binding_mismatch), wrapup_core.py must pass --session-id on"
     fi
-    # maintain Step 5c: the card carries the plain text (D11)
-    M5C_BLOCK=$(sed -n '/^## Step 5c:/,/^## Step 6:/p' "$MM_GROW_FILE" 2>/dev/null)
-    if echo "$M5C_BLOCK" | grep -qE "\*\*\`plain\`\*\*" \
-       && echo "$M5C_BLOCK" | grep -qE "summary, anchor, members, plain, tags" \
-       && echo "$M5C_BLOCK" | grep -qE "600" \
-       && echo "$M5C_BLOCK" | grep -qiE "refuses a card without .plain."; then
-        pass "maintain Step 5c: the pointer card carries plain (<= 600), the plan shows it, the applier refuses a card without it"
+    # maintain (Pflegelauf) Steps 2-3: a pointer entry carries the plain text (D11), the applier refuses one without it
+    MPF_BLOCK=$(sed -n '/^## Step 2:/,/^## Step 4:/p' "$MM_GROW_FILE" 2>/dev/null)
+    if echo "$MPF_BLOCK" | grep -qE "\*\*\`plain\`\*\*" \
+       && echo "$MPF_BLOCK" | grep -qE "summary, anchor, members, plain, tags" \
+       && echo "$MPF_BLOCK" | grep -qE "600" \
+       && echo "$MPF_BLOCK" | grep -qiE "refuses a pointer without .plain."; then
+        pass "maintain Steps 2-3: the pointer entry carries plain (<= 600), the plan shows it, the applier refuses one without it"
     else
-        fail "maintain Step 5c: plain missing — the card must show **\`plain\`**, the plan must be {summary, anchor, members, plain, tags}, 600 characters, and the applier refuses a card without plain"
+        fail "maintain Steps 2-3: plain missing — the pointer entry must show **\`plain\`**, the plan must be {summary, anchor, members, plain, tags}, 600 characters, and the applier refuses a pointer without plain"
     fi
     # --- second round after the reviewer's verdict (D1 gap, D3, D5, D7, D9) ---
-    # a row born without a provable session takes the first real id in without counting (D1 round 2)
-    KR2_BLOCK=$(grep -A18 -E "\(key-reuse\)" "$WU_GROW_FILE")
-    if echo "$KR2_BLOCK" | grep -qE "without a provable session" \
-       && echo "$KR2_BLOCK" | grep -qE "WITHOUT counting" \
-       && echo "$KR2_BLOCK" | grep -qE "session_adopted"; then
-        pass "wrap-up: provable-session rule present — a candidate created without a provable session takes the first real session in WITHOUT counting (session_adopted)"
-    else
-        fail "wrap-up: provable-session rule missing — Step 6.2 (key-reuse) must say a candidate created without a provable session takes the first real session in WITHOUT counting it (tally.session_adopted)"
-    fi
     # the negation reach and the relation hint (D5, D7 round 2)
     QL2_BLOCK=$(grep -A22 -E "\(quote-limits\)" "$WU_GROW_FILE")
     QD3_BLOCK=$(grep -A30 -iE "\(quote-duty\)" "$WU_GROW_FILE")
@@ -502,102 +408,30 @@ if [ -f "$WU_GROW_FILE" ]; then
     else
         fail "wrap-up: reach and relation hint missing — Step 6.2 must say the negation counts within 3 words of the quote, and (quote-limits) that a verified quote sharing no content word with the claim is reported (tally.quote_unrelated)"
     fi
-    # a retracted statement needs the user's verified words to come back; the measure is generous and does not judge meaning (D9 round 4)
-    QR2_BLOCK=$(grep -A26 -iE "\(queue-re-review\)" "$WU_GROW_FILE")
-    if echo "$QR2_BLOCK" | grep -qF 'confirmed_by` is `quote`' \
-       && echo "$QR2_BLOCK" | grep -qE "50% of the content words" \
-       && echo "$QR2_BLOCK" | grep -qiE "synonym" \
-       && echo "$QR2_BLOCK" | grep -qiE "proof level"; then
-        pass "wrap-up: retraction proof level present — a touching candidate needs confirmed_by quote, the measure is 50% of the content words, a synonym is beyond the check"
-    else
-        fail "wrap-up: retraction proof level missing — Step 6.3 must say a candidate that touches a retracted statement is promoted only with confirmed_by quote (a verified quote), that the measure sets the proof level (50% of the content words), and that a synonym is beyond the check"
-    fi
-    # --- third round after the second verdict (R2, R3): false blocks, the release, the negation hints ---
-    # content words, a refinement is no exception, the block is noted on the candidate and reported once, the release (R2 round 3)
-    QR3_BLOCK=$(grep -A40 -iE "\(queue-re-review\)" "$WU_GROW_FILE")
-    if echo "$QR3_BLOCK" | grep -qE "content words" \
-       && echo "$QR3_BLOCK" | grep -qiE "refinement is no exception" \
-       && echo "$QR3_BLOCK" | grep -qE "blocked_by_supersede" \
-       && echo "$QR3_BLOCK" | grep -qiE "once" \
-       && echo "$QR3_BLOCK" | grep -qE "user_md_supersede" \
-       && echo "$QR3_BLOCK" | grep -qiE "verified quote"; then
-        pass "wrap-up: retraction rules round 3 present — content words, a refinement is no exception, the block is noted (blocked_by_supersede) and reported once, release = user_md_supersede with a verified quote"
-    else
-        fail "wrap-up: retraction rules round 3 missing — Step 6.3 must say the measure counts content words, that a refinement is no exception, that a block is noted on the candidate (blocked_by_supersede) and reported once, and that it is released through user_md_supersede with a verified quote"
-    fi
-    # the relation hint looks at the stored text, a quote and a claim of different polarity are reported (R1, R3 round 3)
+    # a quote and a new_text of different polarity are counted; the counter is a weak hint without a warning line (R3 round 3/4)
     QL3_BLOCK=$(grep -A34 -E "\(quote-limits\)" "$WU_GROW_FILE")
-    if echo "$QL3_BLOCK" | grep -qE "STORED" \
-       && echo "$QL3_BLOCK" | grep -qE "quote_polarity" \
-       && echo "$QL3_BLOCK" | grep -qiE "negation"; then
-        pass "wrap-up: relation and polarity hints present — checked against the STORED observation, one-sided negation is counted (quote_polarity)"
+    if echo "$QL3_BLOCK" | grep -qE "quote_polarity" \
+       && echo "$QL3_BLOCK" | grep -qiE "negation" \
+       && echo "$QL3_BLOCK" | grep -qE "WEAK hint" \
+       && echo "$QL3_BLOCK" | grep -qE "NO warning line"; then
+        pass "wrap-up: polarity hint present — one-sided negation is counted (quote_polarity), a WEAK hint with NO warning line"
     else
-        fail "wrap-up: relation and polarity hints missing — Step 6.2 (quote-limits) must say the relation is checked against the STORED observation and that a verified quote and a claim of which only one carries a negation word are reported (tally.quote_polarity)"
-    fi
-    # reviewer round 3/4: the short-line rule is named, the polarity counter is a weak hint without a warning line
-    QR4_BLOCK=$(grep -A44 -iE "\(queue-re-review\)" "$WU_GROW_FILE")
-    QL4_BLOCK=$(grep -A38 -E "\(quote-limits\)" "$WU_GROW_FILE")
-    if echo "$QR4_BLOCK" | grep -qE "fewer than 3" \
-       && echo "$QR4_BLOCK" | grep -qE "all its words" \
-       && echo "$QL4_BLOCK" | grep -qE "WEAK hint" \
-       && echo "$QL4_BLOCK" | grep -qE "NO warning line"; then
-        pass "wrap-up: reviewer round 4 present — a line of fewer than 3 content words needs all its words, quote_polarity is a weak hint without a warning line"
-    else
-        fail "wrap-up: reviewer round 4 missing — Step 6.3 must name the rule for a retracted line of fewer than 3 content words (all its words), and Step 6.2 (quote-limits) must call quote_polarity a WEAK hint with NO warning line"
-    fi
-    # round 5: the second reading without closing brackets, a quote proves wording only, a promoted key is closed
-    QR5_BLOCK=$(grep -A48 -iE "\(queue-re-review\)" "$WU_GROW_FILE")
-    if echo "$QR5_BLOCK" | grep -qE "every closing bracket" \
-       && echo "$QR5_BLOCK" | grep -qE "WORDING only" \
-       && echo "$QR5_BLOCK" | grep -qE "promoted key is closed"; then
-        pass "wrap-up: round 5 present — the line is also read without every closing bracket, a quote proves wording only, a promoted key is closed"
-    else
-        fail "wrap-up: round 5 missing — Step 6.3 must say the retracted line is also read without every closing bracket, that a verified quote proves WORDING only, and that a promoted key is closed (new statement, new key)"
+        fail "wrap-up: polarity hint missing — (quote-limits) must say that a verified quote and a new_text of which only one carries a negation word are counted (tally.quote_polarity), a WEAK hint with NO warning line"
     fi
 fi
 
 echo ""
-echo "-- session-bootstrap: soul.md candidate gate retired (5.11.0, read-only without exception) --"
+echo "-- session-bootstrap: read-only without exception (soul gate 5.11.0, identity gates 6.0.0 gone) --"
 if [ -f "$SB_GROW_FILE" ]; then
-    if grep -qiE "Soul candidate gate — retired" "$SB_GROW_FILE" \
-       && grep -qiE "never write .soul\.md." "$SB_GROW_FILE" \
-       && ! grep -qiE "SOUL CANDIDATES: \{n\} warten" "$SB_GROW_FILE"; then
-        pass "session-bootstrap: soul gate retired — no [j/n] question, soul.md never written"
+    if grep -qE "Do NOT write to any files yourself: no gate, no queue, no exception" "$SB_GROW_FILE" \
+       && ! grep -qiE "SOUL CANDIDATES|soul-candidates\.md|\[j/n\]" "$SB_GROW_FILE"; then
+        pass "session-bootstrap: read-only without exception — no soul or identity gate, no [j/n] question"
     else
-        fail "session-bootstrap: Step 6.5(a) must be retired (5.11.0): no SOUL CANDIDATES question, never write soul.md"
+        fail "session-bootstrap: must state it writes nothing (no gate, no queue, no exception) and carry no SOUL CANDIDATES / soul-candidates.md / [j/n] gate"
     fi
 fi
 
-echo ""
-echo "-- maintain: soul.md 80-line anti-bloat cap --"
-if [ -f "$MM_GROW_FILE" ]; then
-    if grep -qiE "soul\.md" "$MM_GROW_FILE" && grep -qiE "80[ -]?(line|Zeile)" "$MM_GROW_FILE"; then
-        pass "maintain: soul.md 80-line cap present (anti-bloat linter)"
-    else
-        fail "maintain: soul.md 80-line cap missing — consistency check must warn when soul.md exceeds 80 lines (identity dilution)"
-    fi
-fi
-
-# --- patterns.json schema canon (Audit-Hebel #3, 2026-06-03) ---
-# pattern-extractor is the sole writer of patterns.json, so its documented schema is the
-# Single Source of Truth. The canonical fields are description / recommendation / evidence
-# (NOT the legacy name/solution/source_errors or title/prevention/error_ids shapes). The skill
-# must also instruct normalization of legacy entries on read, so the store converges to one shape.
-PE_SCHEMA_FILE="$SKILLS_DIR/pattern-extractor/SKILL.md"
-
-echo ""
-echo "-- pattern-extractor: canonical patterns.json schema (description/recommendation/evidence) --"
-if [ -f "$PE_SCHEMA_FILE" ]; then
-    if grep -qiE "\(pattern-schema-canon\)" "$PE_SCHEMA_FILE" \
-       && grep -qE '"recommendation"' "$PE_SCHEMA_FILE" \
-       && grep -qE '"evidence"' "$PE_SCHEMA_FILE" \
-       && grep -qE '"severity"' "$PE_SCHEMA_FILE" \
-       && grep -qiE "normaliz|legacy.*(solution|source_errors|prevention|error_ids)|solution.*->.*recommendation" "$PE_SCHEMA_FILE"; then
-        pass "pattern-extractor: canonical schema pinned + legacy-normalization instruction present"
-    else
-        fail "pattern-extractor: patterns.json schema canon missing — must declare description/recommendation/evidence as canonical AND instruct normalizing legacy name/solution/source_errors + title/prevention/error_ids entries on read (single-shape convergence)"
-    fi
-fi
+# 6.0.0: the soul.md 80-line check left maintain with the identity harvest (frozen); maintain is the Pflegelauf now.
 
 # --- 5.11.0: the global layer (sync-context, global decay, global schema) is archived ---
 # maintain must no longer carry Step 4b / global_decay; the tests of the removed pieces went to _archived/.
@@ -641,7 +475,7 @@ echo "-- active docs: no count-based archiving, no silent reset (D-021) --"
 DOC_HITS=$(grep -n -i -E "keep (the )?newest|archive rest|move the rest|backup \+ recreate|create fresh|maintain archives|rotation is|gc_dirty_markers\.py.*--apply" \
     "$PLUGIN_ROOT"/skills/*/SKILL.md "$PLUGIN_ROOT"/skills/*/references/*.md "$PLUGIN_ROOT"/skills/DEPENDENCIES.md \
     "$PLUGIN_ROOT"/references/*.md "$PLUGIN_ROOT"/commands/maintain.md "$PLUGIN_ROOT"/commands/status.md \
-    "$PLUGIN_ROOT"/commands/init.md "$PLUGIN_ROOT"/commands/log.md "$PLUGIN_ROOT"/commands/memory-audit.md 2>/dev/null)
+    "$PLUGIN_ROOT"/commands/init.md "$PLUGIN_ROOT"/commands/log.md 2>/dev/null)
 if [ -z "$DOC_HITS" ]; then
     pass "no active doc archives by count, resets a store or deletes dirty markers"
 else
@@ -675,9 +509,6 @@ if [ -f "$SB_FILE" ]; then
         fail "session-bootstrap: staleness wrap missing or not read-only — must mark entries >90d for display WITHOUT writing/decaying confidence (decay belongs to /agentic-os:maintain)"
     fi
 fi
-
-# skill-generator removed in v4.0.0 — its skill-candidate flow lives inside pattern-extractor,
-# which is itself the canonical-schema writer; legacy-field consumption test removed
 
 # --- obsidian-sync: Rolling Synthesis gates on `importance`, not nonexistent `salience` ---
 # wrap-up (sole writer of learnings.json) stores `importance` (1-5); there is no stored
@@ -772,9 +603,9 @@ else
     fail "model-routing: scripts/model-routing.sh missing — model-class SSoT required since v4.7.0"
 fi
 
-# --- Model-Routing v4.7.0: wrap-up stage-0 + context diet + escalation + trace ---
+# --- Model-Routing v4.7.0: wrap-up stage-0 + context diet + measured cost trace (escalation markers removed in 6.0.0) ---
 echo ""
-echo "-- wrap-up: stage-0 preprocess, context diet, delta update, escalation, cost trace --"
+echo "-- wrap-up: stage-0 preprocess, context diet, delta update, cost trace --"
 WU_MR_FILE="$SKILLS_DIR/wrap-up/SKILL.md"
 if [ -f "$WU_MR_FILE" ]; then
     if grep -q "(stage0-preprocess)" "$WU_MR_FILE" && grep -q "preprocess_state.py" "$WU_MR_FILE"; then
@@ -788,30 +619,20 @@ if [ -f "$WU_MR_FILE" ]; then
     else
         fail "wrap-up: missing (context-diet) — must forbid systematic transcript/full-memory re-reads (state object + held context first, targeted lookups only)"
     fi
-    ER_BLOCK=$(grep -A20 "(escalation-rules)" "$WU_MR_FILE")
-    if echo "$ER_BLOCK" | grep -q "escalations-" \
-       && echo "$ER_BLOCK" | grep -q "ESKALATION:" \
-       && echo "$ER_BLOCK" | grep -qi "contradict" \
-       && echo "$ER_BLOCK" | grep -qi "identity" \
-       && echo "$ER_BLOCK" | grep -qi "difficult to reverse"; then
-        pass "wrap-up: (escalation-rules) — conditions + escalations log + visible marker"
-    else
-        fail "wrap-up: missing/incomplete (escalation-rules) — must log to working/escalations-<sid>.json, emit ESKALATION: line, and name the conditions (contradiction, identity, decision replacement, pattern promotion, hard-to-reverse, missing sources)"
-    fi
     CORE_PY="$PLUGIN_ROOT/scripts/wrapup_core.py"
     if grep -q "measure_session_cost.py" "$CORE_PY" \
        && grep -q -- "--locate" "$CORE_PY" \
-       && grep -q "cost-trace.sh" "$CORE_PY" \
-       && grep -q "cheap-write" "$CORE_PY"; then
-        pass "wrap-up: (cost-trace) — wrapup_core.py measures via measure_session_cost.py --locate, estimate fallback via cost-trace.sh"
+       && [ ! -e "$PLUGIN_ROOT/scripts/cost-trace.sh" ] \
+       && ! grep -q "cost-trace\.sh" "$CORE_PY"; then
+        pass "wrap-up: (cost-trace) — wrapup_core.py measures via measure_session_cost.py --locate, no estimate fallback (cost-trace.sh removed in 6.0.0)"
     else
-        fail "wrap-up: missing/incomplete (cost-trace) — wrapup_core.py must measure via measure_session_cost.py --locate and keep the cost-trace.sh cheap-write estimate as fallback (T-016)"
+        fail "wrap-up: (cost-trace) — wrapup_core.py must measure via measure_session_cost.py --locate and must not call the removed cost-trace.sh"
     fi
 fi
 
-# --- Model-Routing v4.7.0: session-bootstrap fast path + escalation + trace ---
+# --- Model-Routing v4.7.0: session-bootstrap fast path ---
 echo ""
-echo "-- session-bootstrap: fast path, escalation, cost trace --"
+echo "-- session-bootstrap: fast path --"
 SB_MR_FILE="$SKILLS_DIR/session-bootstrap/SKILL.md"
 if [ -f "$SB_MR_FILE" ]; then
     FP_BLOCK=$(grep -A16 "(bootstrap-fast-path)" "$SB_MR_FILE")
@@ -822,18 +643,6 @@ if [ -f "$SB_MR_FILE" ]; then
         pass "session-bootstrap: (bootstrap-fast-path) — hash short-circuit skips full load, health checks kept"
     else
         fail "session-bootstrap: missing/incomplete (bootstrap-fast-path) — must run preprocess_state.py, compare previous_state_hash == current_state_hash, skip the full knowledge load on equality while health checks still run"
-    fi
-    SB_ER_BLOCK=$(grep -A12 "(escalation-rules)" "$SB_MR_FILE")
-    if echo "$SB_ER_BLOCK" | grep -q "escalations-" && echo "$SB_ER_BLOCK" | grep -q "ESKALATION:"; then
-        pass "session-bootstrap: (escalation-rules) — escalations log + visible marker"
-    else
-        fail "session-bootstrap: missing (escalation-rules) — conflicts/stale states found during bootstrap must be logged to working/escalations-<sid>.json and flagged with ESKALATION:, not resolved by this run"
-    fi
-    SB_CT_BLOCK=$(grep -A8 "(cost-trace)" "$SB_MR_FILE")
-    if echo "$SB_CT_BLOCK" | grep -q "cost-trace.sh" && echo "$SB_CT_BLOCK" | grep -q "session-bootstrap"; then
-        pass "session-bootstrap: (cost-trace) — run cost logged via cost-trace.sh"
-    else
-        fail "session-bootstrap: missing (cost-trace) — end of briefing must call scripts/cost-trace.sh append --task session-bootstrap"
     fi
 fi
 
@@ -870,29 +679,28 @@ if [ -n "$CP_BLOCK" ] \
 else
     fail "wrap-up: (central-profile) missing — Step 6 must say the central profile is active exactly when profile.md exists, name --identity-store and AGENTIC_OS_IDENTITY_STORE, the PC ids with origin, and that a supersede of a line found only in the project's user.md is skipped ('not in profile.md')"
 fi
-if grep -qF 'profile.md' <(grep -E "^\`Identity: " "$SKILLS_DIR/wrap-up/references/judge-rules.md"); then
-    pass "wrap-up: the identity status line names profile.md for the central mode"
+if grep -qE "^\`Identity: |identity_status_line" "$SKILLS_DIR/wrap-up/references/judge-rules.md" "$SKILLS_DIR/wrap-up/SKILL.md"; then
+    fail "wrap-up: the Identity status line is gone since 6.0.0 (no harvest) - judge-rules/SKILL.md must not prescribe it"
 else
-    fail "wrap-up: the Step 6.5 identity status line must show the central variant (→ profile.md promotet)"
+    pass "wrap-up: no Identity status line any more (6.0.0)"
 fi
 BS_CP=$(grep -A10 -E "\(central-profile-read\)" "$SKILLS_DIR/session-bootstrap/SKILL.md")
-if [ -n "$BS_CP" ] && echo "$BS_CP" | grep -qF "profile-briefing.txt" && echo "$BS_CP" | grep -qF "identity.promotable" \
-   && echo "$BS_CP" | grep -qF "identity.last_seen" && echo "$BS_CP" | grep -qiE "central profile" \
+if [ -n "$BS_CP" ] && echo "$BS_CP" | grep -qF "profile-briefing.txt" && echo "$BS_CP" | grep -qiE "central profile" \
    && echo "$BS_CP" | grep -qiE "never read"; then
-    pass "session-bootstrap: (central-profile-read) present — reads the projection profile-briefing.txt and takes gates 6.5(b)/(c) from stage 0 (identity.promotable, identity.last_seen), never the central queue"
+    pass "session-bootstrap: (central-profile-read) present — reads the projection profile-briefing.txt, never the central queue"
 else
-    fail "session-bootstrap: (central-profile-read) missing — with the central profile active, Step 2 reads identity/profile-briefing.txt and gates 6.5(b)/(c) use stage-0 identity.promotable / identity.last_seen; the central queue is never read"
+    fail "session-bootstrap: (central-profile-read) missing — with the central profile active, Step 2 reads identity/profile-briefing.txt; the central queue is never read"
+fi
+if grep -qE "USER CANDIDATES: |User candidate fallback gate|Identity-Scan zuletzt" "$SKILLS_DIR/session-bootstrap/SKILL.md"; then
+    fail "session-bootstrap: Step 6.5(b)/(c) (user candidate gate, starvation warning) must be gone since 6.0.0 - nothing is promoted any more"
+else
+    pass "session-bootstrap: no user candidate gate and no starvation warning (6.0.0)"
 fi
 SCH="$SKILLS_DIR/wrap-up/references/wrapup-schemas.md"
 if grep -qF -- "--identity-store" "$SCH" && grep -qE "\"origin\"" "$SCH" && grep -qE "PC[0-9]" "$SCH"; then
     pass "wrapup-schemas: central profile documented — --identity-store, origin, PC ids"
 else
     fail "wrapup-schemas: the central profile is missing — document --identity-store, the candidate field origin and the PC ids"
-fi
-if grep -qiE "central profile" "$PLUGIN_ROOT/commands/memory-audit.md"; then
-    pass "memory-audit: the user.md stub check knows the central profile (no false 'not growing')"
-else
-    fail "memory-audit: the user.md stub check must skip 'not growing' while the central profile is active"
 fi
 
 echo ""

@@ -12,8 +12,7 @@
   "fast_path": false,
   "recovery": true,
   "soul_candidate": false,
-  "user_candidate": false,
-  "escalation": false
+  "user_candidate": false
  },
  "files_written": [],
  "json_keys_touched": {},

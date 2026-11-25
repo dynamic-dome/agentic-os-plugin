@@ -112,7 +112,7 @@ def project_key(mem: str, home: str) -> str:
 
 
 def check_central(store: str) -> dict:
-    """Read-only health check of the central profile (T-050, for /agentic-os:maintain Step 2 and memory-audit):
+    """Read-only health check of the central profile (T-050, for /agentic-os:maintain Step 4):
     profile.md decodes as UTF-8, queue and changelog are JSON lists, and the briefing projection exists and is the
     one of profile.md and the queue. Never repairs anything - it only names what it found."""
     if not central_active(store):

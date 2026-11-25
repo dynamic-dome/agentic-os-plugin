@@ -96,19 +96,6 @@ fi
 
 echo ""
 
-# Run harvest-backfill tests (Phase 2 Scheibe 8, D-024: one-time closure of pre-5.6.0 markers)
-echo ">>> Running harvest-backfill tests..."
-if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-harvest-backfill.py"; then
-    echo ">>> Harvest-backfill tests: ALL PASSED"
-elif [ -z "$PY_BIN" ]; then
-    echo ">>> Harvest-backfill tests: SKIPPED (no python found)"
-else
-    echo ">>> Harvest-backfill tests: FAILURES DETECTED"
-    ((TOTAL_ERRORS++))
-fi
-
-echo ""
-
 # Run native-memory audit tests (T-36: read-only store audit)
 echo ">>> Running native-memory audit tests..."
 PY_BIN=""
@@ -241,22 +228,6 @@ fi
 
 echo ""
 
-# Run identity migration tests (P2 Teil B: plan/backup/apply/verify of migrate_identity.py)
-echo ">>> Running identity-migration (P2) tests..."
-PY_BIN=""
-command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
-[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
-if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-migrate-identity.py"; then
-    echo ">>> Identity-migration tests: ALL PASSED"
-elif [ -z "$PY_BIN" ]; then
-    echo ">>> Identity-migration tests: SKIPPED (no python found)"
-else
-    echo ">>> Identity-migration tests: FAILURES DETECTED"
-    ((TOTAL_ERRORS++))
-fi
-
-echo ""
-
 # Run headless wrap-up core tests (T-028: harvest, handoff, wikinote, apply --headless)
 echo ">>> Running wrapup-core headless tests..."
 PY_BIN=""
@@ -289,33 +260,17 @@ fi
 
 echo ""
 
-# Run extract_patterns tests (T-015: deterministic half of pattern-extractor)
-echo ">>> Running extract-patterns tests..."
+# Run write-basis tests (5.3.0: store lock, row validation, dedup in code, snapshot; the restore path is gone since 6.0.0)
+echo ">>> Running write-basis tests..."
 PY_BIN=""
 command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
 [ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
-if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-extract-patterns.py"; then
-    echo ">>> Extract-patterns tests: ALL PASSED"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-write-basis.py"; then
+    echo ">>> Write-basis tests: ALL PASSED"
 elif [ -z "$PY_BIN" ]; then
-    echo ">>> Extract-patterns tests: SKIPPED (no python found)"
+    echo ">>> Write-basis tests: SKIPPED (no python found)"
 else
-    echo ">>> Extract-patterns tests: FAILURES DETECTED"
-    ((TOTAL_ERRORS++))
-fi
-
-echo ""
-
-# Run restore / write-basis tests (5.3.0: store lock, row validation, archive restore)
-echo ">>> Running restore tests..."
-PY_BIN=""
-command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
-[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
-if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-restore.py"; then
-    echo ">>> Restore tests: ALL PASSED"
-elif [ -z "$PY_BIN" ]; then
-    echo ">>> Restore tests: SKIPPED (no python found)"
-else
-    echo ">>> Restore tests: FAILURES DETECTED"
+    echo ">>> Write-basis tests: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 
@@ -332,6 +287,22 @@ elif [ -z "$PY_BIN" ]; then
     echo ">>> Principles tests: SKIPPED (no python found)"
 else
     echo ">>> Principles tests: FAILURES DETECTED"
+    ((TOTAL_ERRORS++))
+fi
+
+echo ""
+
+# Run Pflegelauf write-path tests (6.0.0: learning_updates section, working/pflegelauf.json stamp)
+echo ">>> Running learning_updates tests..."
+PY_BIN=""
+command -v python3 > /dev/null 2>&1 && PY_BIN="python3"
+[ -z "$PY_BIN" ] && command -v python > /dev/null 2>&1 && PY_BIN="python"
+if [ -n "$PY_BIN" ] && "$PY_BIN" "$SCRIPT_DIR/test-learning-updates.py"; then
+    echo ">>> learning_updates tests: ALL PASSED"
+elif [ -z "$PY_BIN" ]; then
+    echo ">>> learning_updates tests: SKIPPED (no python found)"
+else
+    echo ">>> learning_updates tests: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 
@@ -444,34 +415,12 @@ fi
 
 echo ""
 
-# Run cost-trace tests (v4.7.0)
-echo ">>> Running cost-trace tests..."
-if bash "$SCRIPT_DIR/test-cost-trace.sh"; then
-    echo ">>> Cost-trace tests: ALL PASSED"
-else
-    echo ">>> Cost-trace tests: FAILURES DETECTED"
-    ((TOTAL_ERRORS++))
-fi
-
-echo ""
-
 # Run codex-session-briefing tests (v4.9.0: T-24 Codex-Session-Lifecycle)
 echo ">>> Running codex-session-briefing tests..."
 if bash "$SCRIPT_DIR/test-codex-session-briefing.sh"; then
     echo ">>> Codex-session-briefing tests: ALL PASSED"
 else
     echo ">>> Codex-session-briefing tests: FAILURES DETECTED"
-    ((TOTAL_ERRORS++))
-fi
-
-echo ""
-
-# Run pattern rueckfluss contract test (v4.6.0: implemented_by/validated_by + delta gate)
-echo ">>> Running pattern rueckfluss contract test..."
-if bash "$SCRIPT_DIR/test-pattern-rueckfluss-contract.sh"; then
-    echo ">>> Pattern rueckfluss contract: ALL PASSED"
-else
-    echo ">>> Pattern rueckfluss contract: FAILURES DETECTED"
     ((TOTAL_ERRORS++))
 fi
 

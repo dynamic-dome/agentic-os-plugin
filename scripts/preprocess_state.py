@@ -48,7 +48,7 @@ HASH_FILE = os.path.join("working", "state-hash")
 def _nested_store_guard(mem_dir):
     """True if writing under mem_dir would nest a store inside .agent-memory.
 
-    Mirrors cost-trace.sh's guard (b34d055, DCO-9192): resolve mem_dir to an
+    Same guard as measure_session_cost.py (b34d055, DCO-9192): resolve mem_dir to an
     absolute path and check its PARENT for an .agent-memory path segment — a
     relative default (".agent-memory") combined with a cwd that already sits
     inside a store (e.g. a caller cd'd into .agent-memory/working) would
@@ -197,7 +197,7 @@ def candidate_keys(mem, central=None):
 
 
 def _promotable(row) -> bool:
-    """The promotion gate of apply_wrapup.promote_candidates (wrap-up Step 6.3), read only."""
+    """The promotion gate of the former identity harvest (apply_wrapup, removed in 6.0.0), read only."""
     if (row.get("status") in ("promoted", "expired") or row.get("signal_type") == "mood"
             or row.get("trust_source") != "conversation"):
         return False
@@ -220,10 +220,6 @@ def identity_summary(mem, central=None):
             "last_seen": max(seen) if seen else ""}
 
 
-# P0dd only: pattern ids are zero-padded (P004..P012); "P100" in prose is a GPU, not a ref.
-PATTERN_REF = re.compile(r"\b(G-pattern-\d{3}|P0\d{2})\b")
-
-
 def _rows(mem, rel, key):
     text = read_text(os.path.join(mem, rel))
     if not text:
@@ -241,30 +237,8 @@ def _rows(mem, rel, key):
     return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else None
 
 
-def dangling_pattern_refs(mem):
-    """Learnings citing a pattern id that patterns.json does not hold (L5/L10/L12
-    pointed at P006 for months; nothing surfaced it)."""
-    patterns = _rows(mem, "patterns/patterns.json", "patterns")
-    learnings = _rows(mem, "learnings/learnings.json", "learnings")
-    if patterns is None or learnings is None:
-        return []
-    known = {str(p.get("id", "")) for p in patterns}
-    errors = []
-    for l in learnings:
-        refs = set(PATTERN_REF.findall(str(l.get("text", ""))))
-        for d in l.get("derived_from") or []:
-            if isinstance(d, str) and PATTERN_REF.fullmatch(d):
-                refs.add(d)
-        for ref in sorted(refs - known):
-            errors.append(f"learnings.json: {l.get('id')} references unknown pattern {ref}")
-    return errors
-
-
 def validation_errors(mem):
-    try:
-        errors = dangling_pattern_refs(mem)
-    except Exception as e:  # fail-soft: a validator must never take the state with it
-        errors = [f"pattern-ref check failed: {e}"]
+    errors = []
     for root, dirs, files in os.walk(mem):
         # metrics traces are append-only JSONL, not JSON documents
         dirs[:] = [d for d in dirs if d not in ("metrics",)]

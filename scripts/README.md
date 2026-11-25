@@ -79,14 +79,22 @@ den das Modell sieht; es feuert auch nach `/compact` erneut.
   Bootstrap-Aufruf ohne `--session-id` bekommt `[]` und zahlt die rund 7 KB nicht; `user_candidates_total`
   ist immer die echte Zahl, der Hash bleibt unveraendert.
 
-## store_lock.py / store_snapshot.py / restore_plan.py (5.3.0)
+## wrapup_parts/prelude_gaps.py (6.0.0)
+
+- Liefert im Brief von `wrapup_core.py pre` das Feld `prelude_gaps`: Prompts dieser Sitzung, zu denen der Mod
+  prelude-gate kein Learning behielt (bis 15, juengste zuerst). Nur lesend.
+- **Einschalten:** in `.agent-memory/config.json` `"prelude_log_dir": "<Protokollordner des Mods>"` oder fuer alle
+  Projekte die Umgebungsvariable `AGENTIC_OS_PRELUDE_LOG_DIR`; die Projekteinstellung hat Vorrang. Ohne Mod oder
+  Einstellung steht `nicht eingerichtet` im Brief.
+- Status ausser `ok`: `nicht geprüft: Ordner fehlt`, `... keine Sitzungs-ID`, `... keine Eintraege dieser Sitzung`
+  (falscher Ordner oder Mod aus) oder ein Fehlertext. Einzelne unlesbare Protokolldateien werden uebersprungen.
+
+## store_lock.py / store_snapshot.py (5.3.0)
 
 - `store_lock.py`: `working/store.lock` je Store. Jeder schreibende Lauf haelt ihn vom
   ersten Lesen bis zum letzten Schreiben, nie ueber einen Subprozess. Timeout = Exit 2.
 - `store_snapshot.py <mem> [--keep 10]`: Bytekopie von `*.json`/`*.md` ohne identity/,
   working/, metrics/ nach `$AGENTIC_OS_SNAPSHOT_DIR` (Default `~/.agentic-os/snapshots`).
-  Laeuft automatisch vor jeder Rueckholung.
-- `restore_plan.py <mem> [--skip-ids ..] [--out plan.json]`: rein lesend; Plan + Bericht
-  fuer die Rueckholung archivierter Learnings und Patterns (Ablauf: maintain Step 5b).
+  Laeuft mit `apply_wrapup.py --snapshot` unter dem Store-Lock.
 - `learnings_lifecycle.py propose|report <mem>`: rein lesend; Verdichtungs-Vorschlaege (TF-IDF gegen den
-  Regelkatalog aus `~/.claude/agentic-os.local.json` `rule_catalog`) und Verankerungsquote (maintain Step 5c).
+  Regelkatalog aus `~/.claude/agentic-os.local.json` `rule_catalog`) und Verankerungsquote (Kandidatenquelle des Pflegelaufs, /agentic-os:maintain).

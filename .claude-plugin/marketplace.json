@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "agentic-os",
-      "description": "Agent memory system with 5 skills. Tracks iterations, extracts patterns, and generates skills from recurring workflows.",
+      "description": "Agent memory system with 4 skills. Tracks iterations, learnings and decisions across sessions.",
       "category": "development",
       "source": {
         "source": "url",

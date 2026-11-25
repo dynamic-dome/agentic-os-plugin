@@ -20,6 +20,8 @@ import tempfile
 import threading
 import time
 
+sys.stdout.reconfigure(encoding="utf-8")  # results quote "→"; run-all.sh may start python3 without PYTHONIOENCODING (cp1252)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -514,7 +516,9 @@ def test_core():
               f"headless run is stamped 'headless', never 'wrap-up' {dirty.get('consolidated_by')} {marker.get('mode')}")
         check(all(read(os.path.join(mem, *rel.split("/"))) == text for rel, text in env["judge_only"].items()),
               "learnings/decisions/user.md untouched (no judge, no identity promotion)")
-        check(out.get("identity_status_line") == "Identity: headless — kein Harvest", "identity status line headless")
+        check("identity_status_line" not in out and out.get("tally", {}).get("ignored_sections") == []
+              and "errors_added" not in out.get("tally", {}),
+              f"6.0.0: no identity line, the headless tally carries ignored_sections == [] {out.get('tally')}")
         check(max(len(ln) for ln in hand.split("\n---\n")[0].splitlines()) <= 200, "handoff block lines bounded")
         check(out.get("marker_written") is True and out.get("handoff", {}).get("central") == "written", "tally fields")
         rc2, out2 = run_core(env)
@@ -605,13 +609,12 @@ def test_core():
         cleanup(env)
 
     env = setup_core()
-    try:  # DCO #9696: a failed pattern update must not be reported as a clean "consolidated"
+    try:  # 6.0.0: the pattern mechanics are gone - a leftover (even broken) patterns.json is never read or run
         put(os.path.join(env["mem"], "patterns", "patterns.json"), "{not json")
         rc, out = run_core(env)
-        check(rc == 0 and out.get("status") == "consolidated(patterns failed)"
-              and str(out.get("reports", {}).get("patterns", "")).startswith("failed("),
-              f"pattern update failure shows in the status {out.get('status')} {out.get('reports')}")
-        check(out.get("marker_written") is True, "pattern update failure stays fail-soft: marker written")
+        check(rc == 0 and out.get("status") == "consolidated" and "patterns" not in out.get("reports", {}),
+              f"leftover broken patterns.json is ignored: clean status, no pattern report {out.get('status')} {out.get('reports')}")
+        check(out.get("marker_written") is True, "leftover patterns.json: marker written")
     finally:
         cleanup(env)
 
@@ -1022,6 +1025,123 @@ def test_suggested_store():
         shutil.rmtree(other, ignore_errors=True)
 
 
+def test_pflegelauf_due():
+    print("=== pre: pflegelauf_due replaces threshold_events (6.0.0) ===")
+    import contextlib
+    import wrapup_core as wc
+    proj, mem = make_project()
+
+    def pre():
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            wc.main(["pre", "--mem", mem, "--session-id", "s1"])
+        return json.loads(buf.getvalue())
+
+    try:
+        res = pre()
+        check("threshold_events" not in res, f"pre has no threshold_events {sorted(res)}")
+        check(res.get("pflegelauf_due") == "", f"no learnings: pflegelauf_due is an empty string {res.get('pflegelauf_due')!r}")
+        put(os.path.join(mem, "learnings", "learnings.json"), json.dumps([{"id": f"L{i}"} for i in range(1, 32)]))
+        res = pre()
+        check(res.get("pflegelauf_due") == "PFLEGELAUF: 31 Learnings, noch kein Pflegelauf → /agentic-os:maintain",
+              f"31 learnings, no stamp: pflegelauf_due is the PFLEGELAUF line {res.get('pflegelauf_due')!r}")
+        put(os.path.join(mem, "working", "pflegelauf.json"), json.dumps({"date": "2026-11-01", "id_keys": 31}))
+        check(pre().get("pflegelauf_due") == "", "stamp at today's count: pflegelauf_due is empty again")
+    finally:
+        shutil.rmtree(proj, ignore_errors=True)
+
+
+def test_prelude_gaps():
+    print("=== pre: prelude_gaps lists prompts the memory had nothing for (6.0.0) ===")
+    import contextlib
+    import datetime as _d
+    from unittest import mock
+    import wrapup_core as wc
+    from wrapup_parts import prelude_gaps as pg
+    now = _d.datetime(2026, 11, 20, 12, 0, tzinfo=_d.timezone.utc)
+    sid, other = "abcd1234-1111-2222-3333-444455556666", "abcd1234-9999-8888-7777-666655554444"
+    log = tempfile.mkdtemp(prefix="wrapupcore-prelude-")
+    n = [0]
+
+    def entry(prompt, reason="empty", kept=None, session=sid, day=now, raw=None):
+        n[0] += 1
+        ts = int(day.timestamp() * 1000) + n[0]
+        path = os.path.join(log, day.date().isoformat(), f"{ts}-{session[:8]}.json")
+        put(path, raw if raw is not None else json.dumps(
+            {"session": session, "ts": ts, "prompt": prompt, "reason": reason, "kept": {"learnings": kept or []}}))
+
+    yesterday = now - _d.timedelta(days=1)
+    entry("alter", day=yesterday)                                        # Lücke vom Vortag (Mitternacht UTC)
+    entry("mit learning", reason="ok", kept=[{"cid": "l01"}])            # geprüft, keine Lücke
+    entry("zu spaet", reason="budget")                                   # nicht geprüft
+    entry("kurz", reason="skip")                                         # zählt nicht
+    entry("fortsetzung", reason="repeat")                                # zählt nicht
+    entry("fremd", session=other)                                        # gleiches 8er-Präfix, andere Sitzung
+    entry("kaputt", raw="{kein json")                                    # unlesbar: überspringen
+    entry("neuer " + "```\nprint(1)\n```" + " x" * 400)                  # jüngste Lücke, mit Code, lang
+    entry("uralt", day=now - _d.timedelta(days=9))                       # außerhalb des Fensters
+    proj, mem = make_project()
+    try:
+        r = pg.prelude_gaps(sid, log, now=now)
+        prompts = [g["prompt"] for g in r["gaps"]]
+        check(r["status"] == "ok" and len(prompts) == 2 and prompts[0].startswith("neuer") and prompts[1] == "alter",
+              f"own gaps only, newest first, yesterday counts {r['status']} {prompts}")
+        check(r["geprueft"] == 3 and r["nicht_geprueft"] == 1, f"checked 3 (2 gaps + 1 with learning), unchecked 1 (budget) {r}")
+        check("[Code]" in prompts[0] and "print(1)" not in prompts[0] and len(prompts[0]) <= 300 and "\n" not in prompts[0],
+              f"code replaced, whitespace folded, cut to 300 {len(prompts[0])}")
+        many = tempfile.mkdtemp(prefix="wrapupcore-prelude-many-")
+        for i in range(20):
+            p = os.path.join(many, now.date().isoformat(), f"{1000 + i}-{sid[:8]}.json")
+            put(p, json.dumps({"session": sid, "ts": 1000 + i, "prompt": f"p{i}", "reason": "empty", "kept": {}}))
+        res = pg.prelude_gaps(sid, many, now=now)
+        check(len(res["gaps"]) == 15 and res["gaps"][0]["prompt"] == "p19" and res["geprueft"] == 20, f"cap 15, newest first {res['geprueft']}")
+        shutil.rmtree(many, ignore_errors=True)
+        check(pg.prelude_gaps(sid, None)["status"] == "nicht eingerichtet", "no setting: status says so")
+        check(pg.prelude_gaps(sid, os.path.join(log, "gibt-es-nicht"))["status"] == "nicht geprüft: Ordner fehlt", "missing folder")
+        with mock.patch.dict(os.environ, {"AGENTIC_OS_PRELUDE_LOG_DIR": "/aus/env"}):
+            check(pg.resolve_log_dir({"prelude_log_dir": "/aus/config"}) == "/aus/config", "config wins over env")
+            check(pg.resolve_log_dir({}) == "/aus/env", "env alone")
+        with mock.patch.dict(os.environ, {"AGENTIC_OS_PRELUDE_LOG_DIR": ""}):
+            check(pg.resolve_log_dir({"prelude_log_dir": ""}) is None, "both empty: None")
+        # Final review 1: odd files never crash, they are skipped
+        odd = tempfile.mkdtemp(prefix="wrapupcore-prelude-odd-")
+        for i, body in enumerate(({"kept": ["x"]}, {"kept": "x"}, {"kept": {"learnings": "x"}}, {"ts": "²"}, {"ts": None})):
+            rec = {"session": sid, "ts": 5000 + i, "prompt": f"odd{i}", "reason": "empty", **body}
+            put(os.path.join(odd, now.date().isoformat(), f"{5000 + i}-{sid[:8]}.json"), json.dumps(rec))
+        put(os.path.join(odd, now.date().isoformat(), f"9999-{sid[:8]}.json"), "[" * 100000 + "]" * 100000)
+        try:
+            res = pg.prelude_gaps(sid, odd, now=now)
+            check(res["status"] == "ok" and res["geprueft"] >= 1, f"odd kept/ts values and deep JSON do not crash {res['status']} {res['geprueft']}")
+        except Exception as exc:  # noqa: BLE001
+            fail(f"odd log files crash prelude_gaps: {type(exc).__name__}")
+        with mock.patch.object(wc, "prelude_gaps", side_effect=RuntimeError("boom")):
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    wc.main(["pre", "--mem", mem, "--session-id", sid])
+                st = (json.loads(buf.getvalue()).get("prelude_gaps") or {}).get("status", "")
+                check(st.startswith("nicht geprüft:"), f"a crash in prelude_gaps becomes a visible status in pre {st!r}")
+            except Exception as exc:  # noqa: BLE001
+                fail(f"a crash in prelude_gaps breaks pre: {type(exc).__name__}")
+        shutil.rmtree(odd, ignore_errors=True)
+        # Final review 2/3: no session id, or no entry of this session -> not a silent ok
+        check(pg.prelude_gaps("", log, now=now)["status"] == "nicht geprüft: keine Sitzungs-ID", "empty session id is visible")
+        check(pg.prelude_gaps("ffff0000-0000", log, now=now)["status"] == "nicht geprüft: keine Einträge dieser Sitzung",
+              "folder without entries of this session is visible")
+        put(os.path.join(mem, "config.json"), json.dumps({"prelude_log_dir": log}))
+        buf = io.StringIO()
+        # pre runs on the same fixed clock as the log above; with the real clock the 3-day window left the
+        # fixture behind from 2026-11-24 on and the test went red without a code change.
+        fixed = lambda s, d: pg.prelude_gaps(s, d, now=now)  # noqa: E731
+        with mock.patch.object(wc, "prelude_gaps", side_effect=fixed), contextlib.redirect_stdout(buf):
+            wc.main(["pre", "--mem", mem, "--session-id", sid])
+        brief = json.loads(buf.getvalue()).get("prelude_gaps") or {}
+        check(brief.get("status") == "ok" and isinstance(brief.get("gaps"), list), f"pre carries prelude_gaps {brief.get('status')}")
+    finally:
+        shutil.rmtree(log, ignore_errors=True)
+        shutil.rmtree(proj, ignore_errors=True)
+
+
 def main():
     if not GIT:
         print("SKIPPED: git not found")
@@ -1037,6 +1157,8 @@ def main():
     test_collision()
     test_silent_failures()
     test_suggested_store()
+    test_pflegelauf_due()
+    test_prelude_gaps()
     print(f"\n{PASSED}/{TESTS} passed, {ERRORS} failed")
     return 1 if ERRORS else 0
 

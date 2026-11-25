@@ -4,11 +4,10 @@
   R  Learnings unter importance 3 werden nicht mehr angelegt (Tally learnings_skipped_low_importance);
      rule_class-Learnings bleiben davon ausgenommen (sie gehen in den Regel-Gate, nicht in die Masse).
   E  Plan-Sektion identity_expire: Einmal-Beobachtungen (observed/inferred, occurrences <= 1), deren last_seen
-     aelter als older_than_days ist, werden als "expired" markiert, nie geloescht. Eine spaetere Nennung desselben
-     Keys holt sie zurueck (revived_at). Ablehnung schreibt nichts (L94), Wiederholung aendert nichts.
+     aelter als older_than_days ist, werden als "expired" markiert, nie geloescht. Ablehnung schreibt nichts (L94),
+     Wiederholung aendert nichts. (Die Wiederbelebung per Neunennung entfiel mit der Identity-Ernte, 6.0.0.)
   T  Plan-Sektion user_md_retire: eine Profilzeile verlustfrei streichen. Changelog (field user.md/retire, alter
-     Text) VOR der Datei, nur mit verifiziertem Zitat, Wiederholung erkannt, Ablehnung schreibt nichts. Eine
-     gestrichene Aussage kehrt nicht per Wiederholung zurueck (wie nach user_md_supersede, D9).
+     Text) VOR der Datei, nur mit verifiziertem Zitat, Wiederholung erkannt, Ablehnung schreibt nichts.
 
 Alles gegen apply_wrapup.py als Subprozess mit frischem Temp-Home (_isolated_home); echte Stores werden nie gelesen.
 Exit-Codes: 0 = alles gruen, 1 = Fehler.
@@ -181,14 +180,6 @@ for bad, why in (({"older_than_days": 30}, "ohne reason"), ({"older_than_days": 
     before = snapshot(m2)
     rc, out = run(m2, {"date": DATE, "identity_expire": bad})
     check(rc == 2 and snapshot(m2) == before, f"E6 {why}: Plan abgelehnt, nichts geschrieben")
-rc, out = run(mem, {"date": DATE, "user_candidates": [
-    {"key": "alt-einmal", "observation": "Beobachtung alt-einmal", "signal_type": "preference", "confidence": 0.5,
-     "evidence": ["neu"], "status": "observed", "trust_source": "conversation"}]}, sid="sess-andere")
-q = {c["id"]: c for c in load(mem, "working/user-candidates.json")}
-check(rc == 0 and q["UC1"]["status"] != "expired" and q["UC1"].get("revived_at") == DATE
-      and q["UC1"]["occurrences"] == 2,
-      f"E7 erneute Nennung aus anderer Sitzung holt den Kandidaten zurueck (status {q['UC1']['status']})")
-
 # ----------------------------------------------------------------------------- T: user_md_retire
 print("== T  user_md_retire")
 mem = make_mem()
@@ -205,15 +196,6 @@ before = snapshot(mem)
 rc, out = run(mem, {"date": DATE, "user_md_retire": [entry]})
 check(rc == 0 and out["tally"].get("retire_skipped_unchanged") == 1 and snapshot(mem) == before,
       "T3 Wiederholung erkannt, nichts geschrieben")
-rc, out = run(mem, {"date": DATE, "user_candidates": [
-    {"key": "klartext-neu", "observation": "Klartext statt Fachjargon in jedem Bericht", "signal_type": "preference",
-     "confidence": 0.8, "evidence": [], "status": "inferred", "trust_source": "conversation"}]}, sid="s-a")
-rc, out = run(mem, {"date": DATE, "user_candidates": [
-    {"key": "klartext-neu", "observation": "Klartext statt Fachjargon in jedem Bericht", "signal_type": "preference",
-     "confidence": 0.8, "evidence": [], "status": "inferred", "trust_source": "conversation"}]}, sid="s-b")
-check(rc == 0 and "Klartext statt Fachjargon" not in read(mem, "identity/user.md")
-      and (out["tally"].get("promotion_blocked_superseded") or 0) >= 1,
-      "T4 die gestrichene Aussage kehrt nicht per Wiederholung zurueck")
 
 mem = make_mem()
 rc, out = run(mem, {"date": DATE, "user_md_retire": [dict(entry, quote="das hat der User so nie gesagt")]})

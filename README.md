@@ -15,8 +15,7 @@ More about the design (in German): https://dynamic-dome.com/systeme/agent-memory
 Every session opens with a short briefing like this (structure of a real briefing, contents replaced):
 
 ```
-Agentic OS active | Branch: [branch]
-[n] iterations, [n] errors, [n] patterns
+Agentic OS active | Branch: [branch] | [n] iterations
 Next steps: [n] open
   T-001: [open task]
 Warnings:
@@ -32,10 +31,13 @@ Two calls bracket a session:
 - **Start** (`session-bootstrap`, also triggered by a `SessionStart` hook) reads the project memory and
   prints the briefing above: last session, open tasks, warnings.
 - **End** (`wrap-up`) writes what happened back through deterministic scripts: iterations, decisions,
-  learnings, open tasks and a session summary. What the agent notices about how you work is queued as a
-  candidate first. It moves into `identity/user.md` once you confirm it or the same signal comes up twice,
-  and every change is logged before the edit. `identity/soul.md` is readable history, not a growth path:
-  it no longer changes.
+  learnings, open tasks and a session summary. The user profile in `identity/` is read, not grown: a line
+  changes only when you correct it in your own words, and every change is logged before the edit.
+  `identity/soul.md` is readable history: it no longer changes.
+
+Once 30 new learnings have piled up since the last run, the briefing says a **Pflegelauf** is due:
+`/agentic-os:maintain` lets the agent mark duplicates and outdated learnings, group related ones under a
+rule and report one line per verdict. Nothing is deleted.
 
 Everything in between is normal Claude Code work. Two command hooks do bookkeeping only (the briefing at
 start, a dirty-tracker after edits). No hook calls a language model.
@@ -45,8 +47,7 @@ start, a dirty-tracker after edits). No hook calls a language model.
 ├── context/        project context and decisions
 ├── iterations/     what was done, including what failed
 ├── learnings/      lessons that should outlive the session
-├── patterns/       recurring patterns extracted from iterations
-├── identity/       gated candidate traits for the user profile
+├── identity/       the user profile (read at start, changed only on request)
 ├── working/        short-lived session state
 └── session-summary.md
 ```
@@ -74,7 +75,7 @@ to `.git/info/exclude` so it stays out of `git status`. In a folder without git,
 switch on the plugin option `auto_init_non_git`.
 
 Then run `/agentic-os:init` in a project. `/agentic-os:status` shows the health of the store,
-`/agentic-os:memory-audit` reports drift and stale entries.
+`/agentic-os:maintain` runs the Pflegelauf when the briefing asks for it.
 
 ## Long-Term Memory Routine
 

@@ -129,8 +129,7 @@ def snapshot(*roots):
 def plan(**over):
     base = {"summary": {"what_was_done": ["Core gebaut", "Tests geschrieben"], "active_task": "T-1",
                         "current_state": "Branch grün", "blockers": "keine",
-                        "checks": {"tests": "bestanden", "lint": "n/a"}},
-            "identity": {"candidates": [], "none_because": "Keine Signale in dieser Sitzung."}}
+                        "checks": {"tests": "bestanden", "lint": "n/a"}}}
     base.update(over)
     return base
 
@@ -159,8 +158,8 @@ def test_pre():
         check("add a" in titles and "repair b" in titles, f"brief lists the harvested iterations {titles}")
         check([t.get("id") for t in out.get("open_tasks", [])] == ["T-1", "T-2"], "brief lists the open tasks")
         check([c.get("id") for c in out.get("bridge_candidates", [])] == ["L1"], "brief lists the open bridge candidates")
-        check([c.get("key") for c in out.get("user_candidates", [])] == ["vorhandener-schluessel"],
-              f"brief lists the existing identity keys {out.get('user_candidates')}")
+        check("user_candidates" not in out and "user_candidates_total" not in out and "errors_today" not in out,
+              f"6.0.0: the brief carries no identity keys and no errors of today {sorted(out)}")
         check(out.get("active_warnings") == ["Gilt noch", "Auch das"], f"brief shows the active warnings {out.get('active_warnings')}")
         check("rule_class_open" in out and "validation_errors" in out, "brief carries rule queue and validation errors")
     finally:
@@ -179,16 +178,18 @@ def test_rejected_plans():
     env = setup()
     try:
         before = snapshot(env["mem"], env["central"], env["wiki"])
-        bad = [("no identity", {"summary": plan()["summary"]}),
-               ("identity without reason", plan(identity={"candidates": [], "none_because": "   "})),
-               ("identity not an object", plan(identity=[])),
-               ("no summary", {"identity": plan()["identity"]}),
+        bad = [("no summary", {"identity": {"candidates": [], "none_because": "x"}}),
                ("summary without work", plan(summary={"what_was_done": []})),
                ("session_summary is the core's", plan(session_summary={"what_was_done": ["x"]})),
-               ("user_candidates belong under identity", plan(user_candidates=[]))]
+               # M1: the Pflegelauf sections belong to /agentic-os:maintain; a wrap-up stamp would reset the trigger
+               ("learning_updates is maintain's", plan(learning_updates=[{"id": "L1", "review_after": "2027-05-16",
+                                                                          "reason": "bleibt"}])),
+               ("pflegelauf_stamp is maintain's", plan(pflegelauf_stamp=True))]
         for name, p in bad:
             rc, out = run(env, "apply", p)
             check(rc == 2 and out.get("ok") is False, f"{name}: exit 2 {rc} {str(out)[:200]}")
+            if "maintain's" in name:
+                check("/agentic-os:maintain" in str(out.get("error")), f"{name}: the error names maintain {out.get('error')}")
             check(snapshot(env["mem"], env["central"], env["wiki"]) == before, f"{name}: nothing written")
         rc, out = run(env, "apply", raw="kein json")
         check(rc == 2 and out.get("ok") is False, f"unreadable plan: exit 2 {rc}")
@@ -227,8 +228,8 @@ def test_apply():
         check("Core gebaut" in summ and "offene Aufgabe" in summ, "summary: judge lines plus open tasks from the store")
         check("neue Aufgabe" in summ, "summary sees the tasks this plan added")
         check("Iterations: 3" in summ, f"statistics measured, not typed {[l for l in summ.splitlines() if 'Iterations' in l]}")
-        queue = read(os.path.join(mem, "working", "user-candidates.json"))
-        check("mag-kurze-antworten" in queue, "identity candidates reach the queue")
+        check(not os.path.exists(os.path.join(mem, "working", "user-candidates.json")),
+              "6.0.0: identity candidates never reach the queue")
         hand = read(os.path.join(env["central"], ".agent-memory", "session-summary.md"))
         check(hand.startswith("# Letzte Session") and "*Agent: Claude Code*" in hand and "*Projekt: projA*" in hand,
               "central handoff block written in the template")
@@ -247,13 +248,16 @@ def test_apply():
         check(marker.get("mode") == "wrap-up" and out.get("marker_written") is True, f"marker says wrap-up {marker}")
         dirty = json.loads(read(os.path.join(mem, "working", f"dirty-{SID}.json")))
         check(dirty.get("dirty") is False and dirty.get("consolidated_by") == "wrap-up", "dirty flag reset by wrap-up")
-        check(str(out.get("identity_status_line", "")).startswith("Identity: 1 beobachtet"), f"identity line measured {out.get('identity_status_line')}")
+        check("identity_status_line" not in out and out.get("ignored_status_line") == "Ignoriert (6.0.0): identity",
+              f"6.0.0: no identity line, the ignored section is named {out.get('ignored_status_line')!r}")
         check("projections" in out and "reports" in out and "handoff" in out, "result carries the report data")
         check(out.get("reports", {}).get("state_hash") == "ok", "state hash refreshed")
+        check("threshold_lines" not in out.get("reports", {}), f"6.0.0: no THRESHOLD lines in the wrap-up report {out.get('reports')}")
+        check("review_sweep" not in out.get("reports", {}) and not os.path.exists(os.path.join(mem, "working", "review-sweep.md")),
+              f"6.0.0 (spec 4.2): no review_sweep report from wrap-up {out.get('reports')}")
         check(os.path.exists(os.path.join(mem, "working", "state-hash")), "state hash file exists")
-        check(out.get("reports", {}).get("cost_trace") == "estimate", f"no transcript: the trace gets an estimate {out.get('reports', {}).get('cost_trace')}")
-        check('"estimate": true' in read(os.path.join(mem, "metrics", "cost-trace.jsonl")).replace('"estimate":true', '"estimate": true'),
-              "the estimate is marked as one")
+        check(str(out.get("reports", {}).get("cost_trace")).startswith("skipped("), f"no transcript: the trace is skipped, no estimate {out.get('reports', {}).get('cost_trace')}")
+        check(not os.path.exists(os.path.join(mem, "metrics", "cost-trace.jsonl")), "no estimate row is written")
         written = [os.path.join(env["central"], ".agent-memory", "session-summary.md"), note,
                    os.path.join(mem, "session-summary.md"), os.path.join(mem, "iterations", "iteration-log.md")]
         marker_time = os.path.getmtime(os.path.join(mem, "consolidation-marker.json"))
@@ -294,7 +298,10 @@ def test_plan_iterations_and_cap():
         check("Regel: Goals" in texts, "a rule-class learning never falls to the cap")
         check(any("cap" in str(w).lower() for w in out.get("warnings", [])), f"cap is warned about {out.get('warnings')}")
         summ = read(os.path.join(env["mem"], "session-summary.md"))
-        check("Iterations: 1 | Errors: 1" in summ, f"statistics counted from the plan {[l for l in summ.splitlines() if 'Iterations' in l]}")
+        check(out.get("tally", {}).get("ignored_sections") == ["errors"],
+              f"iteration errors are ignored and counted {out.get('tally', {}).get('ignored_sections')}")
+        check("- Iterations: 1" in summ and "Errors:" not in summ,
+              f"statistics counted from the plan, no error count (6.0.0) {[l for l in summ.splitlines() if 'Iterations' in l]}")
         check([c.get("id") for c in out.get("bridge_candidates", [])] != [], "new candidates reported for the followup")
         check("needs_explanation" in str(out.get("rule_class_open")), "rule queue reported")
     finally:
@@ -389,6 +396,8 @@ def test_review_round_1():
         rc, out = run(env, "apply", p)
         summ = read(os.path.join(env["mem"], "session-summary.md"))
         check(rc == 0 and "## Handoff Context" in summ and "Frage H" in summ, f"handoff mode reaches the summary {rc}")
+        check("Active patterns" not in summ and "Muster H" not in summ,
+              "6.0.0: an old active_patterns field is not rendered (the pattern mechanics are gone)")
         check(str(out.get("bridge_status_line", "")).startswith("Bridge: 0 approved, 1 rejected"), f"bridge line of the main plan is reported {out.get('bridge_status_line')}")
         check(out.get("repo", {}).get("memory_uncommitted") == "ja" and out.get("repo", {}).get("uncommitted") == "nein",
               f"memory-only changes have their own flag {out.get('repo')}")
@@ -577,6 +586,64 @@ def test_cost_trace_windows():
         shutil.rmtree(os.path.dirname(transcript), ignore_errors=True)
 
 
+def sha256_of(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def test_old_sections_ignored():
+    print("=== 6.0.0: identity optional, old sections ignored and counted ===")
+    # test_plan_ohne_identity_ok
+    env = setup()
+    try:
+        rc, out = run(env, "apply", {"summary": {"what_was_done": ["Nur die Summary"]}})
+        check(rc == 0 and out.get("ok") is True and out.get("marker_written") is True,
+              f"test_plan_ohne_identity_ok: a plan with only `summary` exits 0 {rc} {str(out)[:300]}")
+        check(out.get("tally", {}).get("ignored_sections") == [] and "ignored_status_line" not in out,
+              f"test_plan_ohne_identity_ok: ignored_sections == [] and no status line {out.get('tally', {}).get('ignored_sections')}")
+    finally:
+        shutil.rmtree(env["base"], ignore_errors=True)
+    # test_identity_wird_ignoriert
+    env = setup()
+    try:
+        mem = env["mem"]
+        queue = os.path.join(mem, "working", "user-candidates.json")
+        put(queue, json.dumps([{"id": "UC1", "key": "alt", "observation": "Alt", "status": "observed",
+                                "occurrences": 1, "trust_source": "conversation", "sessions": ["frueher"]}]))
+        profile_queue = os.path.join(env["home"], ".agent-memory", "identity", "profile-candidates.json")
+        before = {queue: sha256_of(queue), profile_queue: sha256_of(profile_queue)}
+        user_md = read(os.path.join(mem, "identity", "user.md"))
+        cand = {"key": "alt", "observation": "Will kurze Antworten", "signal_type": "preference", "confidence": 0.9,
+                "confirmed": True, "quote": "kurze Antworten bitte immer", "trust_source": "conversation"}
+        rc, out = run(env, "apply", plan(identity={"candidates": [cand, dict(cand, key="neu")], "none_because": ""}))
+        check(rc == 0 and out.get("ok") is True, f"test_identity_wird_ignoriert: exit 0 {rc} {str(out)[:300]}")
+        check({k: sha256_of(k) for k in before} == before and read(os.path.join(mem, "identity", "user.md")) == user_md,
+              "test_identity_wird_ignoriert: user-candidates.json / profile-candidates.json sha256 unchanged, user.md too")
+        check("identity" in out.get("tally", {}).get("ignored_sections", []),
+              f"test_identity_wird_ignoriert: 'identity' in tally.ignored_sections {out.get('tally', {}).get('ignored_sections')}")
+        # a malformed identity section is ignored as well: the old shape checks are gone
+        rc, out = run(env, "apply", plan(identity=[cand], user_candidates=[cand],
+                                          iterations=[{"title": "Mit Fehler", "errors": [{"problem": "p"}]}]))
+        check(rc == 0 and out.get("tally", {}).get("ignored_sections") == ["errors", "identity", "user_candidates"]
+              and out.get("ignored_status_line") == "Ignoriert (6.0.0): errors, identity, user_candidates",
+              f"identity of the wrong type, user_candidates and iteration errors: ignored, sorted "
+              f"{rc} {out.get('tally', {}).get('ignored_sections')} {out.get('ignored_status_line')!r}")
+        check({k: sha256_of(k) for k in before} == before, "the queue stays untouched on the second run too")
+        # test_leere_identity_zaehlt_nicht: an old skill's "no candidates" answer carries nothing to ignore
+        rc, out = run(env, "apply", plan(identity={"candidates": [], "none_because": "nichts Neues"}, user_candidates=[],
+                                          iterations=[{"title": "Ohne Fehler", "errors": []}]), "--dry-run")
+        check(rc == 0 and out.get("tally", {}).get("ignored_sections") == [] and "ignored_status_line" not in out,
+              f"test_leere_identity_zaehlt_nicht: empty identity candidates / lists are not counted "
+              f"{out.get('tally', {}).get('ignored_sections')}")
+        rc, out = run(env, "apply", plan(identity={"candidates": [cand], "none_because": ""}), "--dry-run")
+        check(rc == 0 and out.get("tally", {}).get("ignored_sections") == ["identity"],
+              f"--dry-run reports the ignored sections {out.get('tally', {}).get('ignored_sections')}")
+    finally:
+        shutil.rmtree(env["base"], ignore_errors=True)
+
+
 def main():
     if not GIT:
         print("SKIPPED: git not found")
@@ -585,6 +652,7 @@ def main():
         test_pre()
         test_rejected_plans()
         test_apply()
+        test_old_sections_ignored()
         test_plan_iterations_and_cap()
         test_failsoft_and_guards()
         test_review_round_1()

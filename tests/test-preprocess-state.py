@@ -112,33 +112,17 @@ def main():
         ids = [t.get("id") for t in json.loads(run([mem], cwd=tmp).stdout)["open_tasks"]]
         check("order: blocked first, then newest updated (else created)", ids == ["T-blk", "T-new", "T-mid", "T-old"], str(ids))
 
-        # 3b. Learnings citing a pattern id that patterns.json does not hold
+        # 3b. 6.0.0: the pattern mechanics are gone - a leftover patterns.json (any content) is data, never an error
         os.makedirs(os.path.join(mem, "patterns"), exist_ok=True)
         os.makedirs(os.path.join(mem, "learnings"), exist_ok=True)
         with open(os.path.join(mem, "patterns", "patterns.json"), "w", encoding="utf-8") as f:
-            json.dump([{"id": "P010"}, {"id": "G-pattern-005"}], f)
+            json.dump([{"id": "P010"}], f)
         with open(os.path.join(mem, "learnings", "learnings.json"), "w", encoding="utf-8") as f:
-            json.dump([{"id": "L1", "text": "Lehre (verlaengert P006/L6): siehe auch P010"},
-                       {"id": "L2", "text": "ok", "derived_from": ["G-pattern-005", "iteration-7"]},
-                       {"id": "L3", "text": "ok", "derived_from": ["P004"]},
-                       {"id": "L4", "text": "Die Grafikkarte P100 ist schnell, Preis P250"}], f)
+            json.dump([{"id": "L1", "text": "Lehre (verlaengert P006/L6): siehe auch P010"}], f)
         p = run([mem], cwd=tmp)
         state = json.loads(p.stdout)
-        errs = state["validation_errors"]
-        check("dangling pattern refs reported",
-              "learnings.json: L1 references unknown pattern P006" in errs
-              and "learnings.json: L3 references unknown pattern P004" in errs, str(errs))
-        check("known pattern refs are not errors",
-              not any("P010" in e or "G-pattern-005" in e for e in errs), str(errs))
-        check("prose like P100/P250 is not a pattern ref", not any("L4" in e for e in errs), str(errs))
-        # patterns.json = null must not crash the validator or hide the rest of the state
-        with open(os.path.join(mem, "patterns", "patterns.json"), "w", encoding="utf-8") as f:
-            f.write("null")
-        p = run([mem], cwd=tmp)
-        state = json.loads(p.stdout)
-        check("patterns.json null: exit 0, state intact, ref check silent",
-              p.returncode == 0 and isinstance(state.get("validation_errors"), list)
-              and not any("pattern" in e for e in state["validation_errors"])
+        check("learning citing a pattern id: no validation error any more",
+              p.returncode == 0 and state["validation_errors"] == []
               and isinstance(state.get("open_tasks"), list), p.stdout[:300])
 
         # 4. Broken JSON -> validation_errors names file, still exit 0
@@ -238,8 +222,7 @@ def main():
             "working/dirty-abc.json": {"dirty": True, "touched": ["src/app.py"]},
             "context/open-tasks.json": [{"id": "T1", "title": "open", "status": "open"},
                                         {"id": "T2", "title": "done", "status": "done"}],
-            "patterns/patterns.json": [{"id": "P010"}],
-            "learnings/learnings.json": [{"id": "L1", "text": "cites P006"}],
+            "learnings/learnings.json": [{"id": "L1", "text": "plain learning"}],
         }
         states = {}
         for label, prefix in (("plain", b""), ("bom", b"\xef\xbb\xbf")):
@@ -257,10 +240,10 @@ def main():
             check(f"BOM store: {key} equals the BOM-less result",
                   states["bom"].get(key) == states["plain"].get(key),
                   f"bom={states['bom'].get(key)} plain={states['plain'].get(key)}")
-        check("BOM store: findings are real (task, changed file, dangling ref)",
+        check("BOM store: findings are real (task, changed file) and a BOM file is not reported as corrupt",
               [t["id"] for t in states["bom"]["open_tasks"]] == ["T1"]
               and states["bom"]["changed_files"] == ["src/app.py"]
-              and states["bom"]["validation_errors"] == ["learnings.json: L1 references unknown pattern P006"],
+              and states["bom"]["validation_errors"] == [],
               str(states["bom"]))
 
     # 13. P1/B2: the state hands the model the keys of the existing user candidates, so a repeated

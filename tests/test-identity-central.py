@@ -336,63 +336,25 @@ def qrow(key, **kw):
 
 transcript(SID, "Hallo", USER_SAYS, SUP_SAYS)
 
-# C1 Promotion mit verifiziertem Zitat ins Zentral; die Projektdateien bleiben byte-gleich
+# C1 (6.0.0) die Identity-Ernte ist entfernt: ein alter Plan mit user_candidates schreibt weder ins Zentral noch ins Projekt
 mem, store = make_project(), make_profile()
-pb = snapshot(mem)
-rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE)]}, "--identity-store", store)
-md = read_rel(store, ids.PROFILE_MD)
-log = load_rel(store, ids.PROFILE_CHANGELOG)
-q = load_rel(store, ids.PROFILE_QUEUE)
-key = ids.project_key(mem, ISO_HOME)
-check(rc == 0 and f"- Antworten beginnen mit einer kurzen Zusammenfassung (PC1, {DATE})" in md
-      and "- Antworten kurz halten" in md,
-      f"C1 die Zeile steht in profile.md mit (PC1, {DATE}), der Bestand bleibt (rc={rc}, {out.get('error')})")
-hit = [e for e in log if e.get("candidate_id") == "PC1"]
-check(len(hit) == 1 and (hit[0].get("origin") or {}).get("projekt") == key,
-      f"C1 profile-changelog.json: Eintrag mit candidate_id PC1 und origin.projekt ({hit})")
-check(len(q) == 1 and q[0].get("id") == "PC1" and q[0].get("status") == "promoted"
-      and q[0].get("origin") == {"projekt": key, "id": None},
-      f"C1 Zentral-Queue: PC1 promoted mit origin {{projekt, id: null}} ({q})")
-check(same_identity(pb, snapshot(mem)), "C1 Projekt-user.md, -Changelog und -Queue sind byte-gleich")
-check(out["tally"]["identity_target"] == "central" and out["tally"]["central_path"]
-      and ids.same_store(out["tally"]["central_path"], store),
-      f"C1 Tally: identity_target central, central_path ({out['tally']['identity_target']}, {out['tally']['central_path']})")
-check("profile.md promotet" in str(out.get("identity_status_line")),
-      f"C1 Statuszeile nennt profile.md ({out.get('identity_status_line')})")
+pb, cb = snapshot(mem), snapshot(store)
+rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE), cand("zweimal")]},
+              "--identity-store", store)
+check(rc == 0 and snapshot(store) == cb and same_identity(pb, snapshot(mem))
+      and out["tally"]["ignored_sections"] == ["user_candidates"] and "identity_status_line" not in out
+      and not os.path.exists(os.path.join(store, ids.PROFILE_LOCK)),
+      f"C1 user_candidates im Zentralmodus: ignoriert und gezaehlt, Zentral und Projekt byte-gleich, kein profile.lock "
+      f"(rc={rc}, {out['tally']['ignored_sections']}, {out.get('error')})")
 
-# C2 Schreibreihenfolge: Zentral-Changelog, dann profile.md, dann Zentral-Queue
-fw = out.get("files_written") or []
-order = [ids.PROFILE_CHANGELOG, ids.PROFILE_MD, ids.PROFILE_QUEUE]
-check(all(f in fw for f in order) and [fw.index(f) for f in order] == sorted(fw.index(f) for f in order),
-      f"C2 files_written: Changelog, dann profile.md, dann Queue ({fw})")
-
-# C3 ohne profile.md: wie heute, Ziel user.md, der Zentral-Ordner entsteht nicht
-mem = make_project()
-nowhere = os.path.join(MEM_ROOT, "kein-zentral")
-rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE)]}, "--identity-store", nowhere)
-check(rc == 0 and f"(UC1, {DATE})" in read_rel(mem, "identity/user.md") and out["tally"]["identity_target"] == "project"
-      and not os.path.exists(nowhere),
-      f"C3 ohne profile.md: user.md, identity_target project, kein Zentral-Ordner (rc={rc}, {out['tally']['identity_target']})")
-
-# C4 Zweitnennung aus anderer Sitzung UND anderem Projekt erhoeht occurrences desselben PC-Kandidaten
-store = make_profile()
-mem_a, mem_b = make_project(), make_project()
-rc1, _ = run(mem_a, {"date": DATE, "user_candidates": [cand("zweimal")]}, "--identity-store", store, sid=SID)
-rc2, out = run(mem_b, {"date": DATE, "user_candidates": [cand("zweimal")]}, "--identity-store", store, sid=SID2)
-q = load_rel(store, ids.PROFILE_QUEUE)
-row = q[0] if len(q) == 1 else {}
-check(rc1 == 0 and rc2 == 0 and row.get("id") == "PC1" and row.get("occurrences") == 2
-      and set(row.get("sessions") or []) == {SID, SID2},
-      f"C4 ein PC-Kandidat, occurrences 2, sessions beide ({q})")
-check((row.get("origin") or {}).get("projekt") == ids.project_key(mem_a, ISO_HOME),
-      "C4 origin bleibt das Projekt der Erstnennung")
-
-# C5 Supersede im Zentralmodus ersetzt die Zeile in profile.md, Changelog davor; D9 greift gegen profile-changelog.json
-mem, store = make_project(), make_profile()
-pb = snapshot(mem)
 sup = {"match": "- Antworten kurz halten", "new_text": "- Antworten kurz halten, bei der Fehlersuche ausfuehrlich",
        "reason": "Owner hat die Regel eingeschraenkt", "plain": PLAIN, "quote": SUP_QUOTE}
-rc, out = run(mem, {"date": DATE, "user_md_supersede": [sup]}, "--identity-store", store)
+SUP_PLAN = {"date": DATE, "user_md_supersede": [sup]}
+
+# C5 Supersede im Zentralmodus ersetzt die Zeile in profile.md, Changelog davor
+mem, store = make_project(), make_profile()
+pb = snapshot(mem)
+rc, out = run(mem, SUP_PLAN, "--identity-store", store)
 md = read_rel(store, ids.PROFILE_MD)
 fw = out.get("files_written") or []
 check(rc == 0 and md == PROFILE_TEXT.replace("- Antworten kurz halten\n", sup["new_text"] + "\n")
@@ -402,20 +364,10 @@ log = load_rel(store, ids.PROFILE_CHANGELOG)
 check(len(log) == 1 and log[0].get("field") == "user.md/supersede" and log[0].get("old_value") == "- Antworten kurz halten"
       and (log[0].get("origin") or {}).get("projekt") == ids.project_key(mem, ISO_HOME),
       f"C5 Changelog-Eintrag mit old_value und origin ({log})")
-put(store, ids.PROFILE_QUEUE, [qrow("kurz-wieder", observation="Antworten kurz halten")])
-md_before = read_rel(store, ids.PROFILE_MD)
-rc, out = run(mem, {"date": DATE, "user_candidates": [cand("kurz-wieder", observation="Antworten kurz halten")]},
-              "--identity-store", store, sid=SID2)
-row = load_rel(store, ids.PROFILE_QUEUE)[0]
-check(rc == 0 and row.get("status") == "confirmed" and row.get("blocked_by_supersede")
-      and read_rel(store, ids.PROFILE_MD) == md_before,
-      f"C5 D9: die widerrufene Aussage kommt per Zweitnennung nicht zurueck (status={row.get('status')}, "
-      f"blocked={row.get('blocked_by_supersede')})")
-
 # C6 Plan-Ablehnung: rc 2, Projekt und Zentral byte-gleich, profile.lock frei
 mem, store = make_project(), make_profile()
 pb, cb = snapshot(mem), snapshot(store)
-rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confidence="hoch")]}, "--identity-store", store)
+rc, out = run(mem, {"date": DATE, "user_md_supersede": [dict(sup, reason="")]}, "--identity-store", store)
 try:
     with store_lock.store_lock(store, timeout=0.3, lock_rel=ids.PROFILE_LOCK):
         free = True
@@ -425,10 +377,10 @@ check(rc == 2 and snapshot(mem) == pb and snapshot(store) == cb and free,
       f"C6 Ablehnung: rc 2, nichts geschrieben, profile.lock frei (rc={rc}, {str(out.get('error'))[:80]})")
 
 # C7 Zentral unlesbar: rc 2 vor dem ersten Byte, kein Rueckfall auf die Projekt-user.md (Review Focus 1)
-# Der Plan schreibt VOR den Kandidaten eine Iteration: ohne Vorabpruefung waere sie geschrieben, bevor die Queue
+# Der Plan schreibt VOR dem Supersede eine Iteration: ohne Vorabpruefung waere sie geschrieben, bevor das Zentral
 # gelesen wird (halb angewandter Plan) - so beweist der Test die Pruefung vor dem ERSTEN Byte
 C7_PLAN = {"date": DATE, "iterations": [{"title": "darf nicht geschrieben werden", "type": "feature"}],
-           "user_candidates": [cand(confirmed=True, quote=QUOTE)]}
+           "user_md_supersede": [sup]}
 mem, store = make_project(), make_profile()
 write(os.path.join(store, ids.PROFILE_QUEUE), "{kaputt")
 pb, cb = snapshot(mem), snapshot(store)
@@ -482,7 +434,7 @@ warn = " ".join(out.get("warnings") or out["tally"]["warnings"] or [])
 check(rc == 0 and "not in profile.md" in warn and "line_id PC" not in warn,
       f"C8b2 mehrdeutige Herkunft (PC7 und PC8): keine Id empfohlen ({warn[:160]})")
 
-# C8c (T-050) `identity_store.py check`: rein lesender Gesundheitsblick auf die Zentraldateien (maintain Step 2, memory-audit)
+# C8c (T-050) `identity_store.py check`: rein lesender Gesundheitsblick auf die Zentraldateien (maintain Step 4)
 CHECK = os.path.join(SCRIPTS, "identity_store.py")
 
 
@@ -499,7 +451,7 @@ inactive_store = make_dir("central-inaktiv-")
 rc, rep = check_run(inactive_store)
 check(rc == 0 and rep.get("active") is False and rep.get("problems") == [], f"C8c kein profile.md: inaktiv, nichts gemeldet ({rep})")
 store = make_profile()
-rc, out = run(make_project(), {"date": DATE, "user_candidates": [cand("check")]}, "--identity-store", store)
+rc, out = run(make_project(), SUP_PLAN, "--identity-store", store)
 before = snapshot(store)
 rc, rep = check_run(store)
 check(rc == 0 and rep.get("active") is True and rep.get("problems") == [] and snapshot(store) == before,
@@ -520,25 +472,13 @@ with open(os.path.join(store, ids.PROFILE_MD), "wb") as fh:
 rc, rep = check_run(store)
 check(any("profile.md: unreadable" in p for p in rep.get("problems", [])), f"C8c profile.md kein UTF-8 ({rep.get('problems')})")
 
-# C9 zwei Projekte nacheinander: beide Kandidaten in der Zentral-Queue, PC1 und PC2 (Lost-Update-Probe ohne Last)
-store = make_profile()
-mem_a, mem_b = make_project(), make_project()
-run(mem_a, {"date": DATE, "user_candidates": [cand("eins")]}, "--identity-store", store, sid=SID)
-run(mem_b, {"date": DATE, "user_candidates": [cand("zwei", observation="Mag ausfuehrliche Fehlermeldungen")]},
-    "--identity-store", store, sid=SID2)
-q = load_rel(store, ids.PROFILE_QUEUE)
-check([r.get("id") for r in q] == ["PC1", "PC2"] and [r.get("key") for r in q] == ["eins", "zwei"]
-      and q[0]["origin"]["projekt"] != q[1]["origin"]["projekt"],
-      f"C9 beide Kandidaten im Zentral, PC1/PC2, verschiedene origins ({[(r.get('id'), r.get('key')) for r in q]})")
-
 # C10 Guard (E10): Temp-Store, Zentral nur ueber HOME aktiv, weder --identity-store noch Variable -> rc 2, nichts
 home_store = os.path.join(ISO_HOME, ".agent-memory")
 write(os.path.join(home_store, ids.PROFILE_MD), PROFILE_TEXT)
 try:
     mem = make_project()
     pb, hb = snapshot(mem), snapshot(home_store)
-    rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE)]},
-                  env_extra={ids.ENV_VAR: ""})
+    rc, out = run(mem, SUP_PLAN, env_extra={ids.ENV_VAR: ""})
     check(rc == 2 and "--identity-store" in str(out.get("error")) and snapshot(mem) == pb and snapshot(home_store) == hb,
           f"C10 Guard: rc 2 mit Hinweis auf --identity-store, nichts geschrieben (rc={rc}, {str(out.get('error'))[:90]})")
 finally:
@@ -558,8 +498,7 @@ holder = subprocess.Popen([sys.executable, "-c", HOLD, SCRIPTS, store, ids.PROFI
                           text=True, encoding="utf-8", env=ENV)
 try:
     holder.stdout.readline()
-    rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE)]},
-                  "--identity-store", store, "--lock-timeout", "0.5")
+    rc, out = run(mem, SUP_PLAN, "--identity-store", store, "--lock-timeout", "0.5")
 finally:
     holder.kill()
     holder.wait()
@@ -608,26 +547,27 @@ check(len(got) == 1 and "\\" not in line and not any(ord(ch) < 32 or ord(ch) == 
 wide = "# P\n\n## Preferences\n" + "".join(f"- {i} " + "y" * 300 + "\n" for i in range(6))
 check(sum(len(x) for x in ib.select_lines(wide, [])) <= ib.MAX_CHARS_TOTAL, "B4 Gesamtlaenge hoechstens 900 Zeichen")
 
-# B3 nach einer Promotion im Zentralmodus: briefing-lines.txt im Zentral, in files_written nach profile.md
+# B3 nach einem Supersede im Zentralmodus: die Projektion im Zentral, in files_written nach profile.md
 mem, store = make_project(), make_profile()
-rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE)]}, "--identity-store", store)
+rc, out = run(mem, SUP_PLAN, "--identity-store", store)
 fw = out.get("files_written") or []
 bl = os.path.join(store, *ids.PROFILE_BRIEFING.split("/"))
 lines = open(bl, encoding="utf-8").read().splitlines() if os.path.isfile(bl) else []
 check(rc == 0 and ids.PROFILE_BRIEFING in fw and fw.index(ids.PROFILE_MD) < fw.index(ids.PROFILE_BRIEFING)
-      and lines and lines[0] == "- Antworten beginnen mit einer kurzen Zusammenfassung",
-      f"B3 Zentral: briefing-lines.txt nach profile.md geschrieben, Zitat-Zeile vorn ({fw}, {lines[:2]})")
+      and sup["new_text"] in lines and "- Antworten kurz halten" not in lines,
+      f"B3 Zentral: die Projektion nach profile.md geschrieben, mit der ersetzten Zeile ({fw}, {lines[:2]})")
 check(not os.path.exists(os.path.join(mem, "identity", "briefing-lines.txt")),
       "B3 im Zentralmodus entsteht keine Projektion im Projekt")
 
 # B5 Projektmodus: die Projektion entsteht im Projekt (der Hook liest sie, solange kein Zentral aktiv ist)
 mem = make_project()
-rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE)]}, "--identity-store",
-              os.path.join(MEM_ROOT, "kein-zentral"))
+rc, out = run(mem, {"date": DATE, "user_md_supersede": [
+    {"line_id": "UC3", "new_text": "- Projektzeile neu (UC3, 2026-07-01)", "reason": "r", "plain": PLAIN, "quote": SUP_QUOTE}]},
+              "--identity-store", os.path.join(MEM_ROOT, "kein-zentral"))
 pl = os.path.join(mem, "identity", "briefing-lines.txt")
 plines = open(pl, encoding="utf-8").read().splitlines() if os.path.isfile(pl) else []
 check(rc == 0 and "identity/briefing-lines.txt" in (out.get("files_written") or [])
-      and "- Antworten beginnen mit einer kurzen Zusammenfassung" in plines and "- Projektzeile bleibt hier" in plines,
+      and "- Projektzeile neu" in plines and "- Projektzeile bleibt hier" not in plines,
       f"B5 Projektmodus: identity/briefing-lines.txt im Projekt ({plines})")
 # ein Plan ohne Identitaetsschreibvorgang laesst die Projektion in Ruhe
 mem = make_project()
@@ -715,42 +655,6 @@ def inproc_env():
                 os.environ[k] = v
 
 
-# X1 (P2-A-01) Abbruch nach profile.md, vor der Zentral-Queue: die naechste Id ist nicht wieder PC1, und die andere Aussage
-# eines zweiten Projekts landet im Profil (nicht als "Duplikat" verschluckt)
-store = make_profile()
-mem_a, mem_b = make_project(), make_project()
-real_write_json = aw.write_json
-
-
-def crash_at_queue(root, rel, data, dry, touched, via=None):
-    if rel == ids.PROFILE_QUEUE:
-        raise OSError("simulierter Abbruch vor der Zentral-Queue")
-    return real_write_json(root, rel, data, dry, touched, via)
-
-
-aw.write_json = crash_at_queue
-try:
-    with inproc_env():
-        try:
-            aw.apply_user_candidates(mem_a, {"date": DATE, "user_candidates": [cand("a-key", confirmed=True, quote=QUOTE)]},
-                                     DATE, False, [], aw.new_tally(), SID, None, paths=ids.central_paths(store))
-            crashed = False
-        except OSError:
-            crashed = True
-finally:
-    aw.write_json = real_write_json
-check(crashed and f"(PC1, {DATE})" in read_rel(store, ids.PROFILE_MD) and load_rel(store, ids.PROFILE_QUEUE) == [],
-      "X1 Vorbedingung: profile.md traegt PC1, die Zentral-Queue ist nach dem Abbruch leer")
-OTHER = "Mag ausfuehrliche Fehlermeldungen mit Pfad"
-rc, out = run(mem_b, {"date": DATE, "user_candidates": [cand("b-key", observation=OTHER, confirmed=True, quote=QUOTE)]},
-              "--identity-store", store)
-q = load_rel(store, ids.PROFILE_QUEUE)
-row = next((r for r in q if r.get("key") == "b-key"), {})
-check(rc == 0 and row.get("id") == "PC2" and f"- {OTHER} (PC2, {DATE})" in read_rel(store, ids.PROFILE_MD)
-      and out["tally"]["promotion_skipped_duplicate"] in (0, None),
-      f"X1 die naechste Id ueberspringt die im Changelog belegte PC1, die andere Aussage steht im Profil "
-      f"(rc={rc}, id={row.get('id')}, dup={out['tally']['promotion_skipped_duplicate']})")
-
 # X2 (P2-A-02) corrections mit falschem Typ im Zentralmodus: JSON-Ablehnung mit Exit 2, kein Absturz
 mem, store = make_project(), make_profile()
 pb, cb = snapshot(mem), snapshot(store)
@@ -790,8 +694,9 @@ def lock_busy(store_):
     return r.returncode == 3
 
 
-store = make_profile()
+store = make_profile(queue=[qrow("x6")])  # last_seen 2026-10-01: identity_expire marks it, so the queue is written
 mem = make_project()
+real_write_json = aw.write_json
 real_load_json = aw.load_json
 
 
@@ -822,7 +727,7 @@ argv, stdin = sys.argv, sys.stdin
 try:
     with inproc_env(), contextlib.redirect_stdout(io.StringIO()):
         sys.argv = ["apply_wrapup.py", mem, "--session-id", SID, "--identity-store", store]
-        sys.stdin = io.StringIO(json.dumps({"date": DATE, "user_candidates": [cand("x6", confirmed=True, quote=QUOTE)]}))
+        sys.stdin = io.StringIO(json.dumps({"date": DATE, "identity_expire": {"older_than_days": 14, "reason": "X6"}}))
         rc6 = aw.main()
 finally:
     aw.load_json, aw.write_json, ib._read_queue = real_load_json, real_write_json, real_read_queue
@@ -850,10 +755,10 @@ check(ids.PROFILE_BRIEFING == "identity/profile-briefing.txt" and ids.central_pa
 store = make_profile()
 write(os.path.join(store, "identity", "briefing-lines.txt"), "- alte Projekt-Projektion des Home-Projekts\n")
 mem = make_project()
-rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE)]}, "--identity-store", store)
+rc, out = run(mem, SUP_PLAN, "--identity-store", store)
 check(rc == 0 and ids.PROFILE_BRIEFING in (out.get("files_written") or [])
       and read_rel(store, "identity/briefing-lines.txt") == "- alte Projekt-Projektion des Home-Projekts\n"
-      and read_rel(store, ids.PROFILE_BRIEFING).startswith("- Antworten beginnen"),
+      and sup["new_text"] in read_rel(store, ids.PROFILE_BRIEFING).splitlines(),
       f"R1 Zentralmodus schreibt profile-briefing.txt, die Projekt-Projektion im selben Ordner bleibt (rc={rc}, "
       f"{out.get('files_written')})")
 
@@ -879,7 +784,7 @@ try:
     rc, out = run(mem, {"date": DATE, "iterations": [{"title": "nur eine Iteration", "type": "feature"}]},
                   env_extra={ids.ENV_VAR: ""})
     check(rc == 0, f"R4 iterations-Plan in einem Temp-Store bei aktivem Home-Zentral: laeuft (rc={rc}, {str(out.get('error'))[:100]})")
-    rc, out = run(mem, {"date": DATE, "user_candidates": [cand(confirmed=True, quote=QUOTE)]}, env_extra={ids.ENV_VAR: ""})
+    rc, out = run(mem, SUP_PLAN, env_extra={ids.ENV_VAR: ""})
     check(rc == 2 and "--identity-store" in str(out.get("error")), f"R4 Identitaets-Plan dort weiter gesperrt (rc={rc})")
 finally:
     shutil.rmtree(home_store, ignore_errors=True)

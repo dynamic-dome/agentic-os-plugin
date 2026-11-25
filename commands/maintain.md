@@ -1,238 +1,283 @@
 ---
 name: maintain
-description: Reports growth and integrity of the .agent-memory/ store - never moves, archives or deletes store entries (D-021). Script core (memory-thresholds.sh, gc_dirty_markers.py preview, native_memory_audit.py, review_sweep.py, extract_patterns.py --refresh); prose only for JSON repair and owner decisions. Run on demand or when wrap-up / the SessionStart briefing print THRESHOLD lines.
+description: Pflegelauf over the learnings of .agent-memory/ - the agent judges each candidate itself (doppelt, überholt, gegenstandslos, verwandt, global, bleibt) and writes the verdicts through apply_wrapup.py in chunks of 30, stamp only after the last; plus the JSON repair, the only owner step. Never deletes or rewrites a learning (D-021). Run when the SessionStart briefing shows a PFLEGELAUF line, or on demand.
 disable-model-invocation: true
-allowed_tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
+allowed_tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "ToolSearch", "mcp__agent-memory-atlas__memory_search_tool", "mcp__agent-memory-atlas__memory_related_tool"]
 ---
 
-# Memory Maintenance
+# Pflegelauf (memory maintenance)
 
-Reports on and verifies `.agent-memory/`. Never part of the end-of-session flow — wrap-up
-prints the `THRESHOLD:` lines and recommends this command; it does not run it.
+Keeps the learnings of `.agent-memory/` reachable and lean: duplicates, outdated rows and rows about
+a mechanism that is gone get a `superseded_by`, related rows join a rule pointer, rules worth having
+everywhere are lifted to a global rule, the rest stays and gets its next review date. **You are the judge** - every verdict is
+yours, reported in one line each. The owner gets no review cards and no yes/no question per item
+(owner decision F4, 2026-11-03); the only owner step is the JSON repair (Step 4).
 
-**(no-archive) — D-021 (owner decision 2026-10-07; widens the 2026-10-06 rule to every store file):
-this command never moves, archives, prunes, compacts or deletes store entries** — not
-learnings, patterns, decisions, errors, iterations, open tasks or the session summary.
-Archive files are invisible to the Atlas RAG; count- and age-based archiving took long-term
-and importance>=4 learnings and ready patterns out of retrieval. Growth is reported; what
-leaves the active view is decided by the owner and written through a named applier (an
-evidenced `superseded_by`), never by a count. Existing `*-archive-*` files stay untouched.
+Trigger: the SessionStart briefing prints `PFLEGELAUF: …` once 30 learnings were added since the
+last run (the threshold lives in the briefing's threshold script; this command does not recount
+it). wrap-up only recommends this command. The run happens in a session, never headless.
+
+**(no-archive) — D-021:** nothing is deleted, archived, moved or compressed, and no verdict rests on
+age, count or importance alone. A superseded learning stays in `learnings.json`; projections,
+`learnings_top` and the Atlas search filter it. Existence and `text` of a learning are untouchable;
+only the metadata `superseded_by`, `review_after` and pointer membership change.
 
 ## Preconditions
 
-- `.agent-memory/` exists — otherwise print "Memory system not initialized — run
+- `.agent-memory/` exists - otherwise print "Memory system not initialized — run
   `/agentic-os:init` first" and stop.
-- Snapshot first (this run mutates the store): follow
-  `${CLAUDE_PLUGIN_ROOT}/references/pre-run-commit.md` with commit message
-  `chore(memory): pre-run snapshot vor maintain`.
+- Snapshots (`scripts/store_snapshot.py`, byte copy outside the store): the FIRST chunk apply of a
+  run (Step 3, also of a resumed run) takes ONE with `--snapshot` - under the store lock, after the plan
+  check; if the copy fails, the applier stops with exit 2 before the first byte. That snapshot is the
+  rollback point of the whole run, named in the report. Every later chunk apply of the run takes none:
+  the snapshot folder keeps only the newest 10 plus the newest of each day, so per-chunk snapshots
+  would prune the run's one on a run of 10 or more chunks; every single verdict stays reversible
+  through `update_log` (`old`/`new`). The hand repair in Step 4 takes one first:
+  `python "${CLAUDE_PLUGIN_ROOT}/scripts/store_snapshot.py" .agent-memory`.
+- A candidate script that reports `learnings.json` unreadable (review_sweep exit 1,
+  learnings_lifecycle exit 2): do Step 4 first, then start again at Step 1.
 
-## Step 1: Mechanical pass (scripts own these — run, do not re-derive)
+## Step 1: Candidates (read-only)
+
+The run's rollback point is taken by the first chunk apply (Step 3), not here:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-thresholds.sh" .agent-memory; echo "thresholds exit=$?"
-python "${CLAUDE_PLUGIN_ROOT}/scripts/gc_dirty_markers.py" .agent-memory            # preview only
-python "${CLAUDE_PLUGIN_ROOT}/scripts/native_memory_audit.py"; echo "audit exit=$?"
-python "${CLAUDE_PLUGIN_ROOT}/scripts/review_sweep.py" .agent-memory \
-  --native-memory "$(python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" --print-native-dir .)" \
-  --report .agent-memory/working/review-sweep.md
-python "${CLAUDE_PLUGIN_ROOT}/scripts/extract_patterns.py" .agent-memory --refresh   # regenerate patterns.md
-python "${CLAUDE_PLUGIN_ROOT}/scripts/review_sweep.py" .agent-memory --charges        # review charges
-python "${CLAUDE_PLUGIN_ROOT}/scripts/restore_plan.py" .agent-memory \
-  --out .agent-memory/working/restore-plan.json > /dev/null; echo "restore-plan exit=$?"
+python "${CLAUDE_PLUGIN_ROOT}/scripts/review_sweep.py" .agent-memory --candidates-json
+python "${CLAUDE_PLUGIN_ROOT}/scripts/learnings_lifecycle.py" propose .agent-memory --skip-reviewed
+python "${CLAUDE_PLUGIN_ROOT}/scripts/learnings_lifecycle.py" report .agent-memory
 ```
 
-- `review_sweep.py --charges`: one line per charge (`due:YYYY-MM`, `ohne-termin`,
-  `restored:<store>`). Every reviewable learning sits in exactly one — rows without
-  `review_after` and restored rows included. Copy the lines into the report.
-- `restore_plan.py` (read-only): reads the archives and writes the plan to
-  `working/restore-plan.json`. Report `report.learnings.candidate` and
-  `pattern_ids`; any count > 0 → Step 5b.
+Three sources, merged into one list of **subjects** (an id found by several sources is judged
+once). **Resume (Atlas pair set only):** from the dated rows of the pair set (source 1), leave out
+every row whose `update_log` already holds an entry with `by: "pflegelauf"` dated on or after the
+`date` in `working/pflegelauf.json` (no stamp: any such entry) - an earlier, interrupted run judged
+it. Never apply this rule to the candidates of sources 2 and 3: they leave out judged rows
+themselves (a future `review_after`, `superseded_by`, pointer membership), and a `bleibt` row
+whose `review_after` has passed is due again even though its log carries a pflegelauf entry.
 
-- `memory-thresholds.sh`: exit 0 → nothing grew past a limit. Exit 10 → each `THRESHOLD:`
-  line names file, count and limit; Step 3 reports exactly those. No line is an order to
-  move anything.
-- `gc_dirty_markers.py` runs as **preview only** (no apply flag): deleting is the daily
-  run's job. Since D-024 the GC removes only markers whose harvest state is closed (with a
-  matching snapshot) and writes an evidence line to `metrics/harvest-closures.jsonl` first;
-  every pending session (headless, foreign wrap-up, foreign-only, legacy stamp) stays.
-  Carry the "would remove" count and the `kept:` breakdown into the report. Never
-  hand-pick or delete these files.
-- `native_memory_audit.py`: exit 0 → copy its `**Summary:**` line verbatim into the
-  report. Exit 2 (usage/path) or 1 (crash) → one line "native audit failed: …" and
-  continue. This is a REPORTER: it never rotates, deletes or edits native stores;
-  `warn`/`critical`/`truncated` injection warnings are surfaced, not fixed. The level is the
-  share of Claude Code's load limit (first 200 lines or 25 000 bytes, whichever is hit first):
-  `truncated` means part of that MEMORY.md is never loaded — name those stores explicitly.
-- `review_sweep.py`: emit its one-line result verbatim; any count > 0 → name the report
-  path. Keep / supersede / retire are owner decisions taken in Step 5.
-- `extract_patterns.py --refresh`: rewrites `patterns/patterns.md` from
-  `patterns/patterns.json` (sole writer of both). Do not regenerate it by hand.
+1. **Atlas pairs.** Load both tools with ONE call:
+   `ToolSearch` query `select:mcp__agent-memory-atlas__memory_search_tool,mcp__agent-memory-atlas__memory_related_tool`.
+   The pair set: rows dated on or after the stamp `date` (no stamp: every live row), minus
+   superseded rows, pointer rows (`kind: principle`), members of a live pointer and
+   rows with `bridge_status` rejected or retired (`review_sweep --candidates-json` drops retired rows and owner
+   rejections only, so an agent-rejected row can still arrive as a candidate of source 2);
+   plus every candidate of sources 2 and 3. Call `memory_search_tool` per subject with the row's `summary`
+   (else the first 200 characters of `text`), `source_system: "agent-memory"`,
+   `scope: "project:<project folder name>"` (the folder that contains `.agent-memory`), `top_k: 5`,
+   `snippet_len: 80`. The Atlas also returns hits from other stores flagged `"outside_filter": true`,
+   even with `scope`: drop every hit with `outside_filter: true` first, then the self-hit and every hit
+   that is no learning (e.g. `type: pattern`); a remaining hit that maps to a local `Lnn` and says the
+   same thing or contradicts it forms a pair. The self-hit check uses only the in-scope hits (without
+   `outside_filter: true`): if the self-hit is not among them, print `Scope nicht gefunden, Paarsuche übersprungen`
+   once and continue without pairs. Use `memory_related_tool` on a hit's `record_id` only when the
+   search alone does not settle whether two rows say the same. An unscoped search (no `scope`) runs
+   only for a row you judge a "global" candidate, to collect cross-store evidence; hits from other
+   stores are never a write target. If ToolSearch finds no Atlas tool or a call fails, print the line
+   `Atlas nicht erreichbar, keine Paarsuche` and continue with sources 2 and 3.
+2. **Fällig** - `review_sweep.py --candidates-json`: `[{"id", "reason"}]`, reason
+   `due:YYYY-MM` (review date passed) or `ohne-termin` (no review date). Live pointers and their
+   members are already left out.
+3. **Nicht verankert** - `learnings_lifecycle.py propose --skip-reviewed`: eligible learnings that
+   belong to no pointer and were not judged already (left out: a future `review_after`, or no
+   `review_after` and a `pflegelauf` entry in `update_log`), with the top catalog sections (TF-IDF scores are hints, not verdicts). The catalog is
+   `rule_catalog` in `~/.claude/agentic-os.local.json`. Exit 1 `no rule catalog`: source 3 and the
+   verdict "global" are not available this run - say so in the report (`Lücke: kein rule_catalog`).
 
-## Step 2: JSON integrity
+`report` gives `eligible`, `anchored`, `pointers` and `lost_anchors` (live pointers whose anchor
+no longer resolves) for the report. Read a candidate's full row in `learnings/learnings.json`
+(Grep for its id with context); never edit that file.
 
-For `iterations/errors.json`, `patterns/patterns.json`, `context/decisions.json`,
-`context/open-tasks.json`, `learnings/learnings.json`, `working/current-session.json`,
-`working/user-candidates.json`, `identity/user-changelog.json`: attempt to parse as
-`utf-8-sig` (a UTF-8 BOM is not corruption). The writers refuse to touch an unreadable
-file (exit 2, file unchanged), so this step is the ONLY repair path — show the owner the
-parse error first (it names line and column). **Repair in place** with the owner's OK: a
-truncated tail, a stray comma or a wrong top-level shape is fixed in the file itself, so every
-row and id survives. Only if the owner confirms the content is unrecoverable: keep it as
-`{file}.corrupt-{YYYYMMDDHHMMSS}.bak`, start the file with its default (`[]`, or `{}` for
-`current-session.json`) and say in the report that ids held only by the `.bak` can be issued
-again. Count repairs for the report.
+## Step 2: One verdict per candidate
+
+Judge the content: what the learning says, how specific it is, what evidence it carries. Exactly
+one verdict per candidate:
+
+| Verdict | When | Write (Step 3 plan) |
+|---|---|---|
+| doppelt | two rows say the same | `learning_updates` `{"id": <weaker>, "superseded_by": <stronger>, "reason"}` - weaker = less specific, less evidence |
+| überholt | a newer row replaces or corrects an older one | `learning_updates` `{"id": <older>, "superseded_by": <newer>, "reason"}` |
+| gegenstandslos | the row describes a mechanism, file or rule that no longer exists and no other row replaces it; name what is gone in the reason | `learning_updates` `{"id", "obsolete": true, "reason"}` - the applier writes `superseded_by = "obsolete:pflegelauf-<plan date>"` |
+| verwandt | the row belongs to an existing live pointer | `principles` entry with that pointer's anchor; the candidate joins `members` |
+| global | the row is a rule worth having in every project | see "global" below |
+| bleibt | none of the above | `learning_updates` `{"id", "review_after": <run date + 6 months>, "reason"}` |
+
+- **gegenstandslos** never for a rule that still applies, even if the example it names is gone: then
+  `bleibt` (or `überholt` when a newer row states the rule). Gone means removed code, a retired file or
+  a dropped mechanism (e.g. the pattern sync), not "rarely needed". Never for an approved feedback row
+  (`kind: feedback`, `bridge_status: approved` - an owner correction): nothing would carry its content,
+  so only `doppelt`/`überholt` with a live successor (the applier refuses `obsolete` there).
+- **bleibt** sets `review_after` to the run date plus exactly 6 months (same day of the month; if that
+  day does not exist, the last day of that month). Never pick another date - it keeps the next run
+  from showing the row again.
+- A **pair** gives each of its two ids a verdict: the superseded one `doppelt`/`überholt`, the
+  surviving one `bleibt` (or its own verdict when it is a candidate for another reason). A pair that
+  turns out to say different things: both `bleibt`.
+- **What the applier refuses** (the whole plan, exit 2, before the first byte - choose around it):
+  `superseded_by` or `obsolete` on a rule-class learning (the flag or a rule tag `regel`/`rule`/
+  `verfassung`/`constitution`, also on older rows without the flag), a pointer row or a member of a pointer (also
+  of one the same plan writes) - for those only `bleibt`/`verwandt` remain, a pointer goes back only via
+  `principle_retire`, a rule-class learning only via the rule gate. `superseded_by` or `obsolete` on a row
+  that is the live successor of another row (some row's `superseded_by` points at it; also from an earlier
+  chunk) - re-point that row in the same plan or judge `bleibt`. Approved feedback superseded by anything
+  but approved feedback (MEMORY.md shows approved feedback only; the owner correction would vanish there).
+  A target that is a pointer, has
+  `bridge_status` rejected or retired, is an unreleased rule-class learning, is itself superseded
+  or declared `obsolete` (point at the live successor, no chains), the id itself, or a pair that
+  supersedes each other. `obsolete` on a row that is already superseded.
+  `reason` is 1..300 characters. `review_after` is allowed on every row.
+- **verwandt** - a `principles` entry `{summary, anchor, members, plain, tags}` with the anchor of
+  the existing pointer: the same anchor merges the new member in. Copy `summary`, **`plain`** and
+  `tags` from the pointer row unchanged (a merge updates them; a `rid:` tag different from the
+  pointer's is refused). Only local `Lnn` ids go into `members`.
+
+### global
+
+Needs `rule_catalog` (the rule files; private config, not in the plugin). Without it the verdict
+is not available: judge the row `bleibt` and name it as `Lücke` in the report.
+
+1. **The rule exists** in a catalog file (a `propose` match or your own reading) but has no pointer
+   yet: a `principles` entry with anchor `<file>#<heading>` (or `<file>#^r-<slug>` when several
+   rules share a heading - add that block id at the rule's line first) and the candidate as member.
+2. **No rule yet:** a new rule needs evidence of >= 3 learnings from >= 2 stores (the Atlas hits of
+   other stores count; only local `Lnn` ids go into `members`, the cross-store evidence goes into
+   `plain` and the report line). Less evidence: `bleibt`, reported as `Lücke`.
+   - **Not critical:** you decide (F4). Write the rule into the fitting catalog file with Edit
+     (outside the store, no store writer), one rule at its own heading or with a `^r-<slug>` block
+     id, then the `principles` entry pointing at it. If the plan later drops that pointer, undo the
+     rule edit.
+   - **Critical** - security, rights/accounts/secrets, deleting or data loss, owner gates, the
+     constitution or rule precedence, identity, or the rule loosens a protection: write NO rule.
+     Put the proposed rule into the plan as a new learning
+     (`learnings`: `{"text", "summary", "importance", "tags", "derived_from": ["Lnn"], "rule_class": true}`)
+     and give the candidate `review_after` (run date + 6 months, reason names the proposal). The
+     rule-class learning waits for the existing rule gate (wrap-up Step 3f: second-model explanation,
+     then the owner's go); say so in the report line.
+- Every `principles` entry needs **`plain`**: the rule in plain German, no jargon, what changes
+  concretely, at most 600 characters. The applier refuses a pointer without `plain` (empty, not a
+  string or over 600 characters), an anchor that does not resolve, an unknown, qualified or pointer
+  member, a rule on the hold list (`held_rules` in `~/.claude/agentic-os.local.json`), a stale
+  `member_sha`, and a rule-class member that is not yet `released`.
+
+## Step 3: Write - chunks of 30, dry run, apply, stamp last, projections
+
+Every plan of one run carries the run's **start date** as `date` (the day Step 1 collected the candidates), also
+in a session after midnight or a resumed run: the stamp takes that date, so a learning written while the run was
+going is still in the next run's pair set.
+
+Work through the subjects in **chunks of exactly 30** (the last chunk may be smaller): search,
+judge (Step 2) and write one chunk before the next starts, so a compaction or an interrupted session
+loses at most one chunk. Each chunk gets its own plan file outside the store (for example in the
+system temp directory), a `--dry-run`, then the apply WITHOUT `pflegelauf_stamp`. The FIRST chunk apply
+of the run (also of a resumed run) runs with `--snapshot`: the `snapshot` path in its output is the
+`Rückholpunkt`. Note it in a file next to the chunk plans (outside the store, for example
+`pflegelauf-rueckholpunkt.txt` in the system temp directory), so a compaction or a later session still
+knows it; a resumed run appends its own path and reports BOTH. Every later chunk apply of the run runs
+WITHOUT `--snapshot` (it would prune the run's snapshot).
+A pair partner outside the chunk goes into the same plan as its subject.
+
+```json
+{
+  "date": "YYYY-MM-DD",
+  "learning_updates": [ { "id": "L12", "superseded_by": "L40", "reason": "..." },
+                        { "id": "L17", "review_after": "YYYY-MM-DD", "reason": "..." },
+                        { "id": "L21", "obsolete": true, "reason": "..." } ],
+  "principles":       [ { "summary": "...", "anchor": "<file>#<heading>", "members": ["L23"],
+                          "plain": "...", "tags": [] } ],
+  "learnings":        [ { "text": "...", "summary": "...", "importance": 4, "tags": [],
+                          "derived_from": ["L31"], "rule_class": true } ],
+  "pflegelauf_stamp": true
+}
+```
+
+Omit empty sections. `pflegelauf_stamp: true` goes ONLY into the final plan, written after every
+pair-set row and every candidate of the run is done (the last chunk's plan, or a plan of its own
+with nothing but `date` and the stamp when nothing is left to write). Never stamp a partial run:
+the stamp resets the trigger and moves the pair-set start, so a stamp after an interrupted run
+would hide every row not yet judged. A run that stops early writes no stamp; the next session
+resumes (Step 1). Never put `principle_retire` into these plans.
+
+```bash
+# first chunk of the run (also of a resumed run) - its output's `snapshot` is the Rückholpunkt:
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <first-chunk-plan.json> --dry-run
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <first-chunk-plan.json> --snapshot
+# every later chunk:
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <chunk-plan.json> --dry-run
+python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <chunk-plan.json>
+# once at the end, after the final plan (the one with the stamp):
+python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" .agent-memory --project-root .
+python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_projection.py" .agent-memory --agents-md AGENTS.md
+```
+
+- Dry run exit 2 (`plan rejected: …`): the error names the entry. Change that verdict (usually to
+  `bleibt`), fix the plan, dry-run again. Never write a store file by hand around a refusal.
+- Apply only after a clean dry run. Report from the tallies (summed over the chunks), not by hand:
+  `learning_updates` = `{superseded, cleared, review_after, obsolete}`, `learning_updates_unchanged`,
+  `pflegelauf_stamp` = `{date, id_keys}`, `snapshot` (first chunk only: the Rückholpunkt), `principles_added` /
+  `principles_updated` / `principle_ids`, and `learning_ids` for a critical rule proposal.
+  `learnings_skipped_duplicate` > 0 means a proposal read as a duplicate of a live row and was not
+  written: write the rule's wording, not the candidate's text, and report it as `Lücke` if it stays.
+- Both projections run once, after the final plan: MEMORY.md (Claude) and AGENTS.md (Codex) show
+  the pointers first. The AGENTS.md block is a projection, never edited by hand.
+- **Way back:** a wrong `superseded_by` (also a wrong `gegenstandslos`) → `learning_updates`
+  `{"id", "superseded_by": null, "reason"}`;
+  a wrong `review_after` → `learning_updates` with the date before (each `update_log` entry of the
+  run records `field`, `old` and `new`; a row that had no `review_after` before (`old: null`) cannot be set
+  back to none - give it today's date, so the next run shows it again, or use the snapshot); a wrong pointer → plan section `principle_retire`
+  (`{"ids": [...]}` or `{"tag": "condense:<date>"}`, plus `reason`) in its own plan; then both
+  projections again. The whole run goes back to the snapshot of its first chunk apply (the
+  `Rückholpunkt`) while it exists; otherwise through the `update_log` entries of the run (`old`/`new`).
+
+## Step 4: JSON repair (the only owner step)
+
+For `context/decisions.json`, `context/open-tasks.json`, `learnings/learnings.json`,
+`working/current-session.json`, `working/user-candidates.json`, `identity/user-changelog.json`:
+attempt to parse as `utf-8-sig` (a UTF-8 BOM is not corruption). The writers refuse to touch an
+unreadable file (exit 2, file unchanged), so this step is the ONLY repair path - show the owner the
+parse error first (it names line and column). **Repair in place** with the owner's OK: a truncated
+tail, a stray comma or a wrong top-level shape is fixed in the file itself, so every row and id
+survives. Take the snapshot of the Preconditions first; it skips `working/` and `identity/`, so
+for a file there keep a byte copy `{file}.pre-repair-{YYYYMMDDHHMMSS}.bak` before the edit. Only if
+the owner confirms the content is unrecoverable: keep it as `{file}.corrupt-{YYYYMMDDHHMMSS}.bak`,
+start the file with its default (`[]`, or `{}` for `current-session.json`) and say in the report
+that ids held only by the `.bak` can be issued again. Count repairs for the report.
 
 The central profile (P2) is checked too: `python "${CLAUDE_PLUGIN_ROOT}/scripts/identity_store.py" check`
 (read-only, JSON `{active, store, problems}`). With `active: true`, `profile-candidates.json` and
 `profile-changelog.json` get the same parse-and-repair treatment as above (it is ONE profile for all
 projects: repair only with the owner's OK and under no running wrap-up); an unreadable `profile.md` is
-shown to the owner, never rewritten here; a missing or stale `profile-briefing.txt` is only reported -
-the next wrap-up with identity data writes it again.
+shown to the owner, never rewritten here; a missing or stale `profile-briefing.txt` is only reported.
 
-## Step 3: Report what the thresholds flagged (only on exit 10)
-
-(no-archive) Every flagged store file is **reported, never cut**: name file, count and
-limit in the report. Nothing goes into an archive file, nothing is compressed — the store
-grows on purpose until the condensation path (rules + pointers) carries the load. The next
-wrap-up rewrites `session-summary.md` on its own (in the AI workspace it is the central
-handoff: never rewritten, capped at 5 blocks by wrap-up Step 7.6a).
-
-`learnings/learnings.md` is a projection of `learnings.json`. When it is flagged or its
-header is missing, re-render it:
-`python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --render-learnings`.
-
-Scratch files directly in `working/` matching `*.py` or `*.tmp` and older than 7 days may be
-deleted after the owner confirms the list. Never delete `*.bak` (evidence, e.g. a
-quarantined store file), `working/current-session.json`, `working/user-candidates.json` or
-any `dirty-*.json`.
-
-## Step 4: Report stale patterns and superseded decisions
-
-(no-archive) Report only — both stay in place:
-- `patterns/patterns.json`: list entries with `last_seen` older than 60 days or
-  `confidence < 0.3`, with their `promotion_status` and whether a learning references them.
-  `last_seen` is fed by errors.json alone, so "stale" is a hint, not a verdict;
-  ready patterns, skill candidates and referenced patterns are explicitly no candidates.
-- `context/decisions.json`: list `status: "superseded"` entries; they are history and stay.
-  Every reader already filters a superseded decision.
-
-## Step 5: Consistency
-
-1. `.agent-memory/open-tasks.json` at the ROOT must not exist (canonical:
-   `context/open-tasks.json`). If both exist: merge into `context/`, delete the root copy.
-2. `learnings/learnings.md` header must contain "Auto-generated from learnings.json";
-   otherwise regenerate it with the Step 3 `--render-learnings` command (never by hand —
-   the layout is owned by `apply_wrapup.py`).
-3. **soul.md anti-bloat:** if `identity/soul.md` exceeds **80 lines**, warn
-   "soul.md is {n} lines (cap 80) — condense; an overlong identity file dilutes its
-   effect". Never edit soul.md here (user-owned).
-4. `review-sweep.md` counts > 0: list them and ask the owner per item — keep / supersede /
-   retire. There is no write path for learnings yet (planned: a `learning_updates` applier);
-   until then record the owner's answers in the report and change nothing by hand. A
-   superseded **decision** goes through the `decisions` plan section of `apply_wrapup.py`.
-
-## Step 5b: Restore archived entries (restore, owner gate per store)
-
-Only when Step 1's restore plan has candidates or `pattern_ids`. Earlier versions moved
-entries into `*-archive-*` files the Atlas never reads (D-021 reverses that). The writers
-own every rule — this step only shows the plan and asks.
-
-1. Show the owner the report from `working/restore-plan.json`, compact: candidates;
-   `near_duplicate` (with the live twin); `id_collision`; `dangling_superseded`; `invalid`;
-   `codex_excluded`; and the patterns `protected` (with reasons) and `report_only`. Rows the
-   owner deselects → re-run `restore_plan.py --skip-ids <ids> --out …`. A dangling
-   `superseded_by` stays held back until the owner decides (clear the field or
-   `obsolete:legacy-<id>`).
-2. Ask ONE question per store: `Rückholung {n} Learnings + {m} Patterns übernehmen? [j/n]`.
-   Anything but `j` → stop, nothing changes.
-3. On `j` — dry-run first, then apply; both take the store lock, the apply takes a snapshot:
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan .agent-memory/working/restore-plan.json --dry-run
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan .agent-memory/working/restore-plan.json
-python "${CLAUDE_PLUGIN_ROOT}/scripts/extract_patterns.py" .agent-memory --restore-archive --ids "<pattern_ids, comma-separated>"
-python "${CLAUDE_PLUGIN_ROOT}/scripts/review_sweep.py" .agent-memory --charges
-```
-
-4. Verify, do not trust the exit code: `tally.restored` equals the dry-run's number,
-   `tally.restore_dropped` is listed in the report, the charge `restored:<store>` holds the
-   restored rows that are not superseded, and the archive files are byte-identical (they are
-   never written). A second apply must report `restored: 0`.
-
-No artificial `review_after` is set: restored rows reach review through the
-`restored:<store>` charge.
-
-## Step 5c: Condense — assign learnings to rules (verdichten, owner gate)
-
-(condense) D-021 (3)+(4): condensing means ASSIGNING learnings to a rule that already
-exists (CLAUDE.md, DCO `regeln/gemeinsam.md`, a convention, a wiki concept page or the
-rolling synthesis); the rule's wording stays there, the store gets a pointer that the
-MEMORY.md projection shows FIRST. Members stay unchanged — they keep the concrete detail.
-
-1. `python "${CLAUDE_PLUGIN_ROOT}/scripts/learnings_lifecycle.py" report .agent-memory` → eligible /
-   anchored / pointers into the report.
-2. `python "${CLAUDE_PLUGIN_ROOT}/scripts/learnings_lifecycle.py" propose .agent-memory` (catalog
-   from `--catalog` or `rule_catalog` in `~/.claude/agentic-os.local.json`). The scores are
-   hints, not verdicts: classify each proposal yourself as **rule** (an existing rule
-   covers it), **gap** (no rule yet) or **fact** (project-specific, stays a plain learning).
-3. Show the owner at most 10 pointer cards per round: summary (the rule, <= 150 chars), **`plain`**
-   (the same rule in plain German, no jargon, what changes concretely for his sessions, <= 600 chars - the
-   text he actually reads and decides on),
-   anchor (`<file>#<heading>` or `#^r-<slug>`), members. Several rules under one heading
-   need an Obsidian block id at the rule's line — that is a wiki edit and part of the card.
-   A **new** rule needs >= 3 members from >= 2 stores (evidence, counted on the card) and its own `j`. Only local
-   `Lnn` ids of this store are written into `members`: a qualified id (`dome-dynamics/L31`, `native:...`) is
-   refused by the applier, because the rule-class gate cannot be checked across repos (DCO #10062); the
-   cross-store evidence goes into the card text.
-   A rule derived from a home-level store gets the note that the rule becomes visible to every machine reading the shared wiki.
-4. One `[j/n]` per card. Only on `j`: make the wiki edit (if any), then write the pointers:
-
-```bash
-python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --snapshot --plan <plan.json>   # {"principles": [{summary, anchor, members, plain, tags}]}
-python "${CLAUDE_PLUGIN_ROOT}/scripts/memory_index_projection.py" .agent-memory --project-root .
-python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_projection.py" .agent-memory --agents-md AGENTS.md
-```
-
-   Both projections run: MEMORY.md (Claude) and AGENTS.md (Codex) show the pointers first, each under its own
-   cap by relevance (live members, then the newest member); a pointer the cap leaves out keeps its members
-   visible. `--snapshot` takes a byte copy of the store under the lock before the first write.
-   The applier refuses a card without `plain` (empty, not a string or over 600 characters: the whole plan, before
-   the first byte), an anchor that does not resolve, an unknown local member, a qualified member and a
-   pointer as member; it stores `plain` on the pointer row; the same anchor again merges members instead of adding a row
-   (only within one rule: a `rid:<id>` tag that differs from the pointer's is refused; sent unchanged, nothing is
-   written). It also refuses a rule on the hold list (`held_rules` in `~/.claude/agentic-os.local.json`), a card whose
-   `member_sha` no longer matches a member's text, and a member that is a rule-class learning not yet `released`
-   (wrap-up Step 3f: second-model explanation, then the owner): the owner's `j` on a pointer card does not
-   replace that gate (DCO #10057). Way back: plan section `principle_retire` (`{"ids": [...]}` or
-   `{"tag": "condense:<date>"}`, plus `reason`), then both projections again.
-5. Gaps and facts go into the report, nothing is written for them.
-
-## Step 6: Report
+## Step 5: Report (German)
 
 ```
-Memory Maintenance:
-  JSON Integrity: {n}/{total} valid ({n_repaired} repaired); central profile: {inactive | ok | n problems}
-  Thresholds: {ok | n exceeded → reported, nothing moved: <file count/limit, …>}
-  Dirty markers GC (preview): {n_would_remove} would be removed, 0 removed
-  Patterns (report): {n_stale} stale, {n_low_conf} low-confidence, 0 moved
-  Superseded decisions (report): {n}, 0 moved
-  Native stores: {verbatim **Summary:** line | native audit failed: ...}
-  Review sweep: {verbatim one-liner}
-  Review charges: {one line per charge}
-  Restore: {n} learnings + {m} patterns restorable | restored {n}+{m} (owner j) | declined | none
-  Condense: {anchored}/{eligible} anchored, {n} pointers; this round {n_j} accepted, {n_gap} gaps, {n_fact} facts
-  Consistency: {n_issues} issues found, {n_fixed} fixed
+Pflegelauf {date}:
+  Kandidaten: {n} (fällig {a}, nicht verankert {b}, Atlas-Paare {c})
+  {Atlas nicht erreichbar, keine Paarsuche | Scope nicht gefunden, Paarsuche übersprungen — only when it applied}
+  L12 → doppelt — <Begründung>
+  L21 → gegenstandslos — <Begründung: was es nicht mehr gibt>
+  L17 → bleibt — <Begründung> (nächste Prüfung {review_after})
+  L31 → global (kritisch) — <Begründung>; Regelvorschlag L{new} wartet im Regel-Gate (wrap-up Step 3f)
+  …
+  Urteile: {n} (doppelt {a}, überholt {b}, gegenstandslos {g}, verwandt {c}, global {d}, bleibt {e}); geschrieben: {superseded} ersetzt, {obsolete} gegenstandslos, {review_after} Prüftermine, {p} Zeiger; Rückholpunkt {run_snapshot}
+  Lücken: {ids with reason | keine}
+  Verankerung: {anchored}/{eligible}, {pointers} Zeiger, verlorene Anker: {ids | keine}
+  JSON: {n}/{total} lesbar ({n_repaired} repariert); zentrales Profil: {inaktiv | ok | n Probleme}
 ```
 
-Stop after the report. Do NOT suggest a commit — the store is not versioned by the target
-project; the pre-run snapshot in Preconditions is the rollback point.
+One line per verdict, `Lnn → <urteil> — <Begründung>`, in plain German. Stop after the report.
+Before printing `Rückholpunkt {run_snapshot}`, check the path exists
+(`test -d "<path>" && echo vorhanden`); if it does not, print instead
+`Rückholpunkt entfernt — Lauf nur über update_log (old/new) rückholbar`. A resumed run names both
+paths (`Rückholpunkt {first_run_snapshot}, {resumed_snapshot}`), each checked the same way.
+Do NOT suggest a commit: the snapshot of the first chunk apply (`Rückholpunkt`) is the rollback point.
 
 ## What NOT to Do
 
+- Do NOT delete, archive, move or compress a learning or any other store entry (D-021)
+- Do NOT change the `text` of a learning (text corrections belong to wrap-up `corrections`)
+- Do NOT decide by age, count or importance - only by content
+- Do NOT ask the owner per item (no review cards, no yes/no questions); only the JSON repair needs him
+- Do NOT write a critical rule yourself - it goes through `rule_class` and the rule gate
+- Do NOT write store files with Write/Edit - every store change goes through `apply_wrapup.py`
 - Do NOT modify `identity/soul.md` or `identity/user.md`
-- Do NOT prune patterns with `skill_candidate: true`
-- Do NOT move, archive, prune or compress any store entry (D-021) — report it
-- Do NOT delete archive files (they are history)
-- Do NOT delete `working/dirty-*.json` by hand — `gc_dirty_markers.py` owns the safety rule
-- Do NOT write `patterns.md` by hand — `extract_patterns.py --refresh` owns it
-- Do NOT combine with wrap-up into one call — wrap-up only recommends this command
+- Do NOT combine with wrap-up into one call - wrap-up only recommends this command

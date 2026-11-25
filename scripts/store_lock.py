@@ -2,8 +2,7 @@
 """store_lock.py — one lock per memory store for every mutating script (5.3.0).
 
 WHY: the writers load a store file, change it in memory and write it back. Two
-of them at once (a wrap-up and the nightly run, or apply_wrapup and
-extract_patterns) lose one side's rows - a lost update, no error anywhere
+of them at once (a wrap-up and the nightly run, or two appliers) lose one side's rows - a lost update, no error anywhere
 (plan phase 1, red-team finding #7). The lock covers the whole store, not
 single files, because one run reads several files and decides on all of them.
 

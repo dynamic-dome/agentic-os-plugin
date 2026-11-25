@@ -1,8 +1,8 @@
 {
   "name": "agentic-os",
-  "version": "5.14.1",
+  "version": "6.0.0",
   "author": {"name": "Dominic Meiser"},
-  "description": "Persistent per-project agent memory for Claude Code (.agent-memory/): session-bootstrap + wrap-up as the supported two-call bracket, deterministic scripts for every store write, five judgment skills, two script-core commands and two command hooks.",
+  "description": "Persistent per-project agent memory for Claude Code (.agent-memory/): session-bootstrap + wrap-up as the supported two-call bracket, deterministic scripts for every store write, a Pflegelauf that keeps the learnings lean, 4 skills, 4 commands and two command hooks.",
   "userConfig": {
     "auto_init_non_git": {
       "type": "boolean",

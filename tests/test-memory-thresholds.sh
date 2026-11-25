@@ -20,6 +20,11 @@ learnings_json() { # $1 = number of entries
   python -c "import json,sys; print(json.dumps([{'id': f'L{i}'} for i in range(1, int(sys.argv[1]) + 1)]))" "$1"
 }
 
+# 6.0.0: the Pflegelauf rule counts learnings against working/pflegelauf.json. The older cases below test
+# other thresholds, so they start from a stamp whose id_keys is far above any count here: no PFLEGELAUF line.
+stamp() { printf '{"date": "2026-11-01", "id_keys": %s}\n' "$1" > "$MEM/working/pflegelauf.json"; }
+stamp 99999
+
 learnings_json 1000 > "$MEM/learnings/learnings.json"
 out=$(bash "$SCRIPT" "$MEM"); rc=$?
 [ "$rc" -eq 0 ] && pass "1000 learnings are within the ceiling (exit 0)" || fail "1000 learnings -> exit $rc: $out"
@@ -47,7 +52,9 @@ python -c "print('\n'.join('x' for _ in range(41)))" > "$MEM/session-summary.md"
 for i in $(seq 1 11); do echo '{}' > "$MEM/working/dirty-s$i.json"; done
 out=$(bash "$SCRIPT" "$MEM"); rc=$?
 n=$(echo "$out" | grep -c '^THRESHOLD:')
-[ "$rc" -eq 10 ] && [ "$n" -ge 6 ] && pass "all six store thresholds fire ($n lines)" || fail "expected >= 6 lines, got $n (rc=$rc): $out"
+[ "$rc" -eq 10 ] && [ "$n" -ge 5 ] && pass "all five store thresholds fire ($n lines)" || fail "expected >= 5 lines, got $n (rc=$rc): $out"
+# 6.0.0: errors.json is frozen data - nothing writes it, so no threshold watches it (51 entries above stay silent)
+echo "$out" | grep -q 'errors.json' && fail "errors.json still has a threshold line: $(echo "$out" | grep errors.json)"   || pass "errors.json has no threshold rule any more (6.0.0)"
 if echo "$out" | grep -qiE '\b(archiv(e|ing)?|prune|compact|delete|move (the|old|rest))\b'; then
   fail "a THRESHOLD line still tells someone to archive/prune/move (D-021): $(echo "$out" | grep -iE '\b(archiv(e|ing)?|prune|compact|delete|move (the|old|rest))\b')"
 else
@@ -63,8 +70,44 @@ if echo "$out" | grep -q -- '--apply'; then
 else
   pass "the dirty-marker line recommends the preview, not --apply"
 fi
-echo "$out" | grep -q 'agentic-os:maintain' && pass "lines point to /agentic-os:maintain (report)" \
-  || fail "no line points to /agentic-os:maintain: $out"
+# 6.0.0: /agentic-os:maintain is the Pflegelauf over learnings; it does nothing about these counts, so a
+# THRESHOLD line must not send its reader there (only the PFLEGELAUF line does, tested below).
+if echo "$out" | grep '^THRESHOLD:' | grep -q 'agentic-os:maintain'; then
+  fail "a THRESHOLD line points to /agentic-os:maintain, which does not act on it: $(echo "$out" | grep '^THRESHOLD:' | grep 'agentic-os:maintain' | head -1)"
+else
+  pass "no THRESHOLD line points to /agentic-os:maintain (6.0.0)"
+fi
+
+# --- 6.0.0: Pflegelauf trigger (new learnings since the last maintenance run) ---
+rm -rf "$MEM/working" "$MEM/iterations/iteration-log.md" "$MEM/session-summary.md" "$MEM/learnings/learnings.md"
+mkdir -p "$MEM/working"
+pfl() { bash "$SCRIPT" "$MEM" | grep '^PFLEGELAUF:'; }
+
+learnings_json 31 > "$MEM/learnings/learnings.json"
+out=$(bash "$SCRIPT" "$MEM"); rc=$?
+echo "$out" | grep -qF 'PFLEGELAUF: 31 Learnings, noch kein Pflegelauf → /agentic-os:maintain'   && pass "no stamp, 31 learnings: 'noch kein Pflegelauf' line" || fail "no stamp, 31: $out"
+[ "$rc" -eq 10 ] && pass "the Pflegelauf line counts as exceeded (exit 10)" || fail "no stamp, 31 -> exit $rc"
+
+learnings_json 29 > "$MEM/learnings/learnings.json"
+[ -z "$(pfl)" ] && pass "no stamp, 29 learnings: below PFLEGE_NEU, no line" || fail "no stamp, 29: $(pfl)"
+
+stamp 10; learnings_json 39 > "$MEM/learnings/learnings.json"
+out=$(bash "$SCRIPT" "$MEM"); rc=$?
+[ -z "$(pfl)" ] && [ "$rc" -eq 0 ] && pass "stamp id_keys 10, 39 learnings: 29 new, no line (exit 0)" || fail "stamp 10/39: rc=$rc $out"
+
+learnings_json 40 > "$MEM/learnings/learnings.json"
+[ "$(pfl)" = "PFLEGELAUF: 30 neue Learnings seit 2026-11-01 → /agentic-os:maintain" ]   && pass "stamp id_keys 10, 40 learnings: '30 neue Learnings seit <date>'" || fail "stamp 10/40: $(pfl)"
+
+stamp 50
+[ -z "$(pfl)" ] && pass "id_keys larger than today (learnings removed): no line" || fail "stamp 50/40: $(pfl)"
+
+echo 'not json at all' > "$MEM/working/pflegelauf.json"
+out=$(bash "$SCRIPT" "$MEM"); rc=$?
+[ -z "$(pfl)" ] && [ "$rc" -ne 1 ] && pass "broken stamp: no PFLEGELAUF line, exit not 1" || fail "broken stamp: rc=$rc $out"
+
+printf '{"date": "2026-11-01"}
+' > "$MEM/working/pflegelauf.json"
+[ -z "$(pfl)" ] && pass "stamp without id_keys: no line" || fail "stamp without id_keys: $(pfl)"
 
 echo "=== $ERRORS failure(s) ==="
 [ "$ERRORS" -eq 0 ]

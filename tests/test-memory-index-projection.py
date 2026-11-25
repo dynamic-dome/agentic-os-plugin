@@ -27,7 +27,8 @@ def run(args, cwd):
                           encoding="utf-8", errors="replace", cwd=cwd)
 
 
-def learning(lid, date, text, importance=3, bridge="approved", kind=None, agent=None, superseded=None):
+# 6.0.0: the MEMORY.md block lists kind "feedback" only, so fixtures default to it (kind=None -> no kind field)
+def learning(lid, date, text, importance=3, bridge="approved", kind="feedback", agent=None, superseded=None):
     e = {"id": lid, "date": date, "text": text, "importance": importance, "tags": [],
          "layer": "short-term", "superseded_by": superseded, "last_relevant": date, "bridge_status": bridge}
     if kind:
@@ -68,8 +69,8 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         rows = [learning("L1", "2026-08-01", "Older learning", importance=5),
                 learning("L2", "2026-08-20", "Newer learning"),
-                learning("L3", "2026-07-01", "A feedback rule", kind="feedback"),
-                learning("L4", "2026-08-10", "Codex tip", agent="codex", kind="learning"),
+                learning("L3", "2026-07-01", "A feedback rule"),
+                learning("L4", "2026-08-10", "Codex tip", agent="codex"),
                 learning("L5", "2026-08-30", "Candidate only", bridge="candidate"),
                 learning("L6", "2026-08-30", "Superseded", superseded="L2")]
         mem, md = setup(tmp, rows, memory_body=hand)
@@ -79,8 +80,8 @@ def main():
         check("handwritten intact (after the block)", txt.endswith(hand), txt[-120:])
         body = txt[txt.index(BEGIN):txt.index(END)]
         lines = [l for l in body.split("\n") if l.startswith("- [")]
-        check("importance first, then feedback, then date desc (E14)",
-              [l[3:5] for l in lines] == ["L1", "L3", "L2", "L4"], str(lines))
+        check("importance first, then date desc (E14)",
+              [l[3:5] for l in lines] == ["L1", "L2", "L4", "L3"], str(lines))
         check("codex marker in line", "(2026-08-10, codex) Codex tip" in txt, txt)
         check("candidate + superseded excluded", "L5" not in txt and "L6" not in txt)
         check("heading present", "## Bridge: Learnings + Feedback (learnings.json, kuratiert)" in txt)
@@ -114,6 +115,29 @@ def main():
             f.write(hand_only)
         p = run([mem, "--memory-md", md], cwd=tmp)
         check("0 approved + no block -> untouched", read(md) == hand_only and "nothing to do" in p.stdout, p.stdout)
+        check("nothing listed: the status line speaks of pointers and feedback (6.0.0)",
+              "no pointers and no feedback, nothing to do" in p.stdout, p.stdout)
+
+    # 3b. 6.0.0: a store with rule pointers and no feedback renders the pointers only, no entry lines
+    with tempfile.TemporaryDirectory() as tmp:
+        rules = os.path.join(tmp, "regeln.md")
+        with open(rules, "w", encoding="utf-8") as f:
+            f.write("# Regeln\n")
+        rows = [learning("M1", "2026-09-01", "Mitglied eins", kind=None),
+                learning("M2", "2026-09-02", "Mitglied zwei", kind="learning"),
+                learning("E1", "2026-09-03", "Plain approved learning", kind="learning"),
+                learning("E2", "2026-09-04", "Approved row without kind", kind=None),
+                {"id": "P1", "date": "2026-10-01", "kind": "principle", "text": "Regel eins", "summary": "Regel eins",
+                 "anchor": rules, "importance": 4, "tags": [], "superseded_by": None,
+                 "derived_from": ["M1", "M2"], "bridge_status": "approved"}]
+        mem, md = setup(tmp, rows, memory_body="")
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        txt = read(md)
+        body = txt[txt.index(BEGIN):txt.index(END)] if BEGIN in txt and END in txt else ""
+        lines = [l for l in body.split("\n") if l.startswith("- [")]
+        check("pointers only: exit 0, exactly the pointer line, no entry lines",
+              p.returncode == 0 and len(lines) == 1 and lines[0].startswith("- [P1]") and "★" in lines[0], str(lines))
+        check("pointers only: status line counts pointers and feedback", "1 pointers, 0 feedback" in p.stdout, p.stdout)
 
     # 4. --project-root derives the native path
     with tempfile.TemporaryDirectory() as tmp:
@@ -378,6 +402,43 @@ def main():
             with open(md, "rb") as f:
                 check(f"unterminated block ({label}): file untouched", f.read() == raw)
             check(f"unterminated block ({label}): reason named", "unterminated" in r.stdout, r.stdout + r.stderr)
+
+    # 13. 6.0.0: the MEMORY.md block carries rule pointers and kind "feedback" only; plain
+    #     learnings (and entries without a kind) stay out - the prelude / atlas serve them.
+    with tempfile.TemporaryDirectory() as tmp:
+        rules = os.path.join(tmp, "regeln.md")
+        with open(rules, "w", encoding="utf-8") as f:
+            f.write("# Regeln\n")
+        rows = [learning("F1", "2026-08-01", "Feedback eins"),
+                learning("F2", "2026-08-02", "Feedback zwei"),
+                learning("N1", "2026-08-03", "Learning eins", kind="learning"),
+                learning("N2", "2026-08-04", "Learning zwei", kind="learning"),
+                learning("N3", "2026-08-05", "Ohne kind-Feld", kind=None),
+                {"id": "P1", "date": "2026-10-01", "kind": "principle", "text": "Regel", "summary": "Regel",
+                 "anchor": rules, "importance": 3, "tags": [], "superseded_by": None,
+                 "derived_from": [], "bridge_status": "approved"}]
+        mem, md = setup(tmp, rows, memory_body=hand)
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        txt = read(md)
+        body = txt[txt.index(BEGIN):txt.index(END)]
+        ids = [l.split("]")[0][3:] for l in body.split("\n") if l.startswith("- [")]
+        check("nur feedback im block: 1 pointer + 2 feedback, no learning line",
+              sorted(ids) == ["F1", "F2", "P1"] and ids[0] == "P1", str(ids))
+        check("nur feedback im block: hand lines intact", txt.endswith(hand))
+
+    # 13b. nothing left to show (plain learnings only): the old block goes, the rest stays byte-identical
+    with tempfile.TemporaryDirectory() as tmp:
+        rows = [learning("N1", "2026-08-03", "Learning eins", kind="learning"),
+                learning("N2", "2026-08-04", "Ohne kind-Feld", kind=None)]
+        mem, md = setup(tmp, rows, memory_body="")
+        old_block = BEGIN + " x -->\n## alt\n- [N1] (2026-08-03) Learning eins\n" + END + "\n"
+        with open(md, "w", encoding="utf-8", newline="") as f:
+            f.write(old_block + "\n" + hand)
+        p = run([mem, "--memory-md", md], cwd=tmp)
+        check("leerer block: exit 0", p.returncode == 0, p.stdout + p.stderr)
+        check("leerer block: stale learning block removed, hand lines byte-identical",
+              read(md) == hand, repr(read(md)))
+        check("leerer block: no marker left", BEGIN not in read(md) and END not in read(md))
 
     n = len(FAILURES)
     print(f"=== {n} failure{'s' if n != 1 else ''} ===")

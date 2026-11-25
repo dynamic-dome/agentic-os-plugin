@@ -34,9 +34,8 @@ Marking `[STALE? …]` is a read-time annotation. Decaying/writing `confidence` 
 `last_relevant` is /agentic-os:maintain's job; bootstrap is strictly read-only, so it only
 marks, never mutates.
 
-### Step 6.5 — why the identity gates exist
-`wrap-up` grows identity via queues (`working/user-candidates.json`,
-`identity/soul-candidates.md`) but never writes `soul.md` autonomously (Stufe B). The
-soul.md merge on explicit `j` is the ONLY exception to bootstrap's read-only rule:
-user-triggered, never autonomous, touches only soul.md + changelog + queue. (This guard
-rail is also restated under "What NOT to Do".)
+### Why the bootstrap has no identity step any more
+The soul.md gate was retired in 5.11.0 (the agent's character lives in the global rules), the
+user-candidate gate in 6.0.0 together with the identity harvest: it served neither reachable
+learnings nor re-entry. The profile is still read (Step 2, central profile), the queues stay as
+files, and the bootstrap is read-only without exception.

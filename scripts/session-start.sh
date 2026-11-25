@@ -288,23 +288,19 @@ if [ -d "$MEMORY_DIR" ]; then
     [ -n "$STACK" ] && context="$context\nStack: $STACK"
   fi
 
-  # Statistics. `grep -o | wc -l` counts MATCHES (grep -c counts lines — a one-line
-  # JSON array reported 1 regardless of entries). Iteration headers are counted in
-  # the on-disk format `## {date} — {type}: {title}` (4.18.0) AND the legacy
-  # `## Iteration #n`; the old `^## Iteration`-only grep reported 0 on every real store.
-  ERR_COUNT=$(grep -o '"id"' "$MEMORY_DIR/iterations/errors.json" 2>/dev/null | wc -l | tr -d '[:space:]')
+  # Statistics. Iteration headers are counted in the on-disk format
+  # `## {date} — {type}: {title}` (4.18.0) AND the legacy `## Iteration #n`; the old
+  # `^## Iteration`-only grep reported 0 on every real store. errors.json is frozen
+  # data since 6.0.0 (nothing writes it), so it is not counted any more.
   ITER_COUNT=$(grep -E -c '^## ([0-9]{4}-[0-9]{2}-[0-9]{2}|Iteration)' "$MEMORY_DIR/iterations/iteration-log.md" 2>/dev/null | tr -d '[:space:]')
-  PAT_COUNT=$(grep -o '"id"' "$MEMORY_DIR/patterns/patterns.json" 2>/dev/null | wc -l | tr -d '[:space:]')
-  ERR_COUNT="${ERR_COUNT:-0}"; ITER_COUNT="${ITER_COUNT:-0}"; PAT_COUNT="${PAT_COUNT:-0}"
-  context="$context | Stats: ${ITER_COUNT} iter, ${ERR_COUNT} errors, ${PAT_COUNT} patterns"
+  ITER_COUNT="${ITER_COUNT:-0}"
+  context="$context | Stats: ${ITER_COUNT} iter"
 
   # Grep does not see a git-ignored store, only an explicit path does: a fact that stood only in the store
   # was found in 5 of 10 runs (eval 2026-11-07). Said only when true, and outside the compact status block.
   if git -C "$(dirname "$MEMORY_DIR")" check-ignore -q .agent-memory 2>/dev/null; then
     context="$context\nMemory search: .agent-memory/ is git-ignored, so Grep finds it only with an explicit path. Before you debug an error or change a design, search it for earlier attempts and decisions: context/decisions.json, learnings/learnings.json, iterations/iteration-log.md."
   fi
-
-  [ "${ERR_COUNT:-0}" -gt 15 ] 2>/dev/null && context="$context\nNote: Many errors logged — consider running pattern-extractor."
 
   # Env-Vars setzen
   if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
@@ -325,6 +321,21 @@ fi
 # session-summary.md, whose "Next Steps" is only a rendering of that file.
 # Fail-soft: no python or unreadable JSON -> fall back to the summary section.
 BRIEFING=""
+# 6.0.0: the threshold helper (THRESHOLD: and PFLEGELAUF: lines, collected further down) starts NOW, in the
+# background, so its ~0.5 s of process spawns on Windows overlap with the python steps below. Read only.
+THRESH_TMP=""
+THRESH_PID=""
+if [ -d "$MEMORY_DIR" ] && [ -f "$SELF_DIR/memory-thresholds.sh" ]; then
+  THRESH_TMP=$(mktemp 2>/dev/null) || THRESH_TMP=""
+  if [ -n "$THRESH_TMP" ]; then
+    if command -v timeout > /dev/null 2>&1; then
+      timeout 8 bash "$SELF_DIR/memory-thresholds.sh" "$MEMORY_DIR" > "$THRESH_TMP" 2>/dev/null < /dev/null &
+    else
+      bash "$SELF_DIR/memory-thresholds.sh" "$MEMORY_DIR" > "$THRESH_TMP" 2>/dev/null < /dev/null &
+    fi
+    THRESH_PID=$!
+  fi
+fi
 # On Windows python comes first: python3 is often only a launcher of the Python manager, which
 # downloads and registers a runtime when LOCALAPPDATA is redirected (plugin eval). Elsewhere
 # python3 stays first, python can be missing or Python 2.
@@ -474,6 +485,20 @@ if [ -n "$PY" ] && [ -f "$SELF_DIR/reentry_check.py" ] && [ -f "$MEMORY_DIR/sess
   REENTRY_LINE=$("$PY" "$SELF_DIR/reentry_check.py" "$MEMORY_DIR" "$PROJECT_DIR" 2>/dev/null | tr -d '\r' | head -1)
   [ -n "$REENTRY_LINE" ] && BRIEF_LINE="${BRIEF_LINE:+$BRIEF_LINE\n}$REENTRY_LINE"
 fi
+# 6.0.0: scaling signals (THRESHOLD: lines) and the Pflegelauf trigger (PFLEGELAUF: line) live in the start
+# briefing only; wrap-up no longer prints them. Only for the store being briefed (started above). Each output line
+# of memory-thresholds.sh becomes its own briefing line. Fail-soft: no script, a failing or hanging helper
+# (its exit code is ignored, 10 = exceeded is the normal case) never breaks the hook.
+if [ -n "$THRESH_PID" ]; then
+  wait "$THRESH_PID" 2>/dev/null
+  while IFS= read -r THRESH_LINE; do
+    THRESH_LINE="$(printf '%s' "$THRESH_LINE" | tr -d '\r')"
+    case "$THRESH_LINE" in
+      "THRESHOLD: "*|"PFLEGELAUF: "*) BRIEF_LINE="${BRIEF_LINE:+$BRIEF_LINE\n}$THRESH_LINE" ;;
+    esac
+  done < "$THRESH_TMP"
+fi
+[ -n "$THRESH_TMP" ] && rm -f "$THRESH_TMP"
 # Join the two optional lines with a \n separator only when BOTH are present,
 # so they never run together as "Newly initialized!Next steps...".
 OPT_LINES="$INIT_LINE"
@@ -484,7 +509,7 @@ elif [ -n "$BRIEF_LINE" ]; then
 fi
 HANDOFF_BLOCK=""
 [ -n "$HANDOFF_LINE" ] && HANDOFF_BLOCK="Central handoff: ${HANDOFF_LINE}\n"
-context="[AGENTIC OS SESSION BRIEFING] Begin your FIRST response with this compact block (adapt, do not dump files):\n---\n${AOS_STATE} | Branch: ${BRANCH:-?} | ${ITER_COUNT:-0} iterations, ${ERR_COUNT:-0} errors, ${PAT_COUNT:-0} patterns\n${OPT_LINES}\n---\nThen answer the user. Full briefing on request: /agentic-os:session-bootstrap. To end the session use the slash command /agentic-os:wrap-up (the slash path applies the skill's cheaper model class; invoking it via the Skill tool keeps the session model — measured 2.1.263).\n\n${HANDOFF_BLOCK}$context"
+context="[AGENTIC OS SESSION BRIEFING] Begin your FIRST response with this compact block (adapt, do not dump files):\n---\n${AOS_STATE} | Branch: ${BRANCH:-?} | ${ITER_COUNT:-0} iterations\n${OPT_LINES}\n---\nThen answer the user. Full briefing on request: /agentic-os:session-bootstrap. To end the session use the slash command /agentic-os:wrap-up (the slash path applies the skill's cheaper model class; invoking it via the Skill tool keeps the session model — measured 2.1.263).\n\n${HANDOFF_BLOCK}$context"
 
 # Output contract: hookSpecificOutput.additionalContext. A top-level
 # "systemMessage" is shown to the USER only — the model context never contains

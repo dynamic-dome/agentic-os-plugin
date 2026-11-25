@@ -10,7 +10,7 @@ Cache unter `.../agentic-os/{version}/` ab.
 
 | Bump | Wann | Beispiele |
 |---|---|---|
-| **MAJOR** | Breaking: Store-Format inkompatibel, Hook-Kontrakt geaendert (Fail-soft, Exit-Codes), Skill entfaellt/umbenannt | 3.x → 4.0 (Store-Restrukturierung) |
+| **MAJOR** | Breaking: Store-Format inkompatibel, Hook-Kontrakt geaendert (Fail-soft, Exit-Codes), Skill entfaellt/umbenannt | 3.x → 4.0 (Store-Restrukturierung); 5.x → 6.0 (Rueckbau: Skills und Commands entfallen, Plansektionen aendern sich) |
 | **MINOR** | Neue Faehigkeit: neuer Hook/Skill/Step, neue Store-Felder (abwaertskompatibel) | 4.3.0 Dirty-Tracker+Marker; 4.4.0 Learnings-Provenance |
 | **PATCH** | Fixes + Doku ohne neue Faehigkeit; kleine Feld-Ergaenzungen im Dienst eines Fixes | 4.4.1 Recovery-Falsch-Positiv (inkl. Pre-Run-Commit-Step) |
 

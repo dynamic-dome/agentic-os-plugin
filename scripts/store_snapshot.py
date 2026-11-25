@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """store_snapshot.py — byte copy of a memory store before a bulk mutation (5.3.0).
 
-Taken automatically by the restore paths (apply_wrapup `restore` section,
-extract_patterns --restore-archive) and on demand from the CLI. identity/ is
-never copied (personal data has no business in a backup folder), neither are
+Taken by `apply_wrapup.py --snapshot` (under the store lock, after the plan check) and on demand
+from the CLI (the Pflegelauf takes one with its first chunk apply only, so the retention below does
+not prune the run's rollback point). identity/ is never copied (personal data has no business in a backup folder), neither are
 working/ (session scratch) and metrics/.
 
 Location: $AGENTIC_OS_SNAPSHOT_DIR, default ~/.agentic-os/snapshots, one folder

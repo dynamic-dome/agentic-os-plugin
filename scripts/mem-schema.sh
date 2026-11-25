@@ -15,14 +15,13 @@
 # Where this file lives (resolved when sourced): scripts/soul-template.txt sits next to it
 MEM_SCHEMA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Directories to create (mkdir -p, in order)
+# Directories to create (mkdir -p, in order). 6.0.0: no patterns/ and no generated-skills/ any more (the
+# pattern mechanics are gone); existing stores keep theirs untouched.
 MEM_DIRS=(
   identity
   context
   iterations
-  patterns
   learnings
-  generated-skills
   working
 )
 
@@ -31,7 +30,6 @@ MEM_JSON_ARRAY=(
   context/decisions.json
   context/open-tasks.json
   iterations/errors.json
-  patterns/patterns.json
   learnings/learnings.json
   working/user-candidates.json
   identity/user-changelog.json
@@ -46,7 +44,6 @@ MEM_JSON_ARRAY=(
 MEM_INIT_FILES=(
   working/current-session.json
   iterations/iteration-log.md
-  patterns/patterns.md
   learnings/learnings.md
   identity/soul-candidates.md
   session-summary.md
@@ -79,13 +76,12 @@ create_memory_structure() {
 
   # Markdown stubs
   [ -f "$MEMORY_DIR/iterations/iteration-log.md" ] || printf '# Iteration Log\n\n*No entries yet.*\n' > "$MEMORY_DIR/iterations/iteration-log.md"
-  [ -f "$MEMORY_DIR/patterns/patterns.md" ]        || printf '# Pattern Catalog\n\n*No patterns detected yet.*\n' > "$MEMORY_DIR/patterns/patterns.md"
   # Byte-identical to apply_wrapup.py's render of an empty learnings.json (projection header).
   [ -f "$MEMORY_DIR/learnings/learnings.md" ]      || printf '# Learnings\n\n*Auto-generated from learnings.json — do not edit directly.*\n' > "$MEMORY_DIR/learnings/learnings.md"
 
-  # identity/soul-candidates.md — soul.md growth queue (Stufe B): wrap-up appends proposed
-  # identity signals here; session-bootstrap surfaces them for a [j/n] gate. NEVER auto-written
-  # into soul.md without explicit user confirmation (trust boundary: conversation-only).
+  # identity/soul-candidates.md — the stub of the retired soul.md growth queue (5.11.0). Kept for the
+  # completeness check of existing stores; the skills no longer propose into it (the applier still accepts an
+  # old caller's `soul_candidates`), and soul.md is never written.
   [ -f "$MEMORY_DIR/identity/soul-candidates.md" ] || printf '# Soul Candidates\n\n*Keine offenen Kandidaten.*\n' > "$MEMORY_DIR/identity/soul-candidates.md"
 
   # session-summary.md

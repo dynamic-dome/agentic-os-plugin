@@ -15,9 +15,9 @@ and the marker.
 
 Headless path: consolidates un-wrapped sessions of ONE project without a model: iterations from git
 log + uncommitted dirty files, session summary, central handoff + status board, wiki session note,
-pattern update, projections, then the consolidation marker LAST (apply_wrapup.apply_consolidation).
-Never headless: learnings, decisions, identity (apply_user_candidates would promote the queue to
-user.md), soul.md, open-task edits.
+projections, then the consolidation marker LAST (apply_wrapup.apply_consolidation).
+Never headless: learnings, decisions, soul.md, open-task edits. (The identity harvest is gone since 6.0.0;
+old `identity` / `user_candidates` sections of a judge plan are ignored and counted in `tally.ignored_sections`.)
 
 Error policy (spec §5.4): unreadable dirty evidence or a store failure -> exit 2, no marker;
 handoff / wiki / projection / report failures are fail-soft (`failed(<reason>)`), marker is written.
@@ -46,15 +46,15 @@ import store_lock  # noqa: E402
 from preprocess_state import open_tasks  # noqa: E402
 from wrapup_parts.handoff import rescue_blocks, rescue_dropped, write_board, write_central  # noqa: E402
 from wrapup_parts.harvest import harvest  # noqa: E402
+from wrapup_parts.prelude_gaps import prelude_gaps, resolve_log_dir  # noqa: E402
 from wrapup_parts.wikinote import write_session_note  # noqa: E402
 
-IDENTITY_LINE = "Identity: headless — kein Harvest"
 # Same downgrade rule as the RECOVERY line in session-start.sh: a dirty file that carries
 # last_consolidated_at and at most this many writes since is wrap-up's own tail, not lost work.
 # Never after a headless stamp: the night run is a plain subprocess the tracker never sees, so
 # every write after it is real session work.
 # TAIL_WRITES_MAX lives in harvest_state.py (one definition for core, night run and harvest rules).
-HEADLESS_WARNING = ("Headless konsolidiert (Nachtlauf, ohne Judge): Learnings, Decisions und Identity "
+HEADLESS_WARNING = ("Headless konsolidiert (Nachtlauf, ohne Judge): Learnings und Decisions "
                     "wurden nicht geerntet.")
 
 
@@ -290,8 +290,7 @@ def cmd_apply_headless(args):
     if not os.path.isdir(mem):
         return _emit({"ok": False, "error": f"memory dir not found: {args.mem}"}, 1)
     project_root = os.path.abspath(args.project_root or os.path.dirname(mem))
-    base = {"ok": True, "mode": "headless", "dry_run": args.dry_run, "project_root": project_root,
-            "identity_status_line": IDENTITY_LINE}
+    base = {"ok": True, "mode": "headless", "dry_run": args.dry_run, "project_root": project_root}
 
     dirty, err = _dirty_sessions(mem)
     if err:
@@ -330,9 +329,9 @@ def cmd_apply_headless(args):
                 "open_items": [_cut(t["title"]) for t in tasks[:5]],
                 "next_steps": [f"Projekt-Next-Steps: .agent-memory/context/open-tasks.json "
                                f"({len(tasks)} offen; Top: {top})"],
-                "statistics": {"iterations": len(iterations), "errors": 0, "new_patterns": 0},
+                "statistics": {"iterations": len(iterations)},
                 "warnings": [HEADLESS_WARNING]}}
-    tally = {"iterations_logged": 0, "iterations_skipped_duplicate": 0, "errors_added": 0, "errors_recurred": 0,
+    tally = {"iterations_logged": 0, "iterations_skipped_duplicate": 0, "ignored_sections": [],
              "learnings_added": 0, "session_summary_lines": 0, "dirty_files_consolidated": 0,
              "touched_files_seen": 0, "warnings": []}
     touched = []
@@ -354,7 +353,7 @@ def cmd_apply_headless(args):
             return _emit({**empty, "ok": False, "error": f"marker: {exc}", "marker_written": False}, 2)
         return _emit({**empty, "marker_written": True, "files_written": touched, "tally": tally}, 0)
     # The store lock covers each write block, never a subprocess call below:
-    # extract_patterns takes the same lock and would wait for its own parent.
+    # a child script takes the lock itself and would wait for its own parent.
     guard = contextlib.nullcontext() if args.dry_run else store_lock.store_lock(mem)
     try:  # steps 1-3: store writes through the one applier; nothing judge-owned
         with guard:
@@ -373,7 +372,7 @@ def cmd_apply_headless(args):
                        "files_written": touched, "tally": tally})
         return _emit(result, 0)
 
-    reports = {"patterns": _run_script([os.path.join(HERE, "extract_patterns.py"), mem, "--update"], project_root)}
+    reports = {}
 
     repo = _repo_status(project_root)
     block = _handoff_block(project, now, iterations, tasks, repo, len(tasks), top)
@@ -399,8 +398,6 @@ def cmd_apply_headless(args):
     except (aw.PlanError, OSError, ValueError) as exc:  # ValueError: decode/shape (5.2.1)
         return _emit({**result, "ok": False, "error": f"marker: {exc}", "handoff": handoff, "wiki_note": wiki_note,
                       "marker_written": False, "files_written": touched, "tally": tally}, 2)
-    if reports["patterns"] != "ok":  # DCO #9696: fail-soft, but never reported as a clean run
-        result["status"] = "consolidated(patterns failed)"
     reports["state_hash"] = _run_script([os.path.join(HERE, "preprocess_state.py"), mem, "--write-hash"], project_root)
     result.update({"handoff": handoff, "wiki_note": wiki_note, "projections": projections, "reports": reports,
                    "marker_written": True, "files_written": touched, "tally": tally})
@@ -409,10 +406,23 @@ def cmd_apply_headless(args):
 
 # --- judge path (T-028b) ---------------------------------------------------------------------
 
-CORE_KEYS = ("session_summary", "user_candidates")  # built here from `summary` and `identity`: never two ways in
+CORE_KEYS = ("session_summary",)  # built here from `summary`: never two ways in
+# 6.0.0: the identity harvest is gone. A judge plan from an older skill version may still carry these sections:
+# they are ignored and counted (`tally.ignored_sections`), never refused and never handed to the applier.
+IGNORED_KEYS = ("identity", "user_candidates")
+# The Pflegelauf sections belong to /agentic-os:maintain: a stamp from wrap-up would reset the trigger (final review M1).
+MAINTAIN_KEYS = ("learning_updates", "pflegelauf_stamp")
 RULE_TAGS = {"regel", "rule", "verfassung", "constitution"}
 FOLLOWUP_KEYS = {"date", "session_id", "bridge_decisions", "rule_explanations", "rule_releases", "corrections",
                  "user_md_supersede", "user_md_retire"}
+
+
+def _carries(section):
+    """An ignored old section counts only when it carries something: the old skill's identity answer
+    `{"candidates": [], "none_because": ...}` or an empty list was nothing to ignore."""
+    if isinstance(section, dict):
+        return bool(section.get("candidates"))
+    return bool(section)
 
 
 def _child(script, args, cwd, plan=None, timeout=120):
@@ -462,21 +472,16 @@ def _check_plan(plan):
     """Judge duties, before anything else runs. -> error text or None."""
     for key in CORE_KEYS:
         if key in plan:
-            return f"`{key}` belongs to the core: send `summary` and `identity` instead"
+            return f"`{key}` belongs to the core: send `summary` instead"
+    for key in MAINTAIN_KEYS:
+        if key in plan:
+            return f"`{key}` belongs to the Pflegelauf (/agentic-os:maintain), not to wrap-up"
     summary = plan.get("summary")
     if not isinstance(summary, dict):
         return "`summary` is required"
     done = summary.get("what_was_done")
     if not isinstance(done, list) or not [x for x in done if str(x).strip()]:
         return "`summary.what_was_done` needs at least one line"
-    identity = plan.get("identity")
-    if not isinstance(identity, dict):
-        return "`identity` is required: {\"candidates\": [...], \"none_because\": \"...\"}"
-    cands = identity.get("candidates")
-    if not isinstance(cands, list):
-        return "`identity.candidates` must be a list"
-    if not cands and not str(identity.get("none_because") or "").strip():
-        return "no identity candidates: `identity.none_because` must say why"
     return None
 
 
@@ -523,36 +528,21 @@ def _judged_iterations(iterations):
     return out
 
 
-def _pattern_count(mem):
-    try:
-        with open(os.path.join(mem, "patterns", "patterns.json"), encoding="utf-8-sig") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return 0
-    rows = data.get("patterns", []) if isinstance(data, dict) else data
-    return len(rows) if isinstance(rows, list) else 0
-
-
-def _thresholds(mem, cwd):
-    """memory-thresholds.sh reports only. -> its THRESHOLD lines."""
+def _pflegelauf_due(mem, cwd):
+    """memory-thresholds.sh reports only. -> its PFLEGELAUF line, or "" (not due, no bash, helper failed).
+    The THRESHOLD lines are not wrap-up's business any more (6.0.0): the start briefing prints them."""
     bash = shutil.which("bash")
     if not bash:
-        return ["THRESHOLD: nicht geprüft (bash fehlt)"]
+        return ""
     try:
         p = subprocess.run([bash, os.path.join(HERE, "memory-thresholds.sh"), mem], cwd=cwd, capture_output=True,
                            timeout=30, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return [f"THRESHOLD: nicht geprüft ({type(exc).__name__})"]
-    return [ln for ln in p.stdout.decode("utf-8", "replace").splitlines() if ln.startswith("THRESHOLD:")]
-
-
-def _review_sweep(mem, project_root, home):
-    rc, _, native = _child("memory_index_projection.py", ["--print-native-dir", project_root, "--home", home], project_root)
-    args = [mem, "--report", os.path.join(mem, "working", "review-sweep.md")]
-    if rc == 0 and native.strip():
-        args += ["--native-memory", native.strip()]
-    rc, _, text = _child("review_sweep.py", args, project_root)
-    return text.strip().splitlines()[-1] if rc == 0 and text.strip() else f"failed(exit {rc})"
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    for ln in p.stdout.decode("utf-8", "replace").splitlines():
+        if ln.startswith("PFLEGELAUF:"):
+            return ln
+    return ""
 
 
 def _trace_failure(measured):
@@ -563,7 +553,7 @@ def _trace_failure(measured):
 def _cost_trace(mem, session_id, cwd):
     """Two measured rows: the wrap-up window (`wrap-up`) and the whole session (`session`). Without a wrap-up
     start in the transcript the first row already IS the session row and carries that label, so the second call
-    is skipped. Without a transcript an estimate, so the trace never has a hole (T-016). Fail-soft."""
+    is skipped. Without a transcript there is no row (no estimate any more, 6.0.0). Fail-soft."""
     rc, measured, _ = _child("measure_session_cost.py", ["--locate", session_id, "--append-trace", mem, "--task", "wrap-up",
                                                           "--since-wrapup"], cwd)
     if rc == 0 and measured is None:  # exit 0 without a parsable answer is no confirmation of a written row
@@ -582,16 +572,9 @@ def _cost_trace(mem, session_id, cwd):
         if rc == 0 and measured["ok"] is True:
             return _trace_failure(measured) or "ok"
         return f"failed(trace: session row: {_cut((measured or {}).get('error') or f'exit {rc}', 100)})"
-    bash = shutil.which("bash")
-    if not bash:
-        return "skipped(no transcript, no bash)"
-    try:
-        p = subprocess.run([bash, os.path.join(HERE, "cost-trace.sh"), "append", "--mem", mem, "--task", "wrap-up",
-                            "--class", "cheap-write", "--context-bytes", "0", "--escalated", "0"], cwd=cwd,
-                           capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return f"failed({type(exc).__name__})"
-    return "estimate" if p.returncode == 0 else f"failed(exit {p.returncode})"
+    if rc == 0:  # measure_session_cost answered ok:false (no transcript for this session): no row, no estimate
+        return f"skipped({_cut((measured or {}).get('error') or 'no transcript', 100)})"
+    return f"failed(exit {rc})"
 
 
 def _logged_today(mem, date):
@@ -673,7 +656,7 @@ def cmd_pre(args):
     if err:
         errors.append(err)
     date = _dt.date.today().isoformat()
-    candidates, rule_open, errors_today, tasks = [], {}, [], []
+    candidates, rule_open, tasks = [], {}, []
     try:
         rows = aw.load_json(mem, "learnings/learnings.json", [])
         candidates = [{"id": c.get("id"), "text": _cut(c.get("summary") or c.get("text", ""), 200),
@@ -682,8 +665,6 @@ def cmd_pre(args):
     except (aw.PlanError, OSError, ValueError) as exc:
         errors.append(f"learnings/learnings.json: {exc}")
     try:
-        errors_today = [e.get("id") for e in aw.load_json(mem, "iterations/errors.json", [])
-                        if isinstance(e, dict) and str(e.get("date", ""))[:10] == date]
         tasks = [{"id": t.get("id"), "title": _cut(t.get("title", ""), 160), "status": t.get("status")}
                  for t in _open_rows(mem)]
     except (aw.PlanError, OSError, ValueError) as exc:
@@ -692,12 +673,19 @@ def cmd_pre(args):
     return _emit({"ok": True, "session_id": session_id, "date": date, "project_root": project_root,
                   "changed_files": state.get("changed_files", []), "git_diff_summary": state.get("git_diff_summary", ""),
                   "iterations_harvested": _judged_iterations(harvest(project_root, mem, _since(mem, real or dirty))),
-                  "errors_today": errors_today, "open_tasks": tasks,
-                  "user_candidates": state.get("user_candidates", []),
-                  "user_candidates_total": state.get("user_candidates_total", 0),
-                  "bridge_candidates": candidates, "rule_class_open": rule_open,
+                  "open_tasks": tasks, "bridge_candidates": candidates, "rule_class_open": rule_open,
                   "suggested_store": _suggested_store(mem, session_id, real),
-                  "active_warnings": _active_warnings(mem), "threshold_events": state.get("threshold_events", []), "validation_errors": errors}, 0)
+                  "active_warnings": _active_warnings(mem), "pflegelauf_due": _pflegelauf_due(mem, project_root),
+                  "prelude_gaps": _prelude_gaps_safe(mem, session_id), "validation_errors": errors}, 0)
+
+
+def _prelude_gaps_safe(mem, session_id):
+    """The gap list is an extra: any failure becomes a visible status, never a broken pre."""
+    try:
+        return prelude_gaps(session_id, resolve_log_dir(_config(mem)))
+    except Exception as exc:  # noqa: BLE001
+        return {"status": f"nicht geprüft: {type(exc).__name__}: {_cut(str(exc), 100)}", "gaps": [], "geprueft": 0,
+                "nicht_geprueft": 0}
 
 
 def cmd_apply_plan(args):
@@ -715,9 +703,10 @@ def cmd_apply_plan(args):
 
     session_id = _session_id(args)
     date = plan.get("date") or _dt.date.today().isoformat()
-    summary, identity = plan["summary"], plan["identity"]
-    store = {k: v for k, v in plan.items() if k not in ("summary", "identity", "consolidate")}
-    store.update({"date": date, "session_id": session_id, "user_candidates": identity["candidates"]})
+    summary = plan["summary"]
+    ignored = [k for k in IGNORED_KEYS if _carries(plan.get(k))]
+    store = {k: v for k, v in plan.items() if k not in ("summary", "consolidate", *IGNORED_KEYS)}
+    store.update({"date": date, "session_id": session_id})
     learnings, dropped = _apply_cap(plan.get("learnings") or [], args.learnings_cap)
     if "learnings" in plan:
         store["learnings"] = learnings
@@ -736,35 +725,31 @@ def cmd_apply_plan(args):
         return _emit({**(main_out or {"error": f"apply_wrapup exit {rc}: {_cut(raw, 300)}"}), "ok": False,
                       "mode": "wrap-up", "marker_written": False}, 2)
     tally = main_out.get("tally", {})
+    tally["ignored_sections"] = sorted(set(ignored) | set(tally.get("ignored_sections") or []))
     warnings += tally.get("warnings", [])
     base = {"ok": True, "mode": "wrap-up", "dry_run": args.dry_run, "project_root": project_root, "date": date,
             "harvest_used": harvest_used, "learnings_dropped_by_cap": dropped,
-            "identity_status_line": main_out.get("identity_status_line"),
             "near_duplicates": main_out.get("near_duplicates", {}), "tally": tally}
+    if tally["ignored_sections"]:
+        base["ignored_status_line"] = aw.ignored_status_line(tally["ignored_sections"])
     if args.dry_run:
         return _emit({**base, "warnings": warnings, "marker_written": False}, 0)
 
-    # Side scripts first, so the summary states the measured pattern count. The store lock is never
-    # held across a subprocess: each child takes it itself.
+    # Side scripts first. The store lock is never held across a subprocess: each child takes it itself.
     reports = {}
     rc, _, text = _child("ingest_codex_memory.py", [mem], project_root)
     reports["codex_ingest"] = text.strip().splitlines()[-1] if rc == 0 and text.strip() else f"failed(exit {rc})"
-    patterns_before = _pattern_count(mem)
-    rc, extracted, _ = _child("extract_patterns.py", [mem, "--update"], project_root)
-    reports["patterns"] = "ok" if rc == 0 else f"failed(exit {rc})"
 
     tasks = _open_rows(mem)
     titles = [_cut(t.get("title", "")) for t in tasks]
     top = titles[0] if titles else "keine"
-    errors = sum(len(it.get("errors") or []) for it in iterations)
     plan_warnings = [str(x) for x in summary.get("warnings") or []]
     done, open_items, active = _fit_summary(summary["what_was_done"], titles[:5], plan_warnings)
     reports["summary_warnings_dropped"] = plan_warnings[len(active):]  # beyond the at most three the summary keeps, named in the report
     session_summary = {"what_was_done": done, "open_items": open_items,
                        "next_steps": [f"Projekt-Next-Steps: .agent-memory/context/open-tasks.json "
                                       f"({len(tasks)} offen; Top: {top})"],
-                       "statistics": {"iterations": len(iterations), "errors": errors,
-                                      "new_patterns": max(0, _pattern_count(mem) - patterns_before)},
+                       "statistics": {"iterations": len(iterations)},
                        "warnings": active}
     if isinstance(summary.get("handoff"), dict):  # Handoff Mode: rendered by the applier as `## Handoff Context`
         session_summary["handoff"] = summary["handoff"]
@@ -800,12 +785,10 @@ def cmd_apply_plan(args):
                                        summary=summary, session_id=session_id)
 
     projections = _projections(mem, project_root, args.home)
-    reports["threshold_lines"] = _thresholds(mem, project_root)
-    reports["review_sweep"] = _review_sweep(mem, project_root, args.home)
 
     result = {**base, "status": "consolidated", "project": project, "handoff": handoff, "wiki_note": wiki_note,
               "wiki_sync_line": _wiki_line(wiki_note), "projections": projections, "reports": reports,
-              "pattern_proposals": len((extracted or {}).get("proposals") or []), "bridge_candidates": [],
+              "bridge_candidates": [],
               "rule_class_open": tally.get("rule_class_open"), "sharepoint_touched": _sharepoint_touched(dirty),
               "repo": repo, "warnings": warnings}
     for line in ("rule_class_status_line", "bridge_status_line"):

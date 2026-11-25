@@ -69,8 +69,9 @@ def sha(path):
 
 
 def row(lid, text, imp=3, date="2026-08-01", **kw):
+    # 6.0.0: the MEMORY.md block lists kind "feedback" beside the pointers, so fixture rows default to it
     r = {"id": lid, "date": date, "text": text, "importance": imp, "tags": [], "layer": "short-term",
-         "superseded_by": None, "last_relevant": date}
+         "superseded_by": None, "last_relevant": date, "kind": "feedback"}
     r.update(kw)
     return r
 
@@ -249,8 +250,8 @@ ptrs = [{"id": f"L{900 + i}", "kind": "principle", "summary": f"Regel {i}", "anc
          "derived_from": [f"M{i}", f"N{i}"] if i < 11 else ["M11"], "importance": 3, "date": "2026-10-01"}
         for i in range(12)]
 appr = [{"id": "M11", "text": "Mitglied des elften Zeigers", "importance": 3, "date": "2026-10-01",
-         "bridge_status": "approved"}]
-appr += [{"id": f"{x}{i}", "text": f"Mitglied {x}{i}", "importance": 3, "date": "2026-10-01"}
+         "kind": "feedback", "bridge_status": "approved"}]
+appr += [{"id": f"{x}{i}", "text": f"Mitglied {x}{i}", "importance": 3, "date": "2026-10-01", "kind": "feedback"}
          for i in range(11) for x in ("M", "N")]
 put(os.path.join(tmp, "m2", ".agent-memory", "learnings", "learnings.json"), ptrs + appr)
 _p, shown = mip.load_entries(os.path.join(tmp, "m2", ".agent-memory"))
@@ -305,6 +306,43 @@ rc, out = run([LIFE, "report", mem, "--min-importance", "4", "--min-age-days", "
 check(rc == 0 and out.get("lost_anchors") == ["L9"], f"report: the daily anchor check names a lost anchor ({out})")
 rc, out = run([LIFE, "propose", mem, "--catalog", rules, "--min-age-days", "30", "--today", "2026-08-15"])
 check(rc == 0 and not out.get("proposals"), "min-age-days keeps young learnings out")
+
+# 6.0.0 Pflegelauf (R16): --skip-reviewed leaves out rows the run judged already, so a second run is idempotent
+tmp, mem, rules = setup()
+learn = os.path.join(mem, "learnings", "learnings.json")
+rows = json.loads(read(learn))
+for r in rows:
+    if r["id"] == "L1":   # review date in the future only
+        r["review_after"] = "2026-12-01"
+    if r["id"] == "L2":   # judged "bleibt": review date in the future + a pflegelauf log entry
+        r["review_after"] = "2027-04-08"
+        r["update_log"] = [{"date": "2026-10-08", "reason": "bleibt", "by": "pflegelauf"}]
+    if r["id"] == "L3":   # review date passed, no pflegelauf entry: still a candidate
+        r["review_after"] = "2026-09-01"
+        r["update_log"] = [{"date": "2026-09-02", "reason": "other", "by": "wrap-up"}]
+put(learn, rows)
+base = [LIFE, "propose", mem, "--catalog", rules, "--min-importance", "4", "--min-age-days", "0", "--today", "2026-10-08"]
+rc, out = run(base)
+check(rc == 0 and {x["id"] for x in out.get("proposals", [])} == {"L1", "L2", "L3"},
+      f"propose without --skip-reviewed: unchanged ({sorted(x['id'] for x in out.get('proposals', []))})")
+before = sha(learn)
+rc, out = run(base + ["--skip-reviewed"])
+ids = {x["id"] for x in out.get("proposals", [])}
+check(rc == 0 and "L2" not in ids, f"--skip-reviewed: a row judged 'bleibt' is not proposed again ({sorted(ids)})")
+check("L1" not in ids, f"--skip-reviewed: a row with a future review date is skipped ({sorted(ids)})")
+check(ids == {"L3"}, f"--skip-reviewed: a due row without a pflegelauf entry stays ({sorted(ids)})")
+rows[2]["update_log"].append({"date": "2026-08-08", "reason": "bleibt", "by": "pflegelauf"})
+put(learn, rows)
+rc, out = run(base + ["--skip-reviewed"])
+check(rc == 0 and {x["id"] for x in out.get("proposals", [])} == {"L3"},
+      f"--skip-reviewed (I1): a 'bleibt' row whose review date has passed comes back despite its pflegelauf entry "
+      f"({sorted(x['id'] for x in out.get('proposals', []))})")
+del rows[2]["review_after"]
+put(learn, rows)
+before = sha(learn)
+rc, out = run(base + ["--skip-reviewed"])
+check(rc == 0 and not out.get("proposals"), "--skip-reviewed: no review date + a pflegelauf log entry skips the row")
+check(sha(learn) == before, "propose --skip-reviewed is read-only")
 
 # ============================================================ 5. writer safeguards (P3-A)
 print("--- writer safeguards (P3-A)")

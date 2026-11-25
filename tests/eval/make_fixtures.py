@@ -122,9 +122,9 @@ def build_identity(mem):
 
 
 def build_conflict(mem):
-    """Contradictory active records + escalation trigger.
+    """Contradictory active records.
 
-    The escalation/conflict gate is body-interpreted (checked by gate_linkage +
+    The conflict gate is body-interpreted (checked by gate_linkage +
     capture_protocol), not by a single script signal; the fixture provides the
     conflicting state for the capture run.
     """

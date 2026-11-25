@@ -12,15 +12,9 @@
   "fast_path": false,
   "recovery": true,
   "soul_candidate": false,
-  "user_candidate": false,
-  "escalation": true
+  "user_candidate": false
  },
- "files_written": [
-  {
-   "path": "working/escalations-<sid>.json",
-   "op": "append"
-  }
- ],
+ "files_written": [],
  "json_keys_touched": {},
  "questions_asked": []
 }

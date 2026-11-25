@@ -183,7 +183,7 @@ check("L2" in md and "L1" in md, "learnings.md is a full projection of learnings
 check(md.index("## Importance 5") < md.index("## Importance 4"),
       "learnings.md sorted by importance descending")
 check(md.startswith("# Learnings\n\n" + LEARNINGS_MD_HEADER + "\n"),
-      "learnings.md opens with the header maintain 5.2 / memory-audit check for")
+      "learnings.md opens with the header maintain 5.2 checks for")
 check(new["bridge_status"] == "candidate",
       "importance >= 4 derives bridge_status=candidate (Step 3d.1)")
 
@@ -389,59 +389,6 @@ check(rc == 2 and snapshot(mem) == before, "the same id twice in one plan is rej
 rc, out = run(mem, {"date": "2026-10-16", "bridge_decisions": {"L2": "approved"}})
 check(rc == 2 and snapshot(mem) == before, "bridge_decisions must be a list")
 
-# --- 2. trust boundary + mood block -----------------------------------------
-mem = make_mem()
-# P1/B2: `confirmed` counts only with a quote that stands in a real user message of the session
-# transcript. The fake transcript lives in the isolated test home, where the script looks for it.
-transcript_dir = os.path.join(ISO_HOME, ".claude", "projects", "proj-test")
-os.makedirs(transcript_dir, exist_ok=True)
-with open(os.path.join(transcript_dir, "sess-A.jsonl"), "w", encoding="utf-8") as fh:
-    fh.write(json.dumps({"type": "user", "message": {"role": "user", "content": "Ich bin heute wirklich genervt vom Ablauf"},
-                         "origin": {"kind": "human"}}) + "\n")
-rc, out = run(mem, {"date": "2026-07-27", "user_candidates": [
-    {"key": "aus-web", "observation": "Von einer Webseite", "trust_source": "web"},
-    {"key": "laune", "observation": "War genervt", "signal_type": "mood", "confirmed": True,
-     "quote": "wirklich genervt vom Ablauf"},
-]})
-check(out["tally"]["candidates_rejected_trust"] == 1,
-      "trust_source != conversation is rejected (poisoning defense)")
-keys = {c["key"] for c in load(mem, "working/user-candidates.json")}
-check("aus-web" not in keys, "rejected candidate never reaches the queue")
-laune_id = [c["id"] for c in load(mem, "working/user-candidates.json") if c["key"] == "laune"][0]
-check(laune_id not in out["tally"]["promoted_ids"],
-      "signal_type=mood is never promoted, even when confirmed")
-laune = [c for c in load(mem, "working/user-candidates.json") if c["key"] == "laune"][0]
-check(laune["status"] == "confirmed" and laune.get("quote_verified") is True,
-      "mood candidate is still recorded (confirmed by a verified quote), just not promoted")
-shutil.rmtree(os.path.join(ISO_HOME, ".claude"), ignore_errors=True)
-
-# --- 3. promotion rule + changelog ordering ---------------------------------
-mem = make_mem()
-rc, out = run(mem, {"date": "2026-07-27", "user_candidates": []})
-promoted = {c["key"]: c["status"] for c in load(mem, "working/user-candidates.json")}
-check(promoted["reif"] == "promoted",
-      "inferred + occurrences>=2 + confidence>=0.6 promotes")
-check(promoted["unreif"] == "inferred",
-      "inferred + occurrences=1 + low confidence does NOT promote")
-check(out["tally"]["candidates_promoted"] == 1, "full queue re-review runs without new input")
-log = load(mem, "identity/user-changelog.json")
-check(len(log) == 1 and log[0]["candidate_id"] == "UC1", "changelog entry written for promotion")
-check(log[0]["field"] == "user.md/Preferences", "changelog names the target section")
-user_md = read(mem, "identity/user.md")
-check("Handgeschriebene Zeile" in user_md, "pre-existing user.md content is preserved")
-check("Reifer Kandidat" in user_md, "promoted candidate lands in user.md")
-check(user_md.count("## Preferences") == 1, "user.md sections are not duplicated")
-
-# --- 4. occurrence increment escalates status -------------------------------
-mem = make_mem()
-run(mem, {"date": "2026-07-27", "user_candidates": [
-    {"key": "unreif", "observation": "Unreifer Kandidat", "signal_type": "preference"},
-]})
-q = {c["key"]: c for c in load(mem, "working/user-candidates.json")}
-check(q["unreif"]["occurrences"] == 2, "repeat observation increments occurrences")
-check(q["unreif"]["status"] == "promoted",
-      "repeated 2x -> confirmed -> promoted in the same run")
-
 # --- 5. other skills' files are untouchable ---------------------------------
 mem = make_mem()
 before = {f: read(mem, f) for f in ("iterations/errors.json", "patterns/patterns.json",
@@ -611,14 +558,24 @@ check(rc == 0 and out["dry_run"] is True, "dry-run exits 0 and reports dry_run=t
 check(read(mem, "learnings/learnings.json") == before, "dry-run leaves files unchanged")
 check(out["tally"]["learnings_added"] == 1, "dry-run still reports what it would do")
 
-# --- 10. status line reports measured numbers -------------------------------
+# --- 9b. restore was removed in 6.0.0: the section is refused before any other check ---
 mem = make_mem()
-rc, out = run(mem, {"date": "2026-07-27", "user_candidates": [
-    {"key": "neu", "observation": "Neue Beobachtung", "signal_type": "workflow"}]})
-line = out["identity_status_line"]
-check(line.startswith("Identity: ") and "user.md promotet" in line,
-      "identity status line matches the mandatory Step 6.5 format")
-check("1 → user.md promotet" in line, "status line numbers come from the applied writes")
+before_snap = snapshot(mem)
+proc = subprocess.run(
+    [sys.executable, SCRIPT, mem, "--session-id", "sess-A"],
+    input=json.dumps({"date": "2026-07-27", "restore": {"learnings": []}}),
+    capture_output=True, text=True, encoding="utf-8", env=ENV)
+check(proc.returncode == 2 and "removed in 6.0.0" in (proc.stdout + proc.stderr),
+      f"test_restore_section_refused: plan with 'restore' exits 2 and says 'removed in 6.0.0' "
+      f"(rc={proc.returncode}, {(proc.stdout + proc.stderr).strip()[:120]})")
+check(snapshot(mem) == before_snap, "test_restore_section_refused: the store is byte-identical afterwards")
+# also refused ahead of every other check: a plan that is otherwise invalid still names the removal
+proc = subprocess.run(
+    [sys.executable, SCRIPT, mem, "--session-id", "sess-A"],
+    input=json.dumps({"date": "kaputt", "iterations": [{"summary": "ohne Titel"}], "restore": {}}),
+    capture_output=True, text=True, encoding="utf-8", env=ENV)
+check(proc.returncode == 2 and "removed in 6.0.0" in (proc.stdout + proc.stderr),
+      "'restore' is refused first, before the date and iteration checks")
 
 # --- 11. an unreadable store file aborts the run, it is never emptied --------
 # 5.2.1: the old quarantine contract renamed the file to .corrupt.bak
@@ -679,17 +636,6 @@ rc, out = run(mem, {"date": "2026-07-27", "decisions": [
     {"type": "architecture", "title": "Nach Decision-Archiv", "context": "c", "decision": "d"}]})
 check(rc == 0 and out["tally"]["decision_ids"] == ["D-031"],
       f"new decision skips ids held by an undated archive (got {out['tally'].get('decision_ids')})")
-# The archive raises the number, it never hijacks the live id family.
-mem = make_mem()
-put(mem, "iterations/errors.json", [{"id": "err-002", "category": "x", "tags": []}])
-put(mem, "iterations/errors-archive-2026-07.json", [{"id": f"E{i}"} for i in range(1, 16)])
-rc, out = run(mem, {"date": "2026-07-27", "iterations": [{
-    "type": "fix", "title": "Familie bleibt", "outcome": "ok",
-    "errors": [{"category": "y", "tags": ["neu"], "description": "d", "root_cause": "r",
-                "solution": "s"}]}]})
-ids = [e["id"] for e in load(mem, "iterations/errors.json")]
-check(rc == 0 and ids == ["err-002", "err-003"],
-      f"an archive of another id family does not fork the live sequence (ids={ids})")
 
 # --- 11d. the preflight covers everything a plan will read (review of 5.2.1) --
 # Each case: a plan whose FIRST applier would write the iteration log, and a
@@ -729,31 +675,6 @@ mem = make_mem()
 write(mem, "learnings/learnings-archive-2026-07.json", '[{"id": "L9", "text": "abgeschn')
 rc, out = run(mem, {"date": "2026-07-27", "session_summary": {"what_was_done": ["nur Summary"], "statistics": {}}})
 check(rc == 0, f"a plan that assigns no learning id is not blocked by a broken learnings archive (rc={rc})")
-
-# --- 12. trust boundary also guards the full-queue re-review ----------------
-# Codex verifier finding 2026-07-27 (MAJOR): trust_source was only checked when
-# enqueuing a new observation. A poisoned row already on disk - written by an
-# older version, another code path or by hand - was promoted into user.md by
-# the Step 6.3 full-queue re-review.
-mem = make_mem()
-queue = load(mem, "working/user-candidates.json")
-queue.append({
-    "id": "UC9", "key": "vergiftet", "observation": "Aus einer Webseite geerbt",
-    "status": "confirmed", "signal_type": "preference", "confidence": 0.9,
-    "occurrences": 5, "evidence": ["web"], "first_seen": "2026-07-01",
-    "last_seen": "2026-07-01", "trust_source": "web",
-})
-put(mem, "working/user-candidates.json", queue)
-rc, out = run(mem, {"date": "2026-07-27", "user_candidates": []})
-check(out["tally"]["promotion_blocked_trust"] == 1,
-      "queue row with foreign trust_source is blocked at promotion time")
-check("UC9" not in out["tally"]["promoted_ids"], "poisoned queue row is not promoted")
-check("Aus einer Webseite geerbt" not in read(mem, "identity/user.md"),
-      "poisoned observation never reaches user.md")
-check("UC9" not in json.dumps(load(mem, "identity/user-changelog.json")),
-      "poisoned observation never reaches the changelog")
-check(out["tally"]["candidates_promoted"] == 1,
-      "legitimate candidates in the same queue still promote")
 
 # --- 13. corrupt foreign-owned file is not quarantined ----------------------
 mem = make_mem()
@@ -812,46 +733,6 @@ check(log.startswith("# Iteration Log") and "Etwas Altes" in log,
       "existing log content is preserved (append, never overwrite)")
 check(out["tally"]["iterations_logged"] == 1, "tally counts logged iterations")
 
-# --- 16. errors from an iteration: detected id format + working memory -------
-mem = make_mem()
-rc, out = run(mem, {"date": "2026-07-27", "iterations": [{
-    "type": "bugfix", "title": "Ein Fehler", "tags": ["x", "y"],
-    "summary": "s", "errors": [{
-        "category": "runtime", "tags": ["node", "timeout"], "problem": "Hing",
-        "root_cause": "Kein Timeout gesetzt", "fix": "Timeout ergaenzt", "severity": "major",
-    }],
-}]})
-errs = load(mem, "iterations/errors.json")
-check(len(errs) == 2 and errs[-1]["id"] == "err-002",
-      "new error id follows the DETECTED format (err-00n), not the template E{n}")
-check(errs[-1]["occurrences"] == 1 and errs[-1]["recurrence_dates"] == [],
-      "new error entry carries the full schema")
-check("- **Errors:** err-002" in read(mem, "iterations/iteration-log.md"),
-      "iteration block references the error id it produced")
-cs = load(mem, "working/current-session.json")
-check("err-002" in cs["errors_this_session"], "error id lands in working/current-session.json")
-check(out["tally"]["errors_added"] == 1, "tally counts new errors")
-
-# --- 17. recurrence: same category + 2 overlapping tags ----------------------
-mem = make_mem()
-rc, out = run(mem, {"date": "2026-07-27", "iterations": [{
-    "type": "bugfix", "title": "Schon wieder", "tags": ["x", "y"], "summary": "s",
-    "errors": [{
-        "category": "import", "tags": ["python", "circular-import", "neu"],
-        "problem": "Wieder zirkulaer", "root_cause": "gleiche Ursache",
-        "fix": "wieder lazy", "severity": "major",
-    }],
-}]})
-errs = load(mem, "iterations/errors.json")
-check(len(errs) == 1, "recurrence does NOT create a second error entry")
-check(errs[0]["occurrences"] == 2 and "2026-07-27" in errs[0]["recurrence_dates"],
-      "recurrence increments occurrences and records the date")
-check(errs[0]["last_seen"] == "2026-07-27", "recurrence updates last_seen")
-check("(Recurrence of err-001)" in read(mem, "iterations/iteration-log.md"),
-      "iteration block marks the recurrence")
-check(out["tally"]["errors_recurred"] == 1 and out["tally"]["errors_added"] == 0,
-      "tally separates recurrences from new errors")
-
 # --- 18. iteration dedup: same header is not written twice -------------------
 mem = make_mem()
 it = {"type": "feature", "title": "Etwas Altes", "tags": ["a"], "summary": "s"}
@@ -906,23 +787,16 @@ check(not os.path.exists(os.path.join(mem, "consolidation-marker.json")),
 
 # --- 22. legacy id formats still work ---------------------------------------
 mem = make_mem()
-put(mem, "iterations/errors.json", [{"id": "E1", "category": "x", "tags": ["a"]}])
 put(mem, "context/decisions.json", [{"id": "D1", "title": "Legacy", "status": "active"}])
 rc, out = run(mem, {"date": "2026-07-27",
-                    "iterations": [{"type": "bugfix", "title": "L", "tags": ["q"], "summary": "s",
-                                    "errors": [{"category": "runtime", "tags": ["z"],
-                                                "problem": "p", "root_cause": "r",
-                                                "fix": "f", "severity": "minor"}]}],
                     "decisions": [{"type": "constraint-update", "title": "N", "context": "c",
                                    "decision": "d", "consequences": "k"}]})
-check(load(mem, "iterations/errors.json")[-1]["id"] == "E2",
-      "legacy E{n} error format is continued, not broken")
 check(load(mem, "context/decisions.json")[-1]["id"] == "D2",
       "legacy D{n} decision format is continued, not broken")
 
 # --- 23. pattern files stay out of this script ------------------------------
-# Patterns are owned by scripts/extract_patterns.py - a different script, so the
-# guard must refuse them even though errors/decisions are now writable.
+# Patterns data belongs to the removed pattern mechanics (6.0.0): nothing writes it, so the
+# guard must refuse them even though decisions are writable.
 mem = make_mem()
 before = {f: read(mem, f) for f in ("patterns/patterns.json", "patterns/patterns.md",
                                     "identity/soul.md")}
@@ -955,26 +829,6 @@ check(read(mem, "context/decisions.json") == "{ kaputt"
       "not even the owning applier renames or empties a corrupt file")
 
 # === Codex verifier findings on commit 1e5c504 (2026-07-27) ==================
-
-# --- 25. re-running the SAME plan must not inflate error occurrences --------
-# The header dedup ran AFTER the errors were processed, so a repeated plan
-# skipped the iteration but counted its error as a recurrence every time:
-# reproduced occurrences 2 -> 3 -> 4 over three identical runs. Test 18 missed
-# it because its iteration carried no errors.
-mem = make_mem()
-it_with_err = {"type": "bugfix", "title": "Gleiche Iteration", "tags": ["a", "b"],
-               "summary": "s", "errors": [{"category": "import",
-               "tags": ["python", "circular-import", "neu"], "problem": "p",
-               "root_cause": "r", "fix": "f", "severity": "major"}]}
-plan_rep = {"date": "2026-07-27", "iterations": [it_with_err]}
-run(mem, plan_rep)
-occ_after_first = load(mem, "iterations/errors.json")[0]["occurrences"]
-rc, out = run(mem, plan_rep)
-occ_after_second = load(mem, "iterations/errors.json")[0]["occurrences"]
-check(occ_after_second == occ_after_first,
-      f"repeated plan does not re-count the recurrence (was {occ_after_first}, now {occ_after_second})")
-check(out["tally"]["errors_recurred"] == 0 and out["tally"]["iterations_skipped_duplicate"] == 1,
-      "a skipped duplicate iteration reports no error work at all")
 
 # --- 26. the ownership guard survives path traversal ------------------------
 # "iterations/../iterations/errors.json" is not in APPLIER_OWNED as a raw
@@ -1071,14 +925,37 @@ before_queue = read(mem, "working/user-candidates.json")
 rc, out = run(mem, {"date": "2026-07-27", "iterations": [{
     "type": "feature", "title": "Nur loggen", "tags": ["a", "b"], "summary": "s"}]})
 check(rc == 0 and out["tally"]["iterations_logged"] == 1, "iterations-only plan applies")
-check(out["tally"]["candidates_promoted"] == 0
-      and read(mem, "identity/user.md") == before_user
+check(read(mem, "identity/user.md") == before_user
       and read(mem, "working/user-candidates.json") == before_queue,
-      "iterations-only plan leaves user.md and the candidate queue untouched (identity growth is wrap-up's)")
+      "iterations-only plan leaves user.md and the candidate queue untouched")
+# 6.0.0: the identity harvest is gone - a consolidating plan no longer re-reviews or promotes the queue
 mem = make_mem()
+before_user = read(mem, "identity/user.md")
+before_queue = read(mem, "working/user-candidates.json")
 rc, out = run(mem, {"date": "2026-07-27", "consolidate": True})
-check(out["tally"]["candidates_promoted"] == 1,
-      "a consolidating plan without a user_candidates key still re-reviews the full queue")
+check(rc == 0 and read(mem, "identity/user.md") == before_user
+      and read(mem, "working/user-candidates.json") == before_queue
+      and not os.path.exists(os.path.join(mem, "identity", "briefing-lines.txt")),
+      "a consolidating plan leaves user.md, the queue and the projection untouched (no promotion in 6.0.0)")
+# 6.0.0: the queue is frozen data - only a plan that reads it (identity_expire, corrections.profile_candidates)
+# preflights it, so a broken queue no longer blocks an unrelated plan
+mem = make_mem()
+write(mem, "working/user-candidates.json", "{ kaputt")
+rc, out = run(mem, {"date": "2026-07-27", "iterations": [{"type": "fix", "title": "Trotz kaputter Queue"}]})
+check(rc == 0 and "Trotz kaputter Queue" in read(mem, "iterations/iteration-log.md")
+      and read(mem, "working/user-candidates.json") == "{ kaputt",
+      f"a broken user-candidates.json does not stop an iterations-only plan and stays untouched "
+      f"(rc={rc}, {out.get('error')})")
+for name, extra in (("identity_expire", {"identity_expire": {"older_than_days": 30, "reason": "r"}}),
+                    ("corrections.profile_candidates",
+                     {"corrections": {"profile_candidates": [{"id": "UC1", "observation": "x", "reason": "r"}]}})):
+    mem = make_mem()
+    write(mem, "working/user-candidates.json", "{ kaputt")
+    before_log = os.path.exists(os.path.join(mem, "iterations", "iteration-log.md"))
+    rc, out = run(mem, {"date": "2026-07-27", "iterations": [{"type": "fix", "title": "Nie geschrieben"}], **extra})
+    check(rc == 2 and "user-candidates.json" in str(out.get("error"))
+          and os.path.exists(os.path.join(mem, "iterations", "iteration-log.md")) == before_log,
+          f"a plan with {name} still stops on a broken queue before the first byte (rc={rc}, {out.get('error')})")
 
 # --- 33. plan via stdin survives a cp1252 console (Windows heredoc path) ----------
 # The skill pipes the plan as a heredoc. On Windows sys.stdin defaults to cp1252,
@@ -1095,44 +972,107 @@ texts = [e["text"] for e in load(mem, "learnings/learnings.json")]
 check(proc.returncode == 0 and "Gedankenstrich — bleibt — erhalten" in texts,
       f"stdin plan is decoded as UTF-8 regardless of console encoding (got {texts[-1:]!r})")
 
-# --- 34. promotion never duplicates a line that already sits in user.md ----------
-# 2026-07-27 (agentic-os store): UC1-UC3 were promoted a second time as plain
-# duplicates of lines already present. Guard: id already cited OR Jaccard >= 0.6.
+
+# --- 35. 6.0.0: old plan sections are ignored and counted, never refused ----
+def sha(mem_, rel):
+    import hashlib
+    path = os.path.join(mem_, rel)
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+# test_iteration_errors_werden_ignoriert
 mem = make_mem()
-write(mem, "identity/user.md", "# User Profile\n\n## Preferences\n\n"
-      "- **Ground-Truth vor Aktion** — Behauptungen aus Reports gegen die Live-Realitaet pruefen, nicht der Buchhaltung trauen. [UC2, confirmed]\n"
-      "- Codex-Verifier nach jeder substanziellen Aenderung anbieten (UC7, 2026-07-01)\n\n## Work Style\n\n- x\n")
-put(mem, "working/user-candidates.json", [
-    {"id": "UC2", "observation": "Ground-Truth vor Aktion: Behauptungen aus Reports gegen die Live-Realitaet pruefen, nicht der Buchhaltung trauen",
-     "signal_type": "preference", "status": "confirmed", "occurrences": 3, "confidence": 0.9, "trust_source": "conversation", "evidence": ["e"]},
-    {"id": "UC9", "observation": "Codex-Verifier nach jeder substanziellen Aenderung anbieten",
-     "signal_type": "preference", "status": "confirmed", "occurrences": 2, "confidence": 0.8, "trust_source": "conversation", "evidence": ["e"]},
-    {"id": "UC10", "observation": "Bevorzugt Deutsch in der Kommunikation und Englisch in Code und Dateinamen",
-     "signal_type": "communication", "status": "confirmed", "occurrences": 2, "confidence": 0.8, "trust_source": "conversation", "evidence": ["e"]}])
-rc, out = run(mem, {"date": "2026-09-09", "consolidate": True})
-umd = read(mem, "identity/user.md")
-check(rc == 0 and out["tally"]["promotion_skipped_duplicate"] == 2 and out["tally"]["candidates_promoted"] == 1,
-      f"duplicate candidates (id cited / near-identical text) are skipped, the new one promoted ({out.get('tally')})")
-check(umd.count("Ground-Truth vor Aktion") == 1 and umd.count("Codex-Verifier") == 1 and "Deutsch in der Kommunikation" in umd,
-      "user.md gains exactly one new line and no duplicates")
-queue = load(mem, "working/user-candidates.json")
-check(all(c["status"] == "promoted" for c in queue)
-      and [c["status_after_promotion"] for c in queue if c["id"] != "UC10"] == ["duplicate_of_existing"] * 2,
-      "skipped duplicates leave the queue as promoted/duplicate_of_existing (no eternal re-review)")
-changelog = load(mem, "identity/user-changelog.json")
-check([e["candidate_id"] for e in changelog] == ["UC2", "UC9", "UC10"]
-      and [e["field"] for e in changelog] == ["user.md/skipped-duplicate", "user.md/skipped-duplicate", "user.md/Preferences"]
-      and changelog[0]["old_value"].startswith("- **Ground-Truth vor Aktion**"),
-      "skipped duplicates leave an audit entry naming the matched line; the real promotion is logged as before")
-# a genuinely different preference on the same topic must still be promoted (threshold 0.8, not 0.6)
+errors_sha = sha(mem, "iterations/errors.json")
+rc, out = run(mem, {"date": "2026-07-27", "iterations": [{
+    "type": "bugfix", "title": "Ein Fehler", "tags": ["x", "y"], "summary": "s",
+    "errors": [{"category": "runtime", "tags": ["node", "timeout"], "problem": "Hing",
+                "root_cause": "Kein Timeout gesetzt", "fix": "Timeout ergaenzt", "severity": "major"}]}]})
+log = read(mem, "iterations/iteration-log.md")
+check(rc == 0 and "## 2026-07-27 — bugfix: Ein Fehler" in log and "**Errors:**" not in log,
+      f"test_iteration_errors_werden_ignoriert: iteration-log.md gets the block, without an Errors field "
+      f"(rc={rc}, {out.get('error')})")
+check(sha(mem, "iterations/errors.json") == errors_sha and "iterations/errors.json" not in out.get("files_written", []),
+      "test_iteration_errors_werden_ignoriert: errors.json sha256 unchanged, not in files_written")
+check(out.get("tally", {}).get("ignored_sections") == ["errors"],
+      f"test_iteration_errors_werden_ignoriert: tally.ignored_sections == ['errors'] "
+      f"({out.get('tally', {}).get('ignored_sections')})")
+check(out.get("ignored_status_line") == "Ignoriert (6.0.0): errors",
+      f"test_iteration_errors_werden_ignoriert: status line names the ignored key ({out.get('ignored_status_line')!r})")
+check(load(mem, "working/current-session.json")["errors_this_session"] == [],
+      "test_iteration_errors_werden_ignoriert: no error id lands in working/current-session.json")
+
+# test_errors_json_bleibt_liegen
 mem = make_mem()
-write(mem, "identity/user.md", "# User Profile\n\n## Preferences\n\n- Vor jedem Deployment alle Tests ausfuehren (UC7, 2026-07-01)\n\n## Work Style\n\n- x\n")
-put(mem, "working/user-candidates.json", [
-    {"id": "UC11", "observation": "Vor jedem Deployment nur die betroffenen Module testen, die volle Suite erst vor dem Release",
-     "signal_type": "preference", "status": "confirmed", "occurrences": 2, "confidence": 0.8, "trust_source": "conversation", "evidence": ["e"]}])
-rc, out = run(mem, {"date": "2026-09-09", "consolidate": True})
-check(rc == 0 and out["tally"]["candidates_promoted"] == 1 and out["tally"]["promotion_skipped_duplicate"] == 0,
-      "a related but different preference is promoted, not swallowed as duplicate")
+put(mem, "iterations/errors.json", [{"id": f"err-00{i}", "category": "x", "tags": ["a", "b"]} for i in (1, 2, 3)])
+errors_bytes = read(mem, "iterations/errors.json")
+rc, out = run(mem, {"date": "2026-07-27", "consolidate": True, "iterations": [
+    {"type": "bugfix", "title": "Mit Fehlern", "tags": ["a", "b"], "summary": "s",
+     "errors": [{"category": "x", "tags": ["a", "b"], "problem": "p"}]}]})
+check(rc == 0 and os.path.exists(os.path.join(mem, "iterations", "errors.json"))
+      and len(load(mem, "iterations/errors.json")) == 3 and read(mem, "iterations/errors.json") == errors_bytes,
+      f"test_errors_json_bleibt_liegen: errors.json keeps its 3 entries byte for byte (rc={rc}, {out.get('error')})")
+
+# a broken errors.json no longer blocks anything: nothing reads it
+mem = make_mem()
+write(mem, "iterations/errors.json", "{ kaputt")
+rc, out = run(mem, {"date": "2026-07-27", "iterations": [{"type": "fix", "title": "Trotz kaputter errors.json"}]})
+check(rc == 0 and "Trotz kaputter errors.json" in read(mem, "iterations/iteration-log.md")
+      and read(mem, "iterations/errors.json") == "{ kaputt",
+      f"an unreadable errors.json does not stop an iterations plan and stays untouched (rc={rc}, {out.get('error')})")
+
+# the generic write path and the iterations applier both refuse errors.json (frozen data since 6.0.0)
+spec = importlib.util.spec_from_file_location("apply_wrapup4", SCRIPT)
+aw4 = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(aw4)
+mem = make_mem()
+for via in (None, "iterations"):
+    try:
+        aw4.write_atomic(mem, "iterations/errors.json", "[]", False, [], via=via)
+        fail(f"errors.json must be refused (via={via})")
+    except aw4.PlanError:
+        pass_(f"errors.json is refused on every write path (via={via})")
+
+# user_candidates: ignored (even malformed ones), the identity files stay byte-identical, nothing is promoted
+mem = make_mem()
+before = snapshot(mem)
+rc, out = run(mem, {"date": "2026-07-27", "user_candidates": [
+    {"key": "neu", "observation": "Neue Beobachtung", "signal_type": "workflow", "confirmed": True, "quote": 5}]})
+after = snapshot(mem)
+check(rc == 0 and all(after.get(f) == before.get(f) for f in
+                      ("identity/user.md", "identity/user-changelog.json", "working/user-candidates.json"))
+      and out.get("tally", {}).get("ignored_sections") == ["user_candidates"]
+      and out.get("ignored_status_line") == "Ignoriert (6.0.0): user_candidates",
+      f"user_candidates are ignored, identity files byte-identical, counted "
+      f"(rc={rc}, {out.get('error')}, {out.get('tally', {}).get('ignored_sections')})")
+check("identity_status_line" not in out, "the old identity status line is gone")
+rc, out = run(make_mem(), {"date": "2026-07-27", "user_candidates": [{"key": "k"}],
+                           "iterations": [{"title": "x", "errors": [{"problem": "q"}]}, {"title": "y", "errors": [{"problem": "p"}]}]})
+check(rc == 0 and out.get("tally", {}).get("ignored_sections") == ["errors", "user_candidates"]
+      and out.get("ignored_status_line") == "Ignoriert (6.0.0): errors, user_candidates",
+      f"several ignored sections: sorted, without duplicates ({out.get('tally', {}).get('ignored_sections')})")
+
+# test_leere_alte_sektionen_zaehlen_nicht: an empty list carries nothing, so nothing was ignored
+rc, out = run(make_mem(), {"date": "2026-07-27", "user_candidates": [],
+                           "iterations": [{"title": "x", "errors": []}, {"title": "y"}]})
+check(rc == 0 and out.get("tally", {}).get("ignored_sections") == [] and "ignored_status_line" not in out,
+      f"test_leere_alte_sektionen_zaehlen_nicht: empty user_candidates / errors lists are not counted "
+      f"({out.get('tally', {}).get('ignored_sections')})")
+rc, out = run(make_mem(), {"date": "2026-07-27", "user_candidates": [],
+                           "iterations": [{"title": "x", "errors": []}, {"title": "y", "errors": [{"problem": "p"}]}]})
+check(rc == 0 and out.get("tally", {}).get("ignored_sections") == ["errors"],
+      f"only the non-empty old section is counted ({out.get('tally', {}).get('ignored_sections')})")
+
+# nothing ignored: the field is there and empty, no status line
+rc, out = run(make_mem(), {"date": "2026-07-27", "learnings": [{"text": "Normal", "importance": 3}]})
+check(rc == 0 and out.get("tally", {}).get("ignored_sections") == [] and "ignored_status_line" not in out,
+      f"a plan without old sections: ignored_sections == [] and no status line "
+      f"({out.get('tally', {}).get('ignored_sections')})")
+rc, out = run(make_mem(), {"date": "2026-07-27", "user_candidates": [{"key": "k"}]}, "--dry-run")
+check(rc == 0 and out.get("tally", {}).get("ignored_sections") == ["user_candidates"],
+      "--dry-run counts the ignored sections too")
 
 for tmp in []:
     shutil.rmtree(tmp, ignore_errors=True)

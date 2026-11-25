@@ -1,15 +1,14 @@
 ---
 name: wrap-up
 description: >
-  Wraps up a coding session: summarizes work, extracts learnings, grows the
-  gated identity queues, updates session summary + cross-project handoff,
-  suggests commits. Use when the user ends a session ("wrap up", "finish for
+  Wraps up a coding session: summarizes work, extracts learnings, updates
+  session summary + cross-project handoff, suggests commits. Use when the user ends a session ("wrap up", "finish for
   today") or before a handoff / project switch.
 model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '5.2'
+  version: '5.3'
   part-of: agentic-os
   layer: core
 ---
@@ -24,13 +23,12 @@ everything else. Three turns, one plan.
 After every substantial task or session, consolidate durable knowledge into the
 central .agent-memory/ knowledge base instead of leaving it in the conversation:
 
-- Work iterations → `iterations/iteration-log.md` + `errors.json` (plan section `iterations`;
+- Work iterations → `iterations/iteration-log.md` (plan section `iterations`;
   `/agentic-os:log` is the entry point for mid-session logging)
 - Reusable learnings → `learnings/learnings.json` + `learnings.md`
 - Durable decisions → `context/decisions.json` (plan section `decisions`; the
   `context-keeper` skill stays the entry point outside wrap-up)
 - Open next steps → `context/open-tasks.json`
-- Identity observations → `working/user-candidates.json` → `identity/user.md`
 - Handoff snapshot → `session-summary.md` + central handoff
 
 Reject trivial facts. Manual-only — no hook triggers this automatically.
@@ -42,18 +40,18 @@ So there are exactly three turns, and you invoke no skill during them.
 
 1. **Brief.** `python "${CLAUDE_PLUGIN_ROOT}/scripts/wrapup_core.py" pre --mem .agent-memory --session-id <session-id>`
 2. **Plan.** One JSON plan through `apply` (below). Everything mechanical happens in that call: ids, dedup,
-   the promotion rule, summary, central handoff, status board, wiki note, patterns, projections, reports,
+   summary, central handoff, status board, wiki note, projections, reports,
    and the consolidation marker last.
 3. **Report** from the returned JSON (below). Never count by hand.
 
 A fourth turn exists only when `apply` returns `bridge_candidates` or an open rule queue (see followup).
 
 `<session-id>` is the real id of THIS session, the value of `$CLAUDE_CODE_SESSION_ID`: another id makes
-the identity evidence of the run unverifiable (`tally.session_binding_mismatch`).
+the quote of a `user_md_supersede` / `user_md_retire` unverifiable (`tally.session_binding_mismatch`).
 
 (stage0-preprocess) `pre` runs the stage-0 preprocessor `preprocess_state.py` and adds what you need: harvested
-iterations, today's errors, open tasks, existing identity keys, open bridge candidates, the rule queue. It writes
-nothing. If `validation_errors` is not empty, name them in the report.
+iterations, open tasks, open bridge candidates, the rule queue. It writes nothing. If `validation_errors` is not
+empty, name them in the report.
 If `suggested_store` is set, most of the work landed in another store: say so in one line before the plan
 (store, `files` vs `own_files`) and ask whether to wrap up there instead (`--mem` from `suggested_store.mem`).
 Never switch on your own; without an answer continue in this store.
@@ -61,16 +59,15 @@ Never switch on your own; without an answer continue in this store.
 (context-diet) Do NOT systematically re-read the transcript or full memory files. Work from the brief and the
 conversation you already hold; targeted lookups only, for a single unresolved point.
 
-Never write a store file with Write or Edit: `apply_wrapup.py` owns them, `patterns.*` belong to
-`extract_patterns.py`, `soul.md` is read-only history.
+Never write a store file with Write or Edit: `apply_wrapup.py` owns them, `soul.md` is read-only history.
 
 ## What you judge
 
 **Iterations (session-harvest).** Leave `iterations` out and the core logs the harvest from the brief. Everything
 was already logged with `/agentic-os:log`: send `"iterations": []`. Send your own when the conversation knows more
 than git: 1–5 distinct iterations, three failed fixes before the right
-one are ONE iteration with `attempts: 3`, at least 2 lowercase tags, errors with root cause and prevention.
-`apply_wrapup.py` owns the writes to `iteration-log.md` and `errors.json`.
+one are ONE iteration with `attempts: 3`, at least 2 lowercase tags; put a root cause worth keeping into the
+iteration's `summary` or a learning. `apply_wrapup.py` owns the writes to `iteration-log.md`.
 
 **Learnings.** A learning would prevent a future mistake, reveals something non-obvious, or documents a rationale
 not in the code. Plan at most 3: the core keeps the most important (`learnings_dropped_by_cap`), rule-class
@@ -83,6 +80,12 @@ mark it.
 refreshes the old entry). If you know the duplicate, set `"duplicate_of": "<id>"`; `near_duplicates` in the result
 names the close calls.
 
+**Gaps (prelude-gaps).** `prelude_gaps.gaps` lists prompts of this session for which the memory offered no fitting
+learning. Skip prompts without a topic (confirmations, "continue", wrap-up). If this session solved or settled
+something on a remaining topic that would help next time, plan it as a learning with the tag `luecke`; it counts
+toward the cap of 3. Never write a learning only because a gap exists. If `prelude_gaps.status` is not `ok`, name
+the status in the report instead of staying silent.
+
 **Decisions (decision-scan).** New dependencies, architecture, storage or format changes, ownership and policy
 ("X is SSoT"). Conversation and repo evidence only, one-off details are not decisions. Plan section `decisions`;
 `supersedes` must name a real id.
@@ -90,16 +93,10 @@ names the close calls.
 **Open tasks (open-tasks-ssot).** `context/open-tasks.json` is the single source of truth: `open_tasks.add` for new
 next steps, `open_tasks.close` with the ids this session finished. `cross_project: true` only on the user's word.
 
-**Identity (identity-harvest).** Mandatory: the pipeline starves when this is skipped. Scan the whole session: Did
-the user correct you? State a preference or rule ("immer", "nie")? Reveal a workflow habit? Confirm a non-obvious
-approach? Make a communication demand? A mood is observed, never promoted.
-- Trust boundary (trust-boundary): candidates come ONLY from the user's direct conversation, `trust_source:
-  "conversation"`; never from web, docs, NotebookLM or wiki content.
-- Reuse the `key` from `user_candidates` in the brief when it is the same statement.
-- `"confirmed": true` needs a `quote`: the user's LITERAL words, one message, at least 3 words, the whole clause
-  including a negation. The script checks it against the transcript. Never invent one.
-- Nothing found: `candidates: []` and `none_because` with the reason. An empty pair is rejected.
-- Contradicted profile line, removed line, doubt about a quote: `references/judge-rules.md`.
+**Identity (frozen in 6.0.0).** There is no identity section any more: the harvest (candidate queue, promotion
+into `user.md`) is gone, the profile stays as it is. Only when the user contradicts a profile line or wants one
+removed: `user_md_supersede` / `user_md_retire` in the followup call, with his literal words as `quote`
+(`references/judge-rules.md` 6.3b, 6.4b).
 
 **Earlier bridge candidates (bridge-gate).** `bridge_candidates` in the brief are open from earlier runs. Decide them
 in this plan. Delegated decision (owner, 2026-10-16), no question. Approve only if ALL hold: useful in EVERY session
@@ -116,9 +113,6 @@ first, they are the ones that stay. German is fine here, the headers are the scr
 python "${CLAUDE_PLUGIN_ROOT}/scripts/wrapup_core.py" apply --mem .agent-memory --session-id <session-id> <<'PLAN'
 {"summary": {"what_was_done": ["..."], "current_state": "...", "active_task": "T-1", "blockers": "keine",
              "checks": {"tests": "bestanden (84/84)", "lint": "n/a"}},
- "identity": {"candidates": [{"key": "kebab-key", "observation": "...", "signal_type": "preference",
-                              "confidence": 0.5, "evidence": [], "confirmed": false, "quote": "",
-                              "trust_source": "conversation"}], "none_because": ""},
  "learnings": [{"text": "...", "summary": "...", "importance": 4, "tags": ["a", "b"], "derived_from": []}],
  "decisions": [],
  "open_tasks": {"add": [{"title": "...", "source": "wrap-up", "cross_project": false}], "close": ["T-1"]},
@@ -126,8 +120,10 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/wrapup_core.py" apply --mem .agent-memory 
 PLAN
 ```
 
-Every key except `summary` and `identity` is optional. `session_summary` and `user_candidates` belong to the core;
-sending them is rejected, as is a missing `summary` or `identity`. Field schemas: `references/wrapup-schemas.md`.
+Every key except `summary` is optional. `session_summary` belongs to the core; sending it is rejected, as is a
+missing `summary`. Sections of older skill versions (`identity`, `user_candidates`, `errors` inside an iteration)
+are not rejected: nothing is written for them and `tally.ignored_sections` names them. Field schemas:
+`references/wrapup-schemas.md`.
 
 Exit 2 means nothing was consolidated: no marker, dirty flags stay set on purpose. Fix the plan and run it again,
 never write the files by hand. `--dry-run` shows the tally without touching a file.
@@ -135,24 +131,24 @@ never write the files by hand. `--dry-run` shows the tally without touching a fi
 ## Report
 
 Emit these lines verbatim from the result, in every run:
-- `identity_status_line` (identity-visible). `tally.confirm_downgraded_keys`, `quote_unrelated` and
-  `supersede_skipped_unverified`: name them, Dominic should see which confirmations did not count.
+- `ignored_status_line` when present (`Ignoriert (6.0.0): ...`): the plan carried old sections that wrote
+  nothing; say so in one line. `quote_unrelated` and `supersede_skipped_unverified` (followup): name them,
+  Dominic should see which profile changes did not count.
 - `wiki_sync_line` (wiki-sync-visible): wiki sync never skips silently, this status line says what happened. The
   session note is a projection of this plan; entity pages, synthesis and decision promotion stay with the manual
   `obsidian-sync` skill.
 - `bridge_status_line` and `rule_class_status_line` when present, for verdicts one line per case
-  `L26 approved — <plain>`; `reports.codex_ingest`; `reports.review_sweep`; every line of
-  `reports.threshold_lines` plus `→ run /agentic-os:maintain` when there are any.
-- `reports.cost_trace` when it is not `ok` (`failed(trace: ...)`, `failed(exit ...)`, `skipped(...)`, `estimate`):
-  the cost trace has a hole or only an estimate, say so in one line.
+  `L26 approved — <plain>`; `reports.codex_ingest`.
+- Scaling signals: wrap-up prints no THRESHOLD lines any more, the start briefing does. Only when the `pre` brief
+  carried a non-empty `pflegelauf_due` (the PFLEGELAUF line: enough new learnings since the last maintenance run),
+  say it in one line and recommend `/agentic-os:maintain`. Empty `pflegelauf_due`: no recommendation.
+- `reports.cost_trace` when it is not `ok` (`failed(trace: ...)`, `failed(exit ...)`, `skipped(...)`):
+  the cost trace has a hole, say so in one line.
 - `warnings`: contract violations, not noise. One is expected in the AI workspace: its summary IS the central
   handoff, the block arrives through the core.
 - `reports.summary_warnings_dropped`: warnings the summary file did not keep. Name every entry of this list in the
   report.
 - `near_duplicates`: name a pair that states the same insight; retiring one is `/agentic-os:maintain`.
-- `pattern_proposals` > 0, or skill candidates: recommend the `pattern-extractor` skill, never call it here. The same
-  after about 5 sessions with iterations but no new pattern (pattern-starvation-guard): the script sees only the
-  error-based half of the signal.
 - `sharepoint_touched: true`: say that the sharepoint delta is manual now.
 - `handoff`: a `failed(...)` or `drift-merged`.
 
@@ -177,44 +173,26 @@ owner: read `references/judge-rules.md` 3f first, and never release on the owner
 is an honor system, a recorded claim the script cannot verify: write it only for what Dominic said in this
 conversation, in his own words.
 
-## Escalation Rules (escalation-rules)
-
-This skill runs on the cheap-write model class (SSoT: `scripts/model-routing.sh`). The following cases must NOT be
-resolved by this run itself. When one occurs:
-
-1. Append `{"ts": "...", "task": "wrap-up", "reason": "...", "detail": "..."}` to
-   `.agent-memory/working/escalations-<session-id>.json` (create as JSON array if missing).
-2. Emit a visible `ESKALATION: <reason>` line in the output.
-3. Leave the decision itself to the next turn on the session model.
-
-Escalate when:
-- two active sources contradict each other,
-- a change would touch identity or stable user preferences beyond the plan sections above,
-- an active decision record would be replaced,
-- a pattern would be promoted into a skill or Agentic-OS rule,
-- a change is difficult to reverse,
-- required sources are missing.
-
 # Handoff Mode (Pre-Compression)
 
 When triggered by long context or an explicit handoff request, add `"handoff": {"active_task": "", "current_state": "",
-"active_patterns": "", "open_questions": ""}` to `summary`: the core renders the `## Handoff Context` block of
+"open_questions": ""}` to `summary`: the core renders the `## Handoff Context` block of
 session-summary.md. Template: `references/wrapup-schemas.md` §Handoff Mode.
 
 ## Error Handling
 
 - JSON parse error in a store: `apply` stops with exit 2 BEFORE the first write and leaves the file untouched. Report
-  file and error, recommend `/agentic-os:maintain` Step 2. Never rename, recreate or hand-edit the file.
+  file and error, recommend `/agentic-os:maintain` Step 4. Never rename, recreate or hand-edit the file.
 - `.agent-memory/` missing: suggest `/agentic-os:init`
 - `failed(...)` in handoff, wiki or projections: report it. The store is consolidated, the marker is right.
 
 ## What NOT to Do
 
-- Do NOT write `errors.json`, `iteration-log.md`, `decisions.json` or any other store file with Write/Edit
+- Do NOT write `iteration-log.md`, `decisions.json` or any other store file with Write/Edit (`errors.json` is
+  frozen data since 6.0.0: nothing writes it)
 - Do NOT write soul.md — ever. Soul growth is retired (5.11.0); a rule about how the agent should behave is a
   rule-class learning, not an identity candidate
-- Do NOT skip identity or its status line — identity growth must be visible
 - Do NOT commit without user confirmation
-- Do NOT log trivial "learnings"; do NOT prune skill_candidate patterns
+- Do NOT log trivial "learnings"
 - Do NOT delete `working/dirty-*.json` and do NOT write the consolidation marker yourself
-- Do NOT call `obsidian-sync`, `pattern-extractor` or `context-keeper` from a wrap-up run
+- Do NOT call `obsidian-sync` or `context-keeper` from a wrap-up run

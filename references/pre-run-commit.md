@@ -1,7 +1,7 @@
 # Pre-Run Commit (backup light)
 
 Shared snapshot procedure for skills and commands that mutate `.agent-memory/`
-(/agentic-os:maintain, obsidian-sync). Gives every mutating run a one-command
+(obsidian-sync). Gives every mutating run a one-command
 rollback. The invoking skill or command supplies its own commit message.
 
 1. `git -C {project_root} rev-parse --is-inside-work-tree` fails → skip silently

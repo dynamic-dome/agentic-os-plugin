@@ -16,8 +16,11 @@ Display the current state of the memory system.
 
 2. **Statistics:**
    - Total iterations logged (count entries in `iterations/iteration-log.md`)
-   - Total patterns (count in `patterns/patterns.json`)
-   - Total errors (count in `iterations/errors.json`)
+   - Total learnings (count in `learnings/learnings.json`)
    - Total decisions (count in `context/decisions.json`)
+   - Pflegelauf due? (`bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-thresholds.sh" .agent-memory` prints a
+     `PFLEGELAUF:` line when a Pflegelauf is due; the threshold lives only in that script)
+
+   `iterations/errors.json` and `patterns/` are frozen data since 6.0.0 and are not counted.
 
 3. **Format** as a compact table.

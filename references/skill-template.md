@@ -74,12 +74,11 @@ The 5 active skills, grouped by layer. (Trigger phrases in frontmatter MUST be E
 | Layer | Purpose | Skills |
 |-------|---------|--------|
 | core | Memory, context, session lifecycle | session-bootstrap, wrap-up, context-keeper |
-| analysis | Pattern detection, skill generation | pattern-extractor |
 | knowledge | Wiki write-path | obsidian-sync |
 
 > Note: `code-reviewer`, `test-validator`, and `tdd` were merged into `quality-gate` (v3.x), which
 > was removed in v4.0.0 together with research-pipeline, wiki-query, retrospective and
-> skill-generator (folded into pattern-extractor). The deprecated agents `improvement-scout` and
+> skill-generator (folded into the pattern skill, itself removed in 6.0.0). The deprecated agents `improvement-scout` and
 > `fix-reviewer` were removed (2026-04-30), `improvement-agent`/`research-agent` in 4.15.0;
 > `self-improve` was archived in v5.0.0 (`_archived/`). memory-maintenance, iteration-logger and
 > sync-context became commands with a script core in v5.0.0 (maintain, log, sync-context); the

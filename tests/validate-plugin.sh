@@ -218,25 +218,6 @@ else
     fail "session-start.sh: not found"
 fi
 
-# 10. pattern-extractor skill candidate generation (skill-generator folded in, v4.0.0)
-#     Must gate on confidence>=0.7 + occurrences>=3, include a uniqueness check,
-#     and write to .agent-memory/generated-skills/.
-echo ""
-echo "-- pattern-extractor skill candidate generation --"
-PE_SKILL="$PLUGIN_ROOT/skills/pattern-extractor/SKILL.md"
-if [ -f "$PE_SKILL" ]; then
-    if grep -qi "Skill Candidate Generation" "$PE_SKILL" \
-       && grep -q "generated-skills" "$PE_SKILL" \
-       && grep -qi "duplicate\|unique\|already exist\|conflict\|exists" "$PE_SKILL"; then
-        pass "pattern-extractor: skill candidate generation section with uniqueness check present"
-    else
-        fail "pattern-extractor: missing Skill Candidate Generation section (folded-in skill-generator) with generated-skills path and uniqueness check"
-    fi
-else
-    fail "pattern-extractor: SKILL.md not found"
-fi
-
-
 # 11. context-detective has concrete output template
 echo ""
 echo "-- context-detective output template --"
@@ -300,25 +281,6 @@ if [ -f "$HOOKS_FILE" ]; then
     fi
 else
     fail "hooks.json not found"
-fi
-
-
-# 30. pattern-extractor skill-candidate template must include 'name:' in generated frontmatter.
-#     (skill-generator folded into pattern-extractor in v4.0.0.) Beyond pattern-extractor's own
-#     'name: pattern-extractor' frontmatter line, the generated-skill template must carry a
-#     second 'name:' placeholder line (e.g. 'name: <skill-name>').
-echo ""
-echo "-- pattern-extractor skill-candidate template name field --"
-PE_SKILL="$PLUGIN_ROOT/skills/pattern-extractor/SKILL.md"
-if [ -f "$PE_SKILL" ]; then
-    NAME_COUNT=$(grep -c "^[[:space:]]*name:" "$PE_SKILL")
-    if [ "$NAME_COUNT" -ge 2 ]; then
-        pass "pattern-extractor: generated SKILL.md template includes 'name:' in frontmatter"
-    else
-        fail "pattern-extractor: generated SKILL.md template missing 'name:' in frontmatter — generated skills won't be identifiable by registry or pass skill validation"
-    fi
-else
-    fail "pattern-extractor: SKILL.md not found"
 fi
 
 
@@ -423,7 +385,7 @@ echo "-- status command memory file paths --"
 STATUS_CMD="$PLUGIN_ROOT/commands/status.md"
 if [ -f "$STATUS_CMD" ]; then
     # The statistics section should reference subdirectory paths, not bare filenames
-    if grep -qE "iterations/iteration-log|patterns/patterns\.json|iterations/errors\.json|context/decisions\.json" "$STATUS_CMD"; then
+    if grep -qE "iterations/iteration-log|iterations/errors\.json|context/decisions\.json" "$STATUS_CMD"; then
         pass "status: memory file paths include subdirectory prefixes (agents can locate files correctly)"
     else
         fail "status: statistics section references bare filenames (e.g. 'patterns.json') without subdirectory paths — agents will look in wrong location and always report 0 entries"
@@ -466,7 +428,7 @@ fi
 echo ""
 echo "-- DEPENDENCIES.md inter-skill-call accuracy (Principle 4) --"
 if [ -f "$DEPS" ]; then
-    OTHER_SKILLS="pattern-extractor obsidian-sync context-keeper"
+    OTHER_SKILLS="obsidian-sync context-keeper"
     CALL_DRIFT=""
     for skill_dir in "$PLUGIN_ROOT/skills"/*/; do
         [ -d "$skill_dir" ] || continue
@@ -833,7 +795,7 @@ if [ -f "$SS_SCRIPT" ]; then
     git init -q "$TMPDIR_TEST"   # 5.13.0: auto-init needs a git repo (or the plugin option)
     CLAUDE_PROJECT_DIR="$TMPDIR_TEST" bash "$SS_SCRIPT" > /dev/null 2>&1 || true
     MISSING=""
-    for subdir in identity context iterations patterns learnings generated-skills; do
+    for subdir in identity context iterations learnings working; do
         [ ! -d "$TMPDIR_TEST/.agent-memory/$subdir" ] && MISSING="$MISSING $subdir"
     done
     if [ -z "$MISSING" ]; then
@@ -841,9 +803,20 @@ if [ -f "$SS_SCRIPT" ]; then
     else
         fail "session-start.sh: auto-init missing directories:$MISSING"
     fi
+    # 6.0.0: the pattern mechanics are gone - a new store gets no generated-skills/ and no patterns/
+    # (existing stores keep theirs untouched)
+    UNEXPECTED=""
+    for gone in generated-skills patterns; do
+        [ -e "$TMPDIR_TEST/.agent-memory/$gone" ] && UNEXPECTED="$UNEXPECTED $gone/"
+    done
+    if [ -z "$UNEXPECTED" ]; then
+        pass "session-start.sh: auto-init creates no generated-skills/ and no patterns/ (6.0.0)"
+    else
+        fail "session-start.sh: auto-init still creates directories of the removed pattern mechanics:$UNEXPECTED"
+    fi
     # Check key files created
     FILES_OK=true
-    for keyfile in session-summary.md identity/soul.md context/project-context.md iterations/errors.json patterns/patterns.json; do
+    for keyfile in session-summary.md identity/soul.md context/project-context.md iterations/errors.json; do
         [ ! -f "$TMPDIR_TEST/.agent-memory/$keyfile" ] && FILES_OK=false
     done
     if [ "$FILES_OK" = true ]; then
@@ -952,7 +925,7 @@ for SKILL_FILE in "$PLUGIN_ROOT"/skills/*/SKILL.md "$PLUGIN_ROOT"/commands/*.md;
         pass "$SKILL_NAME: no dead user_invocable field"
     fi
 done
-for CALLED_SKILL in context-keeper pattern-extractor obsidian-sync; do
+for CALLED_SKILL in context-keeper obsidian-sync; do
     FM=$(awk 'BEGIN{c=0} /^---/{c++; next} c==1{print} c==2{exit}' "$PLUGIN_ROOT/skills/$CALLED_SKILL/SKILL.md")
     if echo "$FM" | grep -q "^disable-model-invocation: true"; then
         fail "skill $CALLED_SKILL: has disable-model-invocation but is invoked by wrap-up/self-improve via the Skill tool — the flag would break that delegation"
@@ -1017,15 +990,14 @@ else
                    identity/user-changelog.json identity/soul-candidates.md \
                    context/decisions.json context/open-tasks.json \
                    iterations/iteration-log.md iterations/errors.json \
-                   patterns/patterns.md patterns/patterns.json \
                    learnings/learnings.md learnings/learnings.json \
                    working/current-session.json \
                    working/user-candidates.json \
                    session-summary.md; do
             [ -f "$SCHEMA_TMP/.agent-memory/$req" ] || MISSING="$MISSING $req"
         done
-        # The init stub must carry the projection header that maintain 5.2 and
-        # memory-audit check — otherwise every fresh store is flagged "regenerate".
+        # The init stub must carry the same projection header that apply_wrapup.py renders for an
+        # empty learnings.json — otherwise a fresh store looks hand-edited next to a rendered one.
         LMD_STUB=$(sed -n 3p "$SCHEMA_TMP/.agent-memory/learnings/learnings.md" 2>/dev/null)
         # 5.11.0: empty stubs without a writer are NOT part of the schema any more.
         for gone in quality knowledge; do
@@ -1134,45 +1106,6 @@ else
     fail "session-start.sh: must flag a stray root .agent-memory/open-tasks.json as 'root drift' in the briefing"
 fi
 
-# --- /memory-audit command (Audit-Hebel #5, 2026-06-03) ---
-# A repeatable read-only drift/provenance/staleness report. The whole point is that running
-# it instead of trusting a months-old manual audit prevents stale-data conclusions.
-echo ""
-echo "-- /memory-audit command exists and is read-only --"
-MA_CMD="$PLUGIN_ROOT/commands/memory-audit.md"
-if [ ! -f "$MA_CMD" ]; then
-    fail "commands/memory-audit.md missing — Audit-Hebel #5: a repeatable read-only drift/provenance/staleness report"
-else
-    pass "commands/memory-audit.md exists"
-    # Must be read-only: allowed_tools may contain ONLY non-mutating tools. Bash is excluded too
-    # because `echo > file` / `rm` through Bash would bypass the read-only boundary (Codex MAJOR).
-    if grep -qE "^allowed_tools:" "$MA_CMD" && ! grep -qiE "\"(Write|Edit|NotebookEdit|Bash)\"" "$MA_CMD"; then
-        pass "memory-audit: read-only enforced by tool boundary (no Write/Edit/Bash in allowed_tools)"
-    else
-        fail "memory-audit: read-only not tool-enforced — allowed_tools must exclude Write/Edit/NotebookEdit AND Bash (Bash would let the audit mutate the store it inspects via echo>/rm)"
-    fi
-    # Must cover the three audit dimensions the manual audit got wrong from stale data.
-    if grep -qiE "drift" "$MA_CMD" && grep -qiE "staleness|stale" "$MA_CMD" && grep -qiE "provenance|schema" "$MA_CMD"; then
-        pass "memory-audit: covers drift + staleness + provenance/schema dimensions"
-    else
-        fail "memory-audit: must report drift (root open-tasks, schema), staleness (learnings layer age, quality last_updated) and provenance/schema consistency"
-    fi
-
-    # 5.11.0: the global layer is archived - memory-audit must no longer audit it.
-    if grep -qiE "\(global-provenance-audit\)|claude-memory/global" "$MA_CMD"; then
-        fail "memory-audit: still audits the archived global layer (global-provenance-audit / ~/.claude-memory/global) - removed in 5.11.0"
-    else
-        pass "memory-audit: no audit of the archived global layer (5.11.0)"
-    fi
-
-    # 4.A: the global audit must stay read-only — allowed_tools may not gain a write tool.
-    if grep -qiE "^allowed_tools:.*(Write|Edit|Bash)" "$MA_CMD"; then
-        fail "memory-audit: allowed_tools gained a write/exec tool — the audit MUST stay read-only"
-    else
-        pass "memory-audit: allowed_tools stays read-only (no Write/Edit/Bash)"
-    fi
-fi
-
 # --- Command/Skill name shadowing guard (L17, 2026-06-12) ---
 # A command with the same name as a skill SHADOWS the skill in the Skill tool:
 # invoking 'agentic-os:<name>' returns the command wrapper (which says "invoke the
@@ -1234,7 +1167,7 @@ if [ -f "$WU_SKILL36" ]; then
         echo $((ALL - NEG))
     }
     # Budget 0 since T-028b: the body is the judge, every mechanical step lives in wrapup_core.py.
-    for FORBIDDEN_CALLEE in iteration-logger context-keeper pattern-extractor obsidian-sync; do
+    for FORBIDDEN_CALLEE in iteration-logger context-keeper obsidian-sync; do
         N=$(positive_invokes "$FORBIDDEN_CALLEE")
         if [ "$N" -eq 0 ]; then
             pass "wrap-up: does not invoke $FORBIDDEN_CALLEE (delegation budget 0, T-028b)"
@@ -1248,7 +1181,7 @@ if [ -f "$WU_SKILL36" ]; then
     if echo "$HARVEST_BLOCK" | grep -qE '`iterations`'; then
         pass "wrap-up: (session-harvest) routes reconstructed iterations into the write plan"
     else
-        fail "wrap-up: (session-harvest) block no longer routes iterations anywhere — the bootstrap+wrap-up bracket starves the pattern pipeline"
+        fail "wrap-up: (session-harvest) block no longer routes iterations anywhere — the bootstrap+wrap-up bracket loses the session iterations"
     fi
     DSCAN_BLOCK="$(grep -A 16 "(decision-scan)" "$WU_SKILL36")"
     if echo "$DSCAN_BLOCK" | grep -qE '`decisions`'; then
@@ -1256,16 +1189,11 @@ if [ -f "$WU_SKILL36" ]; then
     else
         fail "wrap-up: (decision-scan) block no longer routes decisions anywhere — session decisions are lost"
     fi
-    if grep -qE '"extract_patterns.py", \[mem, "--update"\]' "$PLUGIN_ROOT/scripts/wrapup_core.py"; then
-        pass "wrap-up: the core runs the deterministic pattern extractor"
-    else
-        fail "wrap-up: wrapup_core.py does not call extract_patterns.py --update — the pattern pipeline starves"
-    fi
     # Write ownership still has to be stated - it moved to the script, it did not vanish.
     if echo "$HARVEST_BLOCK" | grep -q "apply_wrapup.py"; then
         pass "wrap-up: session-harvest names apply_wrapup.py as the owner of those writes"
     else
-        fail "wrap-up: session-harvest block lacks the write-ownership clause (apply_wrapup.py owns iteration-log.md/errors.json)"
+        fail "wrap-up: session-harvest block lacks the write-ownership clause (apply_wrapup.py owns iteration-log.md)"
     fi
 else
     fail "wrap-up: SKILL.md not found (session-harvest check)"
@@ -1292,41 +1220,147 @@ if echo "$WU_3A" | grep -q "(dedup-in-code" && echo "$WU_3A" | grep -q "apply_wr
 else
     fail "wrap-up Step 3a: block still reads learnings.json or lacks the dedup-in-code contract"
 fi
-# 5.3.0: the restore path is documented where the owner runs it, and the archive
-# files stay read-only in that procedure.
-MT_5B="$(sed -n '/^## Step 5b:/,/^## Step 6:/p' "$PLUGIN_ROOT/commands/maintain.md" 2>/dev/null)"
-if echo "$MT_5B" | grep -q "restore_plan.py\|restore-plan.json" && echo "$MT_5B" | grep -q "\[j/n\]"    && echo "$MT_5B" | grep -q -- "--restore-archive" && echo "$MT_5B" | grep -q "never written"; then
-    pass "maintain Step 5b: restore runs plan -> owner [j/n] -> one writer, archives never written"
-else
-    fail "maintain Step 5b: restore procedure missing gate, writer or archive guarantee"
-fi
-
-# 5.4.0 (condense): Step 5c assigns to EXISTING rules through the one writer, gated per card.
-MT_5C="$(sed -n '/^## Step 5c:/,/^## Step 6:/p' "$PLUGIN_ROOT/commands/maintain.md" 2>/dev/null)"
-if echo "$MT_5C" | grep -q "(condense)" && echo "$MT_5C" | grep -q "learnings_lifecycle.py"    && echo "$MT_5C" | grep -q '"principles"' && echo "$MT_5C" | grep -q "\[j/n\]"    && echo "$MT_5C" | grep -q ">= 3 members from >= 2 stores"; then
-    pass "maintain Step 5c: condense = assign to rules, principles via apply_wrapup, [j/n] per card, new-rule threshold"
-else
-    fail "maintain Step 5c: condense procedure missing script, writer, gate or new-rule threshold"
-fi
-# P3-A: after writing pointers BOTH projections run - the AGENTS.md one was missing, so Codex kept the old block.
-if echo "$MT_5C" | grep -q "memory_index_projection.py" && echo "$MT_5C" | grep -q "bridge_projection.py\" .agent-memory --agents-md" \
-   && echo "$MT_5C" | grep -q "principle_retire"; then
-    pass "maintain Step 5c: both projections after the write, principle_retire as the way back"
-else
-    fail "maintain Step 5c: bridge_projection.py call or principle_retire way back missing"
-fi
 # P3-A: the stable rule-anchor page is off limits for obsidian-sync (pointers point at its ^r- block ids).
 if sed -n '/^## Guards/,$p' "$PLUGIN_ROOT/skills/obsidian-sync/SKILL.md" | grep -q "Never write .wiki/concepts/agent-regeln.md"; then
     pass "obsidian-sync Guards: wiki/concepts/agent-regeln.md is never written (stable rule anchors)"
 else
     fail "obsidian-sync Guards: no lock for the stable rule-anchor page wiki/concepts/agent-regeln.md"
 fi
-# T-050: maintain Step 2 and memory-audit look at the central profile files too (identity_store.py check, read-only).
-MT_2="$(sed -n '/^## Step 2:/,/^## Step 3:/p' "$PLUGIN_ROOT/commands/maintain.md" 2>/dev/null)"
-if echo "$MT_2" | grep -q "identity_store.py\" check" && grep -q "identity_store.py\" check" "$PLUGIN_ROOT/commands/memory-audit.md"; then
-    pass "maintain Step 2 and memory-audit run identity_store.py check on the central profile"
+# 6.0.0 maintain = Pflegelauf: the agent judges the candidates and writes through the applier; no owner cards.
+echo ""
+echo "-- 6.0.0 maintain = Pflegelauf --"
+MT_FILE="$PLUGIN_ROOT/commands/maintain.md"
+for NEEDLE in "learning_updates" "pflegelauf_stamp" "Atlas nicht erreichbar" "rule_catalog" \
+              "review_sweep.py\" .agent-memory --candidates-json" "learnings_lifecycle.py\" propose .agent-memory --skip-reviewed" \
+              "--dry-run" "chunks of exactly 30" "Never stamp a partial run" "snippet_len: 80" \
+              "scope: \"project:<project folder name>\"" "Scope nicht gefunden, Paarsuche übersprungen"; do
+    if grep -qF -- "$NEEDLE" "$MT_FILE" 2>/dev/null; then
+        pass "maintain (Pflegelauf): contains '$NEEDLE'"
+    else
+        fail "maintain (Pflegelauf): '$NEEDLE' missing"
+    fi
+done
+for NEEDLE in "[j/n]" "restore_plan" "native_memory_audit" "memory-thresholds.sh"; do
+    if grep -qF -- "$NEEDLE" "$MT_FILE" 2>/dev/null; then
+        fail "maintain (Pflegelauf): still contains '$NEEDLE' (owner cards, removed or daily-job mechanics)"
+    else
+        pass "maintain (Pflegelauf): no '$NEEDLE'"
+    fi
+done
+# P3-A: after the write BOTH projections run - the AGENTS.md one was missing once, so Codex kept the old block.
+MT_3="$(sed -n '/^## Step 3:/,/^## Step 4:/p' "$MT_FILE" 2>/dev/null)"
+if echo "$MT_3" | grep -q "memory_index_projection.py" && echo "$MT_3" | grep -q "bridge_projection.py\" .agent-memory --agents-md" \
+   && echo "$MT_3" | grep -q "principle_retire"; then
+    pass "maintain Step 3: both projections after the write, principle_retire as the way back"
 else
-    fail "maintain Step 2 or memory-audit does not check the central profile files (identity_store.py check)"
+    fail "maintain Step 3: bridge_projection.py call or principle_retire way back missing"
+fi
+# T-050: the JSON repair step (the only owner step) looks at the central profile files too (identity_store.py check).
+MT_4="$(sed -n '/^## Step 4:/,/^## Step 5:/p' "$MT_FILE" 2>/dev/null)"
+if echo "$MT_4" | grep -q "identity_store.py\" check"; then
+    pass "maintain Step 4 (JSON repair) runs identity_store.py check on the central profile"
+else
+    fail "maintain Step 4 (JSON repair) does not check the central profile files (identity_store.py check)"
+fi
+# I1 (final review): the resume rule leaves judged rows out of the Atlas pair set ONLY - sources 2 and 3 exclude
+# judged rows themselves, and a 'bleibt' row whose review date passed must come back there.
+MT_RESUME="$(grep -F "**Resume" "$MT_FILE" 2>/dev/null)"
+if echo "$MT_RESUME" | grep -qF "Resume (Atlas pair set only)" && ! grep -qF "leave out every subject whose" "$MT_FILE"; then
+    pass "maintain Step 1: the resume rule applies to the Atlas pair set only"
+else
+    fail "maintain Step 1: the resume rule still drops subjects of sources 2 and 3 (due rows would vanish)"
+fi
+# I3 (final review) + R23: ONE snapshot per run is the rollback point, named in the report. It is taken by the
+# applier itself (--snapshot on the FIRST chunk: under the lock, after the plan check, an io error stops the write),
+# never by a separate store_snapshot.py call in Step 1 whose failure nothing would stop.
+MT_1="$(sed -n '/^## Step 1:/,/^## Step 2:/p' "$MT_FILE" 2>/dev/null)"
+MT_5="$(sed -n '/^## Step 5:/,/^## What NOT/p' "$MT_FILE" 2>/dev/null)"
+if ! echo "$MT_1" | grep -qF "store_snapshot.py" && echo "$MT_5" | grep -qF "Rückholpunkt {run_snapshot}"; then
+    pass "maintain: no store_snapshot.py call in Step 1, the report names the Rückholpunkt"
+else
+    fail "maintain: Step 1 still calls store_snapshot.py (failure not stopped) or the report lacks the Rückholpunkt"
+fi
+# Task 10a F1: verdict "gegenstandslos" = learning_updates {"id", "obsolete": true, "reason"}, one report line each.
+MT_2="$(sed -n '/^## Step 2:/,/^## Step 3:/p' "$MT_FILE" 2>/dev/null)"
+if echo "$MT_2" | grep -qF '| gegenstandslos |' && echo "$MT_2" | grep -qF '"obsolete": true' \
+   && echo "$MT_5" | grep -qF 'L21 → gegenstandslos —' && echo "$MT_5" | grep -qF 'gegenstandslos {g}'; then
+    pass "maintain: verdict gegenstandslos (obsolete: true) with its report line and count"
+else
+    fail "maintain: verdict gegenstandslos missing in Step 2 or in the report (Step 5)"
+fi
+# Task 10a F2: the pair set leaves out rows the owner or the bridge took out (as review_sweep --candidates-json).
+if echo "$MT_1" | grep -qF 'rows with `bridge_status` rejected or retired'; then
+    pass "maintain Step 1: pair set without bridge_status rejected/retired rows"
+else
+    fail "maintain Step 1: pair set still holds bridge_status rejected/retired rows"
+fi
+# Task 10a F3: the Atlas returns hits flagged outside_filter even with scope - they are dropped before pairing.
+if echo "$MT_1" | grep -qF 'drop every hit with `outside_filter: true`' \
+   && echo "$MT_1" | grep -qF 'The self-hit check uses only the in-scope hits'; then
+    pass "maintain Step 1: outside_filter hits dropped, self-hit check on in-scope hits only"
+else
+    fail "maintain Step 1: outside_filter hits are not dropped before the pairs are formed"
+fi
+# Task 10a F4 (rulings R21, R23): the FIRST chunk apply of a run takes --snapshot (the code-enforced rollback point),
+# every later chunk none - store_snapshot keeps the newest 10 + one per day, so per-chunk snapshots would prune it;
+# the report checks the path still exists.
+if echo "$MT_3" | grep -qxF 'python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <first-chunk-plan.json> --snapshot'; then
+    pass "maintain Step 3: the first chunk apply takes --snapshot (rollback point under the lock)"
+else
+    fail "maintain Step 3: the first chunk apply line with --snapshot is missing"
+fi
+if echo "$MT_3" | grep -qxF 'python "${CLAUDE_PLUGIN_ROOT}/scripts/apply_wrapup.py" .agent-memory --plan <chunk-plan.json>' \
+   && ! grep -qF -- '--plan <chunk-plan.json> --snapshot' "$MT_FILE"; then
+    pass "maintain Step 3: later chunk applies without --snapshot (the run's snapshot is not pruned)"
+else
+    fail "maintain Step 3: later chunk applies still take --snapshot (would prune the run's rollback point)"
+fi
+if echo "$MT_5" | grep -qF 'Rückholpunkt entfernt — Lauf nur über update_log (old/new) rückholbar' \
+   && echo "$MT_5" | grep -qF 'check the path exists'; then
+    pass "maintain Step 5: Rückholpunkt path checked before it is named"
+else
+    fail "maintain Step 5: no existence check of the Rückholpunkt path"
+fi
+# I2 (final review, spec 4.2): review_sweep has no own report in wrap-up any more.
+if grep -qF "reports.review_sweep" "$PLUGIN_ROOT/skills/wrap-up/SKILL.md" 2>/dev/null; then
+    fail "wrap-up SKILL.md still prints reports.review_sweep (its own report is gone in 6.0.0)"
+else
+    pass "wrap-up SKILL.md: no reports.review_sweep line"
+fi
+
+# 6.0.0: pattern mechanics removed (skill, extractor script and every caller). patterns.json data stays in
+# existing stores, but no shipped file may call the extractor or the skill any more.
+echo ""
+echo "-- 6.0.0: pattern mechanics removed --"
+if [ ! -d "$PLUGIN_ROOT/skills/pattern-extractor" ] && [ ! -e "$PLUGIN_ROOT/scripts/extract_patterns.py" ]; then
+    pass "pattern-extractor skill directory and scripts/extract_patterns.py are gone"
+else
+    fail "pattern-extractor skill directory or scripts/extract_patterns.py still exists"
+fi
+PE_LEFT="$(cd "$PLUGIN_ROOT" && grep -rlI --exclude-dir=__pycache__ "pattern-extractor\|extract_patterns" skills commands scripts hooks agents 2>/dev/null || true)"
+if [ -z "$PE_LEFT" ]; then
+    pass "no file under skills/ commands/ scripts/ hooks/ agents/ names pattern-extractor or extract_patterns"
+else
+    fail "pattern-extractor / extract_patterns still referenced in: $(echo "$PE_LEFT" | tr '\n' ' ')"
+fi
+
+# 6.0.0: restore, one-time scripts, cost trace, escalation markers and /memory-audit removed.
+echo ""
+echo "-- 6.0.0: restore / one-time scripts / cost trace / escalation markers / memory-audit removed --"
+GONE_FILES=""
+for f in scripts/restore_plan.py scripts/harvest_backfill.py scripts/migrate_identity.py scripts/cost-trace.sh commands/memory-audit.md; do
+    [ -e "$PLUGIN_ROOT/$f" ] && GONE_FILES="$GONE_FILES $f"
+done
+if [ -z "$GONE_FILES" ]; then
+    pass "restore_plan, harvest_backfill, migrate_identity, cost-trace and memory-audit files are gone"
+else
+    fail "files that 6.0.0 removes still exist:$GONE_FILES"
+fi
+GONE_REFS="$(cd "$PLUGIN_ROOT" && grep -rlI --exclude-dir=__pycache__ "restore_plan\|cost-trace\.sh\|escalations-\|harvest_backfill\|migrate_identity\|memory-audit" skills commands scripts hooks agents 2>/dev/null || true)"
+if [ -z "$GONE_REFS" ]; then
+    pass "no file under skills/ commands/ scripts/ hooks/ agents/ names restore_plan, cost-trace.sh, escalations-, harvest_backfill, migrate_identity or memory-audit"
+else
+    fail "removed parts still referenced in: $(echo "$GONE_REFS" | tr '\n' ' ')"
 fi
 
 echo ""

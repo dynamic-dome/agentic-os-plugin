@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # session-start.sh must never auto-init a .agent-memory INSIDE an existing .agent-memory.
-# cost-trace.sh must likewise refuse to create metrics/ inside a nested .agent-memory cwd.
 set -uo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
@@ -24,17 +23,6 @@ else
   echo "  PASS: no nested .agent-memory"
 fi
 if [ "$RC" -eq 0 ]; then echo "  PASS: exit 0 (fail-soft)"; else echo "  FAIL: exit $RC"; FAIL=1; fi
-
-# Second case: cost-trace.sh run from a cwd inside .agent-memory must not create
-# a nested metrics/ dir (controller ruling: this is the actual origin of the
-# nested stores found in hygiene 2026-09, not session-start.sh).
-cd "$TMP/proj/.agent-memory/working"
-bash "$DIR/scripts/cost-trace.sh" append --mem .agent-memory --task test --class cheap-write --context-bytes 100 --escalated 0 > "$TMP/ct-out.txt" 2>&1
-if [ -d "$TMP/proj/.agent-memory/working/.agent-memory" ]; then
-  echo "  FAIL: cost-trace.sh created nested .agent-memory/metrics"; FAIL=1
-else
-  echo "  PASS: cost-trace.sh created no nested .agent-memory"
-fi
 
 # Third case (V7): a subdirectory of a git repo must not get its own store;
 # a plain non-git directory inits only with the option (the section at the end covers the default).

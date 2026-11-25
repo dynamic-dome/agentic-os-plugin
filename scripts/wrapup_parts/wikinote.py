@@ -43,7 +43,7 @@ def _render_judged(project_id, date, iterations, summary):
              "tags:", "  - session", "  - agent-generated", "aliases: []", "query_kind: session",
              "question: Was wurde in dieser Session erarbeitet?", "scope: []", f"project: {project_id}",
              "agent: claude-code", f"iterations: {len(iterations)}", "quality_delta: null",
-             "patterns_found: 0", "authority: derived", "---", "",
+             "authority: derived", "---", "",
              f"# {date} Session: {project_id}", "", "## Was wurde gemacht", ""]
     lines += [f"- {x}" for x in (summary.get("what_was_done") or [])[:MAX_ITEMS]]
     if state:
@@ -64,7 +64,7 @@ def _render(project_id, date, iterations):
              "question: Was wurde in dieser Session erarbeitet?", "scope: []", f"project: {project_id}",
              # agent: kanonischer Wiki-Schema-Wert; "headless" steht als Tag (5.1.4)
              "agent: claude-code", f"iterations: {len(iterations)}", "quality_delta: null",
-             "patterns_found: 0", "authority: derived", "---", "",
+             "authority: derived", "---", "",
              f"# {date} Session: {project_id} (headless)", "",
              "## Kontext", "",
              "Automatisch konsolidiert (Nachtlauf, `wrapup_core.py apply --headless`), ohne Judge: Iterationen "
@@ -136,7 +136,7 @@ def write_session_note(wiki_root, project_id, date, iterations, *, enabled=True,
         _add_log_block(os.path.join(wiki_root, "log.md"), header,
                        f"{header}\n\n- Session-Note: {rel}\n- Entity updated: no ({stamp})\n"
                        f"- Decisions promoted: 0 ({stamp})\n- Learnings promoted: 0 ({stamp})\n"
-                       f"- Patterns flagged: 0 ({stamp})\n- Total pages touched: 3")
+                       f"- Total pages touched: 3")
     except (OSError, ValueError) as exc:  # ValueError: a file that is not UTF-8
         return f"failed({type(exc).__name__})"
     return rel

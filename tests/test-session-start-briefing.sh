@@ -98,6 +98,12 @@ else
 fi
 
 echo "$CTX" | grep -q "3 iterations" && pass "stats: counts on-disk log format (2 dated + 1 legacy = 3)" || fail "stats: iteration count wrong: $(echo "$CTX" | grep -o '[0-9]* iterations')"
+# 6.0.0: errors.json is frozen data (the fixture above still holds 2 entries) - no "n errors" fragment any more
+echo "$CTX" | grep -qE "[0-9]+ errors" && fail "stats: errors fragment still shown: $(echo "$CTX" | grep -oE '[0-9]+ errors' | head -1)" \
+  || pass "stats: no errors count (errors.json is not counted since 6.0.0)"
+# 6.0.0: the pattern mechanics are gone (the fixture above still holds patterns.json) - no "n patterns" fragment
+echo "$CTX" | grep -qE "[0-9]+ patterns" && fail "stats: patterns fragment still shown: $(echo "$CTX" | grep -oE '[0-9]+ patterns' | head -1)" \
+  || pass "stats: no patterns count (patterns.json is not counted since 6.0.0)"
 echo "$CTX" | grep -q "T-002" && echo "$CTX" | grep -q "T-003" && echo "$CTX" | grep -q "T-004" && pass "next steps: open/blocked tasks from open-tasks.json" || fail "next steps: T-002/T-003/T-004 missing"
 echo "$CTX" | grep -q "T-001" && fail "next steps: done task T-001 leaked" || pass "next steps: done tasks excluded"
 echo "$CTX" | grep -q "T-005" && fail "next steps: cap of 3 not applied (T-005 shown)" || pass "next steps: capped at 3"
@@ -243,6 +249,28 @@ printf '%s' "$CTX6" | sed -n '/^---$/,/^---$/p' | grep -qxF "Stand-Abgleich: 1 C
   && pass "reentry: compact block has an OWN line naming commits since the summary and open tasks they mention" \
   || fail "reentry: Stand-Abgleich line missing: $(printf '%s' "$CTX6" | head -8)"
 echo "$CTX" | grep -q "Stand-Abgleich" && fail "reentry: line shown without a git repo" || pass "reentry: no line without a git repo"
+
+# 6.0.0: threshold lines live in the start briefing only; each output line of memory-thresholds.sh is its own line.
+echo "$CTX" | grep -q "PFLEGELAUF:" && fail "pflegelauf: line shown for a store without learnings" || pass "pflegelauf: no line for a store without learnings"
+P="$TMP/pfl"
+mkdir -p "$P/.agent-memory/context" "$P/.agent-memory/learnings" "$P/.agent-memory/iterations"
+echo '[]' > "$P/.agent-memory/context/open-tasks.json"
+python -c "import json; print(json.dumps([{'id': 'L%d' % i} for i in range(1, 32)]))" > "$P/.agent-memory/learnings/learnings.json"
+{ echo "# Iteration Log"; for i in $(seq 1 101); do echo "## 2026-01-01 — fix: n$i"; done; } > "$P/.agent-memory/iterations/iteration-log.md"
+git -C "$P" init -q
+CTX7=$(hint_context "$P")
+printf '%s' "$CTX7" | sed -n '/^---$/,/^---$/p' | grep -qxF "PFLEGELAUF: 31 Learnings, noch kein Pflegelauf → /agentic-os:maintain"   && pass "pflegelauf: own line in the compact block" || fail "pflegelauf: line missing: $(printf '%s' "$CTX7" | head -8)"
+printf '%s' "$CTX7" | sed -n '/^---$/,/^---$/p' | grep -q "^THRESHOLD: iteration-log.md has 101 entries"   && pass "thresholds: a THRESHOLD line is its own briefing line" || fail "thresholds: THRESHOLD line missing: $(printf '%s' "$CTX7" | head -8)"
+# a stamp at today's count silences the trigger
+mkdir -p "$P/.agent-memory/working"
+printf '{"date": "2026-11-01", "id_keys": 31}\n' > "$P/.agent-memory/working/pflegelauf.json"
+hint_context "$P" | grep -q "PFLEGELAUF:" && fail "pflegelauf: stamp at today's count still triggers" || pass "pflegelauf: stamp at today's count silences the line"
+# fail-soft: a missing bash for the threshold helper must never break the hook
+NOBASH="$TMP/nothr"; mkdir -p "$NOBASH/scripts"
+cp "$DIR"/scripts/*.sh "$DIR"/scripts/*.py "$DIR"/scripts/soul-template.txt "$NOBASH/scripts/" 2>/dev/null
+echo 'exit 7' > "$NOBASH/scripts/memory-thresholds.sh"
+OUT8=$(cd "$P" && echo '{}' | CLAUDE_PROJECT_DIR="$P" bash "$NOBASH/scripts/session-start.sh" 2>/dev/null); RC8=$?
+[ "$RC8" -eq 0 ] && printf '%s' "$OUT8" | grep -q '"additionalContext"'   && pass "pflegelauf: a failing threshold script leaves the hook intact (exit 0, JSON out)" || fail "pflegelauf: failing threshold script broke the hook (rc=$RC8)"
 
 # Fresh init path still works and still uses the same contract.
 mkdir -p "$TMP/fresh" && cd "$TMP/fresh" && git init -q   # 5.13.0: a folder without git no longer auto-inits

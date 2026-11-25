@@ -9,7 +9,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '1.6'
+  version: '1.7'
   part-of: agentic-os
   layer: core
 ---
@@ -64,8 +64,9 @@ Read from .agent-memory/:
    project wrote last — take the summary from the conversation.
 2. `iterations/iteration-log.md` — today's iterations (filter by today's date)
 3. `learnings/learnings.json` OR `learnings/learnings.md` — new learnings from this session (check .json first, fall back to .md; parse .md as bullet list if no .json exists)
-4. `patterns/patterns.json` OR `patterns/patterns.md` — patterns with updated confidence (check .json first, fall back to .md)
-5. `context/decisions.json` — new decisions from this session (skip if not found)
+4. `context/decisions.json` — new decisions from this session (skip if not found)
+
+`patterns/` is not read: the pattern mechanics are gone since 6.0.0 (existing files stay as data).
 
 **Substantiality gate (wiki-sync-gate):** the session must be substantial — ANY of:
 >= 1 iteration logged today, OR today's commits exist (`git log --oneline --since=midnight`),
@@ -101,7 +102,6 @@ project: {project_id}
 agent: claude-code
 iterations: {count}
 quality_delta: {delta or null}
-patterns_found: {count}
 authority: derived
 ---
 ```
@@ -205,28 +205,7 @@ subagent; never edit wiki history.
    learning text): rewrite the whole page with the Write tool, keeping all existing content, or
    skip the learning and report it. Appending a new section as a workaround is not allowed.
 
-## Step 6: Update Pattern Promotion Status (conditional)
-
-**Only update patterns.json, NO wiki writes in this step:**
-
-For each pattern in patterns.json:
-- If confidence 0.70–0.84 → set `"promotion_status": "candidate"` if not already set
-- If confidence >= 0.85 AND (occurrences >= 2 OR source_projects >= 2) → set `"promotion_status": "ready"`
-- If confidence >= 0.85 BUT single project/single occurrence → set `"promotion_status": "candidate"`
-
-**Scope gate:** whenever `promotion_status` is set
-to `"ready"`, also record how far the pattern is allowed to travel — frequency alone does
-not prove transferability:
-- If source_projects >= 2 → set `"promotion_scope": "global"` (evidence spans projects)
-- If ready via occurrences within a single project → set `"promotion_scope": "project"`
-
-Whoever later promotes a ready pattern into the wiki (migration or manual) MUST respect
-the scope: a `"promotion_scope": "project"` pattern becomes a project-bound note with an
-explicit scope remark, never a general concept page.
-
-**Do NOT create Concept pages from patterns.** That happens during migration (Sprint 4+) or manually.
-
-## Step 7: Update Index and Log
+## Step 6: Update Index and Log
 
 ### index.md
 Read `$WIKI_ROOT/index.md`. Add the new session-note under the "Session Notes" or "Queries" section:
@@ -243,7 +222,6 @@ Append to `$WIKI_ROOT/log.md`:
 - Entity updated: {yes/no}
 - Decisions promoted: {count} (entity created: {yes/no})
 - Learnings promoted: {count}
-- Patterns flagged: {count candidates, count ready}
 - Total pages touched: {n}
 ```
 
@@ -258,7 +236,6 @@ Wiki sync complete:
   Entity updated: {yes/no}
   Decisions promoted: {count}
   Learnings promoted: {count}
-  Patterns: {count} candidates, {count} ready
   Pages touched: {total}
 ```
 On a skip (disabled / no config / not substantial), output the one-line reason from
@@ -267,7 +244,7 @@ Step 1 or Step 2 instead — never nothing.
 ## Error Handling
 
 - **Any step fails:** Warn user, continue with remaining steps. Never abort wrap-up.
-- **Wiki path unreachable:** Warn and skip all wiki writes. Still update patterns.json locally.
+- **Wiki path unreachable:** Warn and skip all wiki writes.
 - **Frontmatter parse error:** Warn, write file without updating existing frontmatter.
 - **index.md/log.md not found:** Create minimal versions and continue.
 

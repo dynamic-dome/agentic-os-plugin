@@ -24,38 +24,56 @@ emits a single write plan, this script applies it and returns the resulting
 tallies. Turn count for the write phase drops from ~40 to ~2.
 
 Second benefit: the returned counts are computed from the files actually
-written, so the mandatory Step 6.5 identity status line reports measured
-numbers instead of a model self-report (see the verify-subagent-tallies rule).
+written, so the report lines carry measured numbers instead of a model
+self-report (see the verify-subagent-tallies rule).
 
 WHAT IT DOES NOT DO
 -------------------
 No judgment. Deduplication beyond exact-text matching, learning importance,
-what counts as an identity observation, what counts as ONE iteration or as a
-decision of record — all of that stays with the model and arrives via the plan.
+what counts as ONE iteration or as a decision of record, which learning a
+Pflegelauf supersedes — all of that stays with the model and arrives via the plan.
 This script only applies deterministic rules that are already written down in
 skills/wrap-up/SKILL.md.
 
 OWNERSHIP (widened in T-015, not loosened)
 ------------------------------------------
-Since the delegation rebuild the script also writes iteration-log.md,
-errors.json and decisions.json, because wrap-up no longer injects the
+Since the delegation rebuild the script also writes iteration-log.md
+and decisions.json, because wrap-up no longer injects the
 iteration-logger / context-keeper skill bodies just to have those files
 written (a skill invocation triggered a full prefix-cache rewrite in 41% of
 measured cases, L34). Ownership moved rather than disappeared: those files are
 reachable ONLY through their named applier (see APPLIER_OWNED), so the generic
-write path still refuses them. patterns.json/patterns.md belong to
-scripts/extract_patterns.py and stay refused here; soul.md is never written.
+write path still refuses them. patterns.json/patterns.md and errors.json (data of the
+pattern and error mechanics removed in 6.0.0) stay refused here: the files stay, nothing
+writes them; soul.md is never written.
 Since P1/B2 the identity files (user.md, user-changelog.json, user-candidates.json) are
-owned the same way - applier "identity": queue promotion, encoding corrections and the
-`user_md_supersede` plan section are the only ways in.
+owned the same way - applier "identity": encoding corrections and the plan sections
+`user_md_supersede`, `user_md_retire` and `identity_expire` are the only ways in.
+
+OLD PLAN SECTIONS (6.0.0)
+-------------------------
+The identity harvest (`user_candidates`: queue growth and promotion into user.md)
+and the error log (`errors` inside an iteration) are gone. A plan that still
+carries them is not refused: the sections are ignored, nothing is written for
+them, and `tally.ignored_sections` names them (sorted, without duplicates).
+
+PFLEGELAUF (6.0.0)
+------------------
+`learning_updates` is the write path of the maintenance run: it sets or clears
+`superseded_by` or sets `review_after` on a learning, never its text, and logs
+each change in the row's `update_log` ({date, reason, by, field, old, new}).
+`obsolete: true` (verdict "gegenstandslos": the mechanism is gone, no successor)
+sets `superseded_by = obsolete:pflegelauf-<plan date>`. A rule-class learning, a pointer row and
+a pointer member are refused (no protection is loosened by the run; those keep
+`principle_retire` and the rule-class gate). `pflegelauf_stamp: true` writes
+working/pflegelauf.json = {date, id_keys}, the counter base of the trigger.
 
 IDENTITY QUALITY (P1/B2, design 2026-10-27)
 -------------------------------------------
-- `confirmed` on a user candidate is earned: it needs a literal `quote` that
+- `user_md_supersede` replaces one user.md line losslessly, changelog entry first;
+  `user_md_retire` removes one. Both need a literal `quote` that
   scripts/identity_quote.py finds in ONE genuine user message of the session transcript
-  (read-only; --transcript or <HOME>/.claude/projects/*/<session-id>.jsonl). Otherwise the
-  candidate stays observed/inferred and the second mention confirms it as before.
-- `user_md_supersede` replaces one user.md line losslessly, changelog entry first.
+  (read-only; --transcript or <HOME>/.claude/projects/*/<session-id>.jsonl).
 - Every owner-facing proposal (bridge_decisions, rule_explanations, user_md_supersede) carries
   `plain` - plain German, 1..600 characters; a missing or longer one rejects the whole plan.
 
@@ -93,9 +111,10 @@ import unicodedata
 
 # Files no path in this script may ever touch.
 FORBIDDEN = {
-    "patterns/patterns.json",         # scripts/extract_patterns.py owns these
+    "patterns/patterns.json",         # data of the removed pattern mechanics: kept, never written
     "patterns/patterns.md",
-    "identity/soul.md",               # bootstrap [j/n] gate only - never here
+    "iterations/errors.json",         # data of the removed error log (6.0.0): kept, never written
+    "identity/soul.md",               # read-only history since 5.11.0: never written
 }
 
 # Files that carry their own deterministic ruleset. Since T-015 the wrap-up run
@@ -105,15 +124,14 @@ FORBIDDEN = {
 # generic write path still cannot touch it (a hard bug, not a warning).
 APPLIER_OWNED = {
     "iterations/iteration-log.md":   "iterations",
-    "iterations/errors.json":        "iterations",
     "working/current-session.json":  "iterations",
     "context/decisions.json":        "decisions",
     # 5.3.0: the generic path could overwrite the whole store with any plan-
-    # supplied content; now only the learnings and restore appliers reach it.
+    # supplied content; now only the learnings applier reaches it.
     "learnings/learnings.json":      "learnings",
     # P1/B2: the identity pipeline has one writer too. user.md and its audit log change only
-    # through the queue promotion, the encoding corrections and user_md_supersede - all of them
-    # `identity`; the queue file itself belongs to the same applier.
+    # through the encoding corrections, user_md_supersede and user_md_retire - all of them
+    # `identity`; the queue file itself (identity_expire) belongs to the same applier.
     "identity/user.md":              "identity",
     "identity/user-changelog.json":  "identity",
     "working/user-candidates.json":  "identity",
@@ -123,16 +141,11 @@ APPLIER_OWNED = {
     "identity/profile-candidates.json": "identity",
     "identity/briefing-lines.txt":      "identity",
     "identity/profile-briefing.txt":    "identity",
+    # 6.0.0: the Pflegelauf stamp (date + id_keys of learnings.json), the counter base of the trigger
+    "working/pflegelauf.json":          "learning_updates",
 }
 _FORBIDDEN_CI = {k.lower() for k in FORBIDDEN}
 _OWNED_CI = {k.lower(): v for k, v in APPLIER_OWNED.items()}
-
-SECTION_BY_SIGNAL = {
-    "preference": "Preferences",
-    "communication": "Preferences",
-    "workflow": "Work Style",
-    "correction": "Known Corrections",
-}
 
 SUMMARY_MAX_LINES = 30
 REVIEW_AFTER_DAYS = 90
@@ -171,7 +184,7 @@ def canon(rel: str) -> str:
     """Reduce a memory-relative path to the form the ownership tables use.
 
     Without this the guard compares raw strings: "iterations/../iterations/
-    errors.json" is not in APPLIER_OWNED, yet resolves to a protected file -
+    iteration-log.md" is not in APPLIER_OWNED, yet resolves to a protected file -
     a verified bypass of the generic writer (Codex review of 1e5c504). Any
     path that leaves the memory dir is refused outright.
     """
@@ -202,7 +215,7 @@ def load_json(mem: str, rel: str, default, via: str | None = None):
     only the new rows, ids restarting at L1, exit 0, no warning. A UTF-8 BOM
     (PowerShell `Set-Content -Encoding utf8`) was enough to trigger it. A BOM is
     now simply accepted; the next write drops it. Repairing a really broken file
-    is an owner step (/agentic-os:maintain Step 2), never a side effect of a
+    is an owner step (/agentic-os:maintain Step 4), never a side effect of a
     wrap-up. `via` stays in the signature for call-site symmetry: reading needs
     no ownership, and this function no longer mutates anything.
     """
@@ -214,17 +227,18 @@ def load_json(mem: str, rel: str, default, via: str | None = None):
             return json.load(fh)
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise PlanError(f"{rel} is not valid JSON ({e}) - nothing was written; "
-                        f"repair it or run /agentic-os:maintain (Step 2)")
+                        f"repair it or run /agentic-os:maintain (Step 4)")
 
 
 # Every JSON store file an applier reads, with the top-level type the appliers
 # expect. main() checks them all BEFORE the first write: the appliers run in
 # sequence, so a problem found by a later applier would otherwise leave the
-# iterations and decisions of the same plan already written.
+# iterations and decisions of the same plan already written. The candidate queue is
+# frozen data since 6.0.0: preflight_readable checks it only for a plan that reads it.
 STORE_JSON = {
-    "iterations/errors.json": list, "working/current-session.json": dict,
+    "working/current-session.json": dict,
     "context/decisions.json": list, "learnings/learnings.json": list,
-    "working/user-candidates.json": list, "identity/user-changelog.json": list,
+    "identity/user-changelog.json": list,
     "context/open-tasks.json": list,
 }
 
@@ -263,6 +277,8 @@ def preflight_readable(mem: str, plan: dict | None = None, paths=None) -> None:
     paths = _id_paths(mem, paths)
     missing = object()  # a file holding JSON null exists - it must not pass as "missing"
     checks = [(mem, rel, kind) for rel, kind in STORE_JSON.items()]
+    if plan_reads_queue(plan):
+        checks.append((paths.root, paths.queue, list))
     if paths.central and plan_touches_identity(plan):
         # P2: the central queue and changelog are read instead of the project's; a broken one stops the run here
         # (no silent fallback to the project files)
@@ -272,15 +288,13 @@ def preflight_readable(mem: str, plan: dict | None = None, paths=None) -> None:
         if data is not missing and not isinstance(data, kind):
             raise PlanError(f"{rel} holds a JSON {type(data).__name__} at top level, expected "
                             f"a {kind.__name__} - nothing was written; repair it or run "
-                            f"/agentic-os:maintain (Step 2)")
+                            f"/agentic-os:maintain (Step 4)")
     spec = plan.get("open_tasks") or {}
     if plan.get("iterations"):
-        archived_rows(mem, "iterations/errors.json")
         _check_utf8(mem, "iterations/iteration-log.md")
     if plan.get("decisions"):
         archived_rows(mem, "context/decisions.json")
-    if (plan.get("learnings") or (plan.get("restore") or {}).get("learnings") or plan.get("principles")
-            or plan.get("principle_retire")):
+    if plan.get("learnings") or plan.get("principles") or plan.get("principle_retire"):
         archived_rows(mem, "learnings/learnings.json")
     if spec.get("add"):
         archived_rows(mem, "context/open-tasks.json")
@@ -356,8 +370,7 @@ def next_id(rows, prefix_arg: str, pad: int = 0, reserved=()) -> str:
 
     The arguments are only a fallback for an empty store. The real files drifted
     away from their documented templates long ago (drift audit 2026-07-27:
-    errors.json carries "err-007" where the template promised "E{n}",
-    decisions.json "D-008" where it promised "D{n}"). Assuming the template
+    decisions.json carries "D-008" where the template promised "D{n}"). Assuming the template
     would silently fork the sequence into two parallel id families, so the shape
     is derived from the data: pick the most common prefix, continue its highest
     number, keep its zero padding. A single foreign id (patterns.json holds one
@@ -549,6 +562,8 @@ def validate_plan(mem, plan, paths=None):
     still wrote its iteration log first and exited 2 half-applied (Codex review
     of 1e5c504). Anything checkable without touching disk belongs here.
     """
+    if "restore" in plan:  # first of all: the section is gone, whatever else the plan holds
+        raise PlanError("plan section 'restore' was removed in 6.0.0 - nothing was written")
     for it in (plan.get("iterations") or []):
         if not (it.get("title") or "").strip():
             raise PlanError("iteration without 'title'")
@@ -578,7 +593,6 @@ def validate_plan(mem, plan, paths=None):
                             if isinstance(r, dict)}
             if str(lrn["duplicate_of"]) not in live_ids:
                 raise PlanError(f"duplicate_of points at unknown learning {lrn['duplicate_of']}")
-    validate_user_candidates(plan)
     for soul in (plan.get("soul_candidates") or []):
         if not (soul.get("proposal") or "").strip():
             raise PlanError("soul candidate without 'proposal'")
@@ -588,6 +602,7 @@ def validate_plan(mem, plan, paths=None):
 
     validate_principles(mem, plan)
     validate_principle_retire(mem, plan)
+    validate_learning_updates(mem, plan)
     validate_bridge_decisions(mem, plan)
     validate_corrections(mem, plan, paths)
     validate_rule_gate(mem, plan)
@@ -619,7 +634,7 @@ def iteration_header(it, date) -> str:
     return f"## {date} — {it.get('type', 'feature')}: {title}\n"
 
 
-def render_iteration(it, date, error_refs):
+def render_iteration(it, date):
     """Render ONE iteration block in the shape the log actually uses.
 
     Not the shape iteration-logger's template described ("## Iteration #{n} —
@@ -640,7 +655,6 @@ def render_iteration(it, date, error_refs):
     if it.get("confidence"):
         out.append(f"- **Confidence:** {int(it['confidence'])}/5")
     field("Tests", it.get("tests"))
-    field("Errors", ", ".join(error_refs))
     field("Learnings", it.get("learnings"))
     field("Commits", it.get("commits"))
     return "\n".join(out) + "\n"
@@ -651,8 +665,9 @@ def apply_iterations(mem, plan, date, dry, touched, tally):
 
     Judgment (what counts as ONE iteration - distinct approaches, not file
     saves) stays with the model and arrives in the plan. Everything below is
-    mechanical: id continuation, the recurrence rule (same category AND >= 2
-    overlapping tags), markdown rendering, working-memory bookkeeping.
+    mechanical: the header dedup, markdown rendering, working-memory bookkeeping.
+    An iteration's `errors` are ignored since 6.0.0 (errors.json is frozen data;
+    `ignored_sections` counts them).
     """
     items = plan.get("iterations") or []
     if not items:
@@ -664,83 +679,42 @@ def apply_iterations(mem, plan, date, dry, touched, tally):
     if not log.strip():
         log = "# Iteration Log\n"
 
-    errors = load_json(mem, "iterations/errors.json", [], via="iterations")
-    err_archive = archived_rows(mem, "iterations/errors.json")
     session = load_json(mem, "working/current-session.json",
                         {"errors_this_session": [], "learnings_draft": []}, via="iterations")
-    blocks, new_error_ids, wrote_errors = [], [], False
-
+    blocks = []
     for it in items:
-        # Dedup FIRST. Rendering needs the error ids, but the header does not -
-        # and processing errors before the skip made every re-run count the same
-        # error as another recurrence (occurrences 2 -> 3 -> 4 over three
-        # identical runs, Codex review of 1e5c504). A skipped iteration must
-        # touch nothing at all.
+        # Dedup on the whole header line: a re-run of the same plan writes nothing.
         header = iteration_header(it, date)
         if header in log or any(b.startswith(header) for b in blocks):
             tally["iterations_skipped_duplicate"] += 1
             continue
-
-        refs = []
-        for err in (it.get("errors") or []):
-            existing = find_recurrence(errors, err)
-            if existing is not None:
-                existing["occurrences"] = int(existing.get("occurrences", 1)) + 1
-                existing.setdefault("recurrence_dates", []).append(date)
-                existing["last_seen"] = date
-                refs.append(f"(Recurrence of {existing.get('id')})")
-                tally["errors_recurred"] += 1
-            else:
-                entry = {
-                    "id": next_id(errors, "err-", pad=3, reserved=err_archive),
-                    "date": date,
-                    "category": err.get("category", "runtime"),
-                    "tags": list(err.get("tags") or []),
-                    "trigger": err.get("trigger", ""),
-                    "problem": err.get("problem", ""),
-                    "root_cause": err.get("root_cause", ""),
-                    "fix": err.get("fix", ""),
-                    "failed_approaches": list(err.get("failed_approaches") or []),
-                    "prevention": err.get("prevention", ""),
-                    "severity": err.get("severity", "minor"),
-                    "attempts": int(err.get("attempts", 1)),
-                    "confidence": int(err.get("confidence", 3)),
-                    "occurrences": 1,
-                    "recurrence_dates": [],
-                    "last_seen": date,
-                }
-                errors.append(entry)
-                refs.append(entry["id"])
-                new_error_ids.append(entry["id"])
-                tally["errors_added"] += 1
-            wrote_errors = True
-
-        blocks.append(render_iteration(it, date, refs))
+        blocks.append(render_iteration(it, date))
         tally["iterations_logged"] += 1
 
     if blocks:
         write_atomic(mem, "iterations/iteration-log.md",
                      log.rstrip() + "\n\n" + "\n".join(blocks), dry, touched, via="iterations")
-    if wrote_errors:
-        write_json(mem, "iterations/errors.json", errors, dry, touched, via="iterations")
-    if new_error_ids or blocks:
-        for eid in new_error_ids:
-            if eid not in session.setdefault("errors_this_session", []):
-                session["errors_this_session"].append(eid)
         session.setdefault("learnings_draft", [])
         write_json(mem, "working/current-session.json", session, dry, touched, via="iterations")
 
 
-def find_recurrence(errors, err):
-    """iteration-logger Step 2: same category AND >= 2 overlapping tags, last 20."""
-    cat = err.get("category")
-    tags = set(err.get("tags") or [])
-    for existing in reversed(errors[-20:]):
-        if existing.get("category") != cat:
-            continue
-        if len(tags & set(existing.get("tags") or [])) >= 2:
-            return existing
-    return None
+def ignored_sections(plan) -> list:
+    """Old plan sections that 6.0.0 ignores instead of refusing: `user_candidates` (the identity harvest) and
+    `errors` inside an iteration (the error log). Only a section that carries something counts: an empty list was
+    nothing to ignore. Sorted, without duplicates. (`identity` is the judge plan's name for the harvest;
+    wrapup_core.py counts it, it never reaches this script.)"""
+    found = set()
+    if plan.get("user_candidates"):
+        found.add("user_candidates")
+    its = plan.get("iterations")
+    if isinstance(its, list) and any(isinstance(it, dict) and it.get("errors") for it in its):
+        found.add("errors")
+    return sorted(found)
+
+
+def ignored_status_line(sections):
+    """The German report line for ignored old sections; None when nothing was ignored."""
+    return f"Ignoriert (6.0.0): {', '.join(sections)}" if sections else None
 
 
 def apply_decisions(mem, plan, date, dry, touched, tally):
@@ -918,7 +892,7 @@ def refresh_queues(rows, tally):
 # Step 3d (5.7.0, Owner-Entscheid 2026-10-16): the bridge gate is delegated - the
 # agent pre-assesses, decides and reports one reason per entry. Only these states
 # are decidable: `retired` belongs to the Codex ingest, a principle pointer to
-# maintain Step 5c, a superseded row to its successor.
+# the Pflegelauf (/agentic-os:maintain), a superseded row to its successor.
 BRIDGE_DECIDABLE = ("candidate", "approved", "rejected")
 BRIDGE_VERDICTS = ("approved", "rejected")
 BRIDGE_DECIDERS = ("agent", "owner")
@@ -974,7 +948,7 @@ def validate_bridge_decisions(mem, plan):
         if row is None:
             raise PlanError(f"bridge decision points at unknown learning {lid!r}")
         if row.get("kind") == "principle":
-            raise PlanError(f"{lid} is a principle pointer - its bridge state belongs to maintain Step 5c")
+            raise PlanError(f"{lid} is a principle pointer - its bridge state belongs to the Pflegelauf (/agentic-os:maintain)")
         if row.get("superseded_by"):
             raise PlanError(f"{lid} is superseded by {row['superseded_by']} - decide the successor")
         rel = row.get("release") or {}
@@ -1169,11 +1143,11 @@ def validate_corrections(mem, plan, paths=None):
             seen.add(("user_md", old))
             if "\n" in old or "\n" in new or "\r" in old or "\r" in new:
                 raise PlanError(f"correction user_md {tag!r}: one line per correction")
-            # Identity text has its own gate (queue, trust check, owner review). The correction
+            # Identity text has its own gate (user_md_supersede / user_md_retire with a verified quote). The correction
             # path is NOT a way around it: it may repair the encoding of a line, never reword it.
             if new != repair_mojibake(old):
                 raise PlanError(f"correction user_md {tag!r}: 'new' is not the encoding repair of 'old' - "
-                                f"user.md changes only through the candidate queue (wrap-up Step 6)")
+                                f"user.md changes its wording only through user_md_supersede (wrap-up Step 6.3b)")
             if have.count(old) > 1:
                 raise PlanError(f"correction user_md {tag!r}: the line occurs {have.count(old)} times - not guessing")
             if have.count(old) == 0 and have.count(new) == 0:
@@ -1192,7 +1166,7 @@ def validate_corrections(mem, plan, paths=None):
             if extra or not fields:
                 raise PlanError(f"correction {rid}: only {CANDIDATE_CORRECTABLE} may change, got {sorted(extra) or 'nothing'}")
             for field in fields:
-                # same limit as user_md: the identity gate stays the only way to change what a candidate says
+                # same limit as user_md: an encoding repair, never a rewording (the queue is frozen data since 6.0.0)
                 if it[field] != row.get(field) and it[field] != _repair_deep(row.get(field)):
                     raise PlanError(f"correction {rid}: '{field}' is not the encoding repair of the stored text")
 
@@ -1261,9 +1235,15 @@ def plan_touches_identity(plan) -> bool:
     """True when the plan writes the profile, its changelog or its queue (the central lock is needed)."""
     plan = plan or {}
     corr = plan.get("corrections")
-    return bool("user_candidates" in plan or plan.get("consolidate") or plan.get("user_md_supersede")
-                or plan.get("user_md_retire") or plan.get("identity_expire")
+    return bool(plan.get("user_md_supersede") or plan.get("user_md_retire") or plan.get("identity_expire")
                 or ((corr.get("user_md") or corr.get("profile_candidates")) if isinstance(corr, dict) else corr))
+
+
+def plan_reads_queue(plan) -> bool:
+    """True when the plan reads the candidate queue: `identity_expire` or `corrections.profile_candidates`."""
+    plan = plan or {}
+    corr = plan.get("corrections")
+    return bool("identity_expire" in plan or (isinstance(corr, dict) and corr.get("profile_candidates")))
 
 
 def _read_user_md_raw(mem, what="correction (user_md)", paths=None):
@@ -1402,7 +1382,7 @@ def apply_corrections(mem, plan, date, dry, touched, tally, session_id="", paths
                 entries[-1]["origin"] = _origin(mem)
             tally["user_lines_corrected"] += 1
         if entries:
-            # audit entry BEFORE the edit - the same ordering contract as the promotion path
+            # audit entry BEFORE the edit - the changelog-first contract
             changelog = load_json(paths.root, paths.changelog, [])
             write_json(paths.root, paths.changelog, changelog + entries, dry, touched, via="identity")
             write_atomic(paths.root, paths.md, "".join(parts), dry, touched, via="identity")
@@ -1494,7 +1474,7 @@ def propose_encoding_corrections(mem, identity_store_arg=None):
                 out["profile_candidates"].append(item)
         user_text = _read_user_md_raw(mem, paths=own) if os.path.isfile(os.path.join(own.root, own.md)) else ""
     except PlanError:
-        user_text = ""   # not UTF-8: --lint / maintain Step 2 report that, the proposal stays read-only
+        user_text = ""   # not UTF-8: --lint / maintain Step 4 report that, the proposal stays read-only
     for line in user_text.splitlines():
         if looks_mojibake(line):
             out["user_md"].append({"old": line, "new": repair_mojibake(line), "reason": why})
@@ -1517,7 +1497,7 @@ def propose_encoding_corrections(mem, identity_store_arg=None):
 #   - the quote must be VERIFIED against the session transcript (identity_quote.py); an entry whose quote is not
 #     is skipped (nothing written for it, warning + tally), the rest of the plan runs
 #   - the file is rewritten LOSSLESSLY: every byte except the target line stays - CRLF, BOM, the
-#     preamble, the section order (read_user_md/write_user_md cannot promise any of that)
+#     preamble, the section order (a parse-and-render round trip cannot promise any of that)
 #   - repeatable: when the old line is gone but `new_text` stands exactly once, the entry counts as
 #     applied (`supersede_skipped_unchanged`); with `line_id` the audit log must also hold an entry for that
 #     id and text (the new line no longer cites the id); after a crash between the changelog entry and
@@ -1685,8 +1665,8 @@ def apply_user_md_supersede(mem, plan, date, dry, touched, tally, session_id="",
     """Plan section `user_md_supersede`: the audit entry goes into user-changelog.json FIRST, then the
     file is rewritten with exactly the target lines replaced (see the contract above).
 
-    D7: an entry is applied only when its `quote` is verified against the session transcript (the same check
-    as a candidate's quote, scripts/identity_quote.py). An entry whose quote is not verified is skipped - nothing
+    D7: an entry is applied only when its `quote` is verified against the session transcript
+    (scripts/identity_quote.py). An entry whose quote is not verified is skipped - nothing
     is written for it, a warning and `tally.supersede_skipped_unverified` say so - and the rest of the plan runs."""
     items = plan.get("user_md_supersede") or []
     if not items:
@@ -1748,17 +1728,15 @@ def apply_user_md_supersede(mem, plan, date, dry, touched, tally, session_id="",
             tally["warnings"].append(f"user.md: superseded line still looks like Mojibake: {r['new'][:40]}")
         tally["user_lines_superseded"] += 1
     if entries:
-        # audit entry BEFORE the edit - the same ordering contract as the promotion path
+        # audit entry BEFORE the edit - the changelog-first contract
         write_json(paths.root, paths.changelog, changelog + entries, dry, touched, via="identity")
     write_atomic(paths.root, paths.md, "".join(c + eol for c, eol in lines), dry, touched, via="identity")
 
 
 # Release 5.11.0 (owner go 2026-11-03): identity slimmed down.
-# `identity_expire`: one-off observations that nobody named again are marked "expired" - never deleted. A later
-# mention of the same key brings the candidate back (apply_user_candidates, `revived_at`).
+# `identity_expire`: one-off observations that nobody named again are marked "expired" - never deleted.
 # `user_md_retire`: remove one profile line losslessly - the old text goes into the changelog FIRST, a verified
-# quote of the user is required (like user_md_supersede), and the removed statement cannot come back through a
-# repeated candidate (retracted_statements reads user.md/retire too).
+# quote of the user is required (like user_md_supersede).
 EXPIRE_MIN_DAYS = 14
 EXPIRE_MAX_DAYS = 3650
 
@@ -1956,7 +1934,7 @@ def apply_user_md_retire(mem, plan, date, dry, touched, tally, session_id="", tr
             entries.append(entry)
         tally["user_lines_retired"] += 1
     if entries:
-        # audit entry BEFORE the edit - the same ordering contract as supersede and promotion
+        # audit entry BEFORE the edit - the same ordering contract as supersede
         write_json(paths.root, paths.changelog, changelog + entries, dry, touched, via="identity")
     drop = {r["index"] for r in kept}
     write_atomic(paths.root, paths.md, "".join(c + eol for i, (c, eol) in enumerate(lines) if i not in drop),
@@ -2171,13 +2149,6 @@ def held_rules():
     return rids, anchors
 
 
-def _refuse_with_restore(plan, section):
-    """`restore` runs before the pointer appliers and can add rows (pointers too) their check never saw (P3-A-02)."""
-    if (plan.get("restore") or {}).get("learnings"):
-        raise PlanError(f"'restore' and '{section}' in one plan - restore first (maintain Step 5b), then "
-                        f"'{section}' in a second plan against the restored store")
-
-
 def validate_principles(mem, plan):
     """Pointer shape, before the first byte (D-021 (4)): the rule's wording lives at
     `anchor`, so an anchor that does not resolve TODAY is refused."""
@@ -2187,7 +2158,6 @@ def validate_principles(mem, plan):
     if plan.get("principle_retire"):
         raise PlanError("'principles' and 'principle_retire' in one plan - send them as two plans "
                         "(retire first), each is checked against the store as it stands")
-    _refuse_with_restore(plan, "principles")
     # ids as the corrections applier resolves them (_correction_common strips them, Codex P3-A-04-R2-01)
     corrected = {str(c.get("id") or "").strip() for c in ((plan.get("corrections") or {}).get("learnings") or [])
                  if isinstance(c, dict)} if isinstance(plan.get("corrections"), dict) else set()
@@ -2289,7 +2259,7 @@ def apply_principles(mem, plan, date, dry, touched, tally):
     stay byte-identical), importance = max of the local members, no
     review_after. The same anchor again merges members into the existing
     pointer instead of adding a row. Written only after the owner's gate
-    (/agentic-os:maintain Step 5c) - wrap-up never emits this section.
+    (/agentic-os:maintain, the Pflegelauf) - wrap-up never emits this section.
     """
     items = plan.get("principles") or []
     if not items:
@@ -2398,7 +2368,6 @@ def validate_principle_retire(mem, plan):
         return
     if not isinstance(items, list) or not items:
         raise PlanError("principle_retire must be a non-empty list")
-    _refuse_with_restore(plan, "principle_retire")
     rows = load_json(mem, "learnings/learnings.json", [])
     for it in items:
         if not isinstance(it, dict):
@@ -2460,97 +2429,225 @@ def apply_principle_retire(mem, plan, date, dry, touched, tally):
     render_learnings_md(mem, rows, dry, touched)
 
 
-# Stamps maintain put on archived rows; they describe the archive, not the entry.
-ARCHIVE_STAMPS = ("archived_at", "archived_by", "archive_reason", "archived")
+# 6.0.0 Pflegelauf: the agent judges alone, so these refusals are the safety net. The section touches
+# metadata only (superseded_by, review_after), never a row's text and never its existence (D-021).
+LEARNING_UPDATE_FIELDS = {"id", "superseded_by", "review_after", "obsolete", "reason"}
+LEARNING_UPDATE_MODES = ("superseded_by", "review_after", "obsolete")
+LEARNING_UPDATE_REASON_MAX = 300
+PFLEGELAUF_STAMP = "working/pflegelauf.json"
 
 
-def apply_restore(mem, plan, date, dry, touched, tally):
-    """Plan section `restore` (5.3.0, D-021): archived rows come back through this
-    one writer, input from scripts/restore_plan.py.
+def _update_reason(it) -> str:
+    reason = it.get("reason")
+    return " ".join(reason.split()) if isinstance(reason, str) else ""
 
-    Decided here, at apply time, against the FRESH store (the plan may be days
-    old): same id + same text -> skip, so a second run changes nothing; same
-    text under another id -> skip; id taken by a different text -> next free id
-    plus `legacy:<id>`. A free archive id is KEPT, so old citations stay valid.
-    A row that fails validation is dropped and reported - never the whole run.
-    Archive files are only read (reserved ids), never written.
+
+def validate_learning_updates(mem, plan):
+    """Plan section `learning_updates` (6.0.0), checked before the first byte.
+
+    Each entry names a local id, a reason (1..300 characters) and exactly one of
+    `superseded_by` (a local id, or null to take a wrong verdict back),
+    `review_after` (YYYY-MM-DD) and `obsolete: true` (verdict "gegenstandslos": the row
+    describes something that is gone and nothing replaces it; written as
+    `superseded_by = obsolete:pflegelauf-<date>`, refused on a row that is already
+    superseded). `superseded_by` (set or cleared) and `obsolete` are refused on a
+    rule-class learning, a pointer row and a member of a live pointer or of one the
+    same plan writes - the run loosens no protection, those keep `principle_retire`
+    and the rule-class gate; `review_after` is allowed on them (spec 5). A target must
+    exist, differ from the id and be live, also after this plan (no chains, no pairs,
+    not retired by the same plan's `principle_retire`), and must not be a pointer, a
+    rejected or retired bridge entry or an unreleased rule-class learning.
     """
-    spec = plan.get("restore") or {}
-    items = spec.get("learnings") or []
+    if "pflegelauf_stamp" in plan and not isinstance(plan["pflegelauf_stamp"], bool):
+        raise PlanError("pflegelauf_stamp must be a JSON bool")
+    items = plan.get("learning_updates")
+    if items is None:
+        return
+    if not isinstance(items, list):
+        raise PlanError("learning_updates must be a list")
     if not items:
         return
-    source = str(spec.get("source") or "restore")
     rows = load_json(mem, "learnings/learnings.json", [])
-    archive = archived_rows(mem, "learnings/learnings.json")
+    live = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
+    # principle_retire runs before this section: a pointer it retires is no live target any more
+    retired = {str(r.get("id")) for spec in (plan.get("principle_retire") or [])
+               for r, action in _retire_actions(rows, spec) if action == "retire"}
+    members = {m for r in live.values() if r.get("kind") == "principle" and not r.get("superseded_by")
+               for m in (r.get("derived_from") or []) if isinstance(m, str)}
+    # a pointer of the same plan is written before this section runs: its members count as members already
+    members |= {m for p in (plan.get("principles") or []) if isinstance(p, dict)
+                for m in (p.get("members") or []) if isinstance(m, str)}
+    # a row some other row is superseded by is that row's live successor: hiding it (superseded_by or obsolete)
+    # would leave the other row pointing at nothing live - also across chunks (Codex 25.11.). Rows this plan
+    # re-points or clears (superseded_by in the same plan) are left out: that frees their old successor. A review
+    # date or 'obsolete' on such a row keeps its pointer, so it still counts.
+    planned = {str(it.get("id")).strip() for it in items
+               if isinstance(it, dict) and isinstance(it.get("id"), str) and "superseded_by" in it}
+    incoming = {}
+    for r in live.values():
+        succ = r.get("superseded_by")
+        if isinstance(succ, str) and str(r.get("id")) not in planned:
+            incoming.setdefault(succ, []).append(str(r.get("id")))
+    seen, targets, obsoleted = set(), {}, set()
+    for it in items:
+        if not isinstance(it, dict):
+            raise PlanError("learning update is not an object")
+        extra = sorted(set(it) - LEARNING_UPDATE_FIELDS)
+        if extra:
+            raise PlanError(f"learning update {it.get('id')!r}: unknown field(s) {', '.join(extra)} - the section "
+                            f"sets superseded_by, review_after or obsolete, never the text")
+        lid = it.get("id")
+        if not isinstance(lid, str) or not _LOCAL_MEMBER.match(lid.strip()):
+            raise PlanError(f"learning update id {lid!r} is not a local id of this store (Lnn); qualified ids "
+                            f"(other store, native note) are refused")
+        lid = lid.strip()
+        row = live.get(lid)
+        if row is None:
+            raise PlanError(f"learning update points at unknown learning {lid}")
+        if lid in seen:
+            raise PlanError(f"learning update {lid} appears twice")
+        seen.add(lid)
+        reason = _update_reason(it)
+        if not reason or len(reason) > LEARNING_UPDATE_REASON_MAX:
+            raise PlanError(f"learning update {lid} needs a 'reason' (1..{LEARNING_UPDATE_REASON_MAX} characters)")
+        if sum(k in it for k in LEARNING_UPDATE_MODES) != 1:
+            raise PlanError(f"learning update {lid} takes exactly one of 'superseded_by', 'review_after' and "
+                            f"'obsolete'")
+        if "obsolete" in it and it["obsolete"] is not True:
+            raise PlanError(f"learning update {lid}: obsolete must be true (JSON bool) - to take 'gegenstandslos' "
+                            f"back, set superseded_by to null")
+        if not isinstance(row.get("update_log", []), list):
+            raise PlanError(f"learning update {lid}: the row's update_log is not a list - repair the row first")
+        if "review_after" in it:
+            when = it["review_after"]
+            if not (isinstance(when, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", when) and _is_iso_date(when)):
+                raise PlanError(f"learning update {lid}: review_after {when!r} is not YYYY-MM-DD")
+            continue
+        # the protections hold for superseded_by, set or cleared, and for obsolete (review_after above is allowed,
+        # spec 5)
+        if _rule_like(row):
+            raise PlanError(f"learning update {lid}: superseded_by of a rule-class learning (flag or rule tag) "
+                            f"changes only through the rule-class gate, never in the maintenance run")
+        if row.get("kind") == "principle":
+            raise PlanError(f"learning update {lid}: a pointer row is taken back only via 'principle_retire'")
+        if lid in members:
+            raise PlanError(f"learning update {lid}: member of a rule pointer - take the pointer back first "
+                            f"('principle_retire')")
+        if lid in incoming and not ("superseded_by" in it and it["superseded_by"] is None):
+            raise PlanError(f"learning update {lid}: it is the live successor of {', '.join(sorted(incoming[lid]))} - "
+                            f"re-point that row first (same plan or earlier), or judge {lid} 'bleibt'")
+        if "obsolete" in it:
+            # R24: an approved feedback row is an owner correction shown in MEMORY.md - without a successor
+            # nothing would carry its content any more (doppelt/überholt with a successor stay allowed)
+            if row.get("kind") == "feedback" and row.get("bridge_status") == "approved":
+                raise PlanError(f"learning update {lid}: 'gegenstandslos' on approved feedback (an owner correction) "
+                                f"is refused - only doppelt/überholt with a live successor")
+            if row.get("superseded_by"):
+                raise PlanError(f"learning update {lid}: already superseded by {row['superseded_by']} - "
+                                f"'gegenstandslos' is for a live row only")
+            obsoleted.add(lid)
+            continue
+        target = it["superseded_by"]
+        if target is None:
+            continue  # take a wrong verdict back
+        if not isinstance(target, str) or not _LOCAL_MEMBER.match(target.strip()):
+            raise PlanError(f"learning update {lid}: superseded_by {target!r} must be a local id of this store "
+                            f"or null")
+        target = target.strip()
+        if target == lid:
+            raise PlanError(f"learning update {lid}: superseded by itself")
+        if target not in live:
+            raise PlanError(f"learning update {lid}: superseded_by points at unknown learning {target}")
+        trow = live[target]
+        if target in retired:
+            raise PlanError(f"learning update {lid}: target {target} is retired by principle_retire in the same plan")
+        if trow.get("kind") == "principle":
+            raise PlanError(f"learning update {lid}: target {target} is a rule pointer - a learning joins a pointer "
+                            f"as a member ('principles'), it is not superseded by it")
+        if trow.get("bridge_status") in ("rejected", "retired"):
+            raise PlanError(f"learning update {lid}: target {target} has bridge_status {trow['bridge_status']!r} - "
+                            f"point at a live successor")
+        if (row.get("kind") == "feedback" and row.get("bridge_status") == "approved"
+                and not (trow.get("kind") == "feedback" and trow.get("bridge_status") == "approved")):
+            # MEMORY.md shows approved feedback only: any other successor would drop the owner correction there
+            raise PlanError(f"learning update {lid}: approved feedback (an owner correction) is superseded only by "
+                            f"approved feedback - {target} is not; judge {lid} 'bleibt'")
+        if _rule_like(trow) and (trow.get("release") or {}).get("status") != "released":
+            raise PlanError(f"learning update {lid}: target {target} is an unreleased rule-class learning (release "
+                            f"state {(trow.get('release') or {}).get('status', 'needs_explanation')!r}) - it needs "
+                            f"the gate first")
+        if trow.get("superseded_by"):
+            raise PlanError(f"learning update {lid}: target {target} is itself superseded - point at the live "
+                            f"successor (no chains)")
+        targets[lid] = target
+    for lid, target in targets.items():
+        if target in obsoleted:
+            raise PlanError(f"learning update {lid}: target {target} is declared obsolete by the same plan - point "
+                            f"at a live successor")
+        if targets.get(target) == lid:
+            raise PlanError(f"learning updates {lid} -> {target} and {target} -> {lid} supersede each other")
+        if target in targets:
+            raise PlanError(f"learning update {lid}: target {target} is superseded by the same plan - point at "
+                            f"the live successor (no chains)")
+
+
+def _rule_like(row) -> bool:
+    """A rule learning for the maintenance run's protections: the flag, or a rule tag on a legacy row written
+    before the 5.8.0 gate set the flag on write (plan schema: rule_class = flag or tag)."""
+    return bool(row.get("rule_class")) or bool(RULE_TAGS & {str(t).lower() for t in (row.get("tags") or [])})
+
+
+def apply_learning_updates(mem, plan, date, dry, touched, tally):
+    """Sets the field, appends {date, reason, by: pflegelauf, field, old, new} to the row's update_log. An
+    entry that would change nothing (same value, or null on a live row) writes nothing and logs nothing."""
+    items = plan.get("learning_updates") or []
+    if not items:
+        return
+    rows = load_json(mem, "learnings/learnings.json", [])
     by_id = {str(r.get("id")): r for r in rows if isinstance(r, dict)}
-    norms = {norm(r.get("text")) for r in rows if isinstance(r, dict)}
-    accepted, dropped, skipped, renumbered = [], [], 0, {}
-    collided = set()  # archive ids that a DIFFERENT live entry holds today
-    for raw in items:
-        if not isinstance(raw, dict):
-            dropped.append({"id": None, "errors": ["row is not an object"]})
+    counts = tally["learning_updates"]
+    for it in items:
+        row = by_id[it["id"].strip()]
+        if "review_after" in it:
+            field, value, kind = "review_after", it["review_after"], "review_after"
+            unchanged = row.get(field) == value
+        elif "obsolete" in it:
+            # the validation admits live rows only, so this always changes the row
+            field, value, kind = "superseded_by", f"obsolete:pflegelauf-{date}", "obsolete"
+            unchanged = False
+        else:
+            value = it["superseded_by"].strip() if isinstance(it["superseded_by"], str) else None
+            field, kind = "superseded_by", ("superseded" if value else "cleared")
+            unchanged = row.get(field) == value if value else not row.get(field)
+        if unchanged:
+            tally["learning_updates_unchanged"] += 1
             continue
-        row = {k: v for k, v in raw.items() if k not in ARCHIVE_STAMPS}
-        rid = str(row.get("id") or "")
-        text_norm = norm(row.get("text"))
-        live = by_id.get(rid)
-        if (live is not None and norm(live.get("text")) == text_norm) or text_norm in norms:
-            skipped += 1
-            continue
-        der = row.get("derived_from", [])
-        if isinstance(der, list):
-            der = list(der)
-            if not any(str(d).startswith("restored:") for d in der):
-                der.append(f"restored:{source}")
-            if live is not None:
-                der.append(f"legacy:{rid}")
-        row["derived_from"] = der
-        if live is not None:
-            collided.add(rid)
-        errs = field_errors(row) + ([] if rid else ["missing id"])
-        if errs:
-            dropped.append({"id": rid or None, "errors": errs})
-            continue
-        if live is not None or rid in {str(r["id"]) for r in accepted}:
-            new_id = next_id(rows + accepted, "L", reserved=archive)
-            renumbered[rid] = new_id
-            row["id"] = new_id
-        accepted.append(row)
-        norms.add(text_norm)
-    # superseded_by is checked against what is ACTUALLY written (Codex 5.3.0): a
-    # successor that was dropped drops its predecessor too, and a successor that
-    # was renumbered is followed - in the archive, its id meant the archived row.
-    changed = True
-    while changed:
-        changed = False
-        final = {**by_id, **{str(r["id"]): r for r in accepted}}
-        for row in list(accepted):
-            sup = row.get("superseded_by")
-            if sup and str(sup) in renumbered and not str(sup).startswith(SUPERSEDE_PREFIXES):
-                row["superseded_by"] = sup = renumbered[str(sup)]
-            if sup and str(sup) in collided and str(sup) not in renumbered:
-                # the archived successor was dropped; the live entry under that id is
-                # ANOTHER entry and must not inherit the pointer (Codex round 2)
-                errs = [f"superseded_by {sup}: the archived successor was dropped and the live "
-                        f"{sup} is a different entry"]
-            else:
-                errs = supersede_errors(row, final)
-            if errs:
-                accepted.remove(row)
-                dropped.append({"id": str(row["id"]), "errors": errs})
-                changed = True
-                break
-    added = accepted
-    tally["restored"] = len(added)
-    tally["restored_ids"] = [str(r["id"]) for r in added]
-    tally["restore_skipped_live"] = skipped
-    tally["restore_dropped"] = dropped
-    if added:
-        if not dry:
-            store_snapshot.take(mem)  # bulk mutation: byte copy of the store first
-        rows.extend(added)
-        write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
-        render_learnings_md(mem, rows, dry, touched)
+        old = row.get(field)
+        row[field] = value
+        # field/old/new: the log alone is enough to take one verdict back (final review I3)
+        row.setdefault("update_log", []).append({"date": date, "reason": _update_reason(it), "by": "pflegelauf",
+                                                 "field": field, "old": old, "new": value})
+        counts[kind] += 1
+    if not any(counts.values()):
+        return
+    write_json(mem, "learnings/learnings.json", rows, dry, touched, via="learnings")
+    render_learnings_md(mem, rows, dry, touched)
+
+
+def write_pflegelauf_stamp(mem, plan, date, dry, touched, tally):
+    """`pflegelauf_stamp: true` -> working/pflegelauf.json = {date, id_keys}. id_keys counts '"id"' in the text
+    of learnings.json as it stands after this run's writes - the same count as count_ids in
+    memory-thresholds.sh (grep -o '"id"' | wc -l), so trigger and stamp measure alike (L154)."""
+    if plan.get("pflegelauf_stamp") is not True:
+        return
+    path = os.path.join(mem, "learnings", "learnings.json")
+    text = ""
+    if os.path.exists(path):
+        with open(path, encoding="utf-8-sig") as fh:
+            text = fh.read()
+    stamp = {"date": date, "id_keys": text.count('"id"')}
+    tally["pflegelauf_stamp"] = stamp
+    write_json(mem, PFLEGELAUF_STAMP, stamp, dry, touched, via="learning_updates")
 
 
 def render_importance(value) -> int:
@@ -2571,7 +2668,7 @@ LEARNINGS_MD_HEADER = "*Auto-generated from learnings.json — do not edit direc
 
 def render_learnings_md(mem, rows, dry, touched):
     """learnings.md is a pure projection of learnings.json - fully deterministic.
-    The header is the marker /agentic-os:maintain Step 5.2 and memory-audit check."""
+    The header marks the file as generated (never edited by hand)."""
     out = ["# Learnings", "", LEARNINGS_MD_HEADER, ""]
     for imp in (5, 4, 3, 2, 1):
         bucket = [r for r in rows if render_importance(r.get("importance", 3)) == imp and not r.get("superseded_by")]
@@ -2586,8 +2683,7 @@ def render_learnings_md(mem, rows, dry, touched):
     write_atomic(mem, "learnings/learnings.md", "\n".join(out).rstrip() + "\n", dry, touched)
 
 
-# P1/B2: what a plan may set on a candidate directly. `confirmed` is not on the list - it is
-# earned (a verified user quote, or the second mention from ANOTHER session) and never declared.
+# The statuses identity_expire may mark as expired (one-off observations of the old harvest).
 PLAN_CANDIDATE_STATUSES = ("observed", "inferred")
 
 
@@ -2597,7 +2693,7 @@ def _clean_quote(value) -> str:
 
 
 def _verify_identity_quotes(quotes, session_id, transcript, tally):
-    """Verdicts for quotes the plan relies on (candidates and supersede alike): {quote: True | False | "kein_transkript"}
+    """Verdicts for the quotes of user_md_supersede and user_md_retire: {quote: True | False | "kein_transkript"}
     and {quote: reason}. Fills the tally fields both appliers share: the transcript used, the warnings, a refused
     --transcript override (D3) and a session mismatch (D2)."""
     verdicts, info = identity_quote.verify_quotes(quotes, session_id, transcript)
@@ -2611,56 +2707,6 @@ def _verify_identity_quotes(quotes, session_id, transcript, tally):
     if info.get("session_mismatch"):
         tally["session_binding_mismatch"] = True
     return verdicts, info["reasons"]
-
-
-def validate_user_candidates(plan):
-    """Shape of the user_candidates section, before the first byte. A candidate that CLAIMS
-    `confirmed` is judged later (quote check) and downgraded, not rejected - but a field of the
-    wrong type is a plan error: `confirmed` must be a JSON bool, `quote` a string."""
-    cands = plan.get("user_candidates")
-    if cands is None:
-        return
-    if not isinstance(cands, list):
-        raise PlanError("user_candidates must be a list")
-    for cand in cands:
-        if not isinstance(cand, dict):
-            raise PlanError("user candidate is not an object")
-        if not (cand.get("key") or "").strip():
-            raise PlanError("user candidate without 'key'")
-        if "confirmed" in cand and not isinstance(cand["confirmed"], bool):
-            raise PlanError(f"user candidate {cand['key']!r}: 'confirmed' must be a JSON bool")
-        if cand.get("quote") is not None and not isinstance(cand["quote"], str):
-            raise PlanError(f"user candidate {cand['key']!r}: 'quote' must be a string (the user's literal words)")
-        if "confidence" in cand:
-            try:
-                float(cand["confidence"])
-            except (TypeError, ValueError):
-                raise PlanError(f"user candidate {cand['key']!r}: 'confidence' must be a number") from None
-
-
-def _merge_plan_entries(items, date, verdicts):
-    """One plan entry per key (D1): the entries of the same key in ONE plan are one mention, not several.
-    Evidence is united in order, a claim to be confirmed holds if any entry makes it, and a VERIFIED quote wins
-    over an unverified or missing one (else the first quote stays). Scalars come from the first entry."""
-    first = items[0]
-    evidence = []
-    for it in items:
-        for e in (it.get("evidence") or []):
-            if e not in evidence:
-                evidence.append(e)
-    quotes = [q for q in (_clean_quote(it.get("quote")) for it in items) if q]
-    quote = next((q for q in quotes if verdicts.get(q) is True), quotes[0] if quotes else "")
-    wanted = next((it.get("status") for it in items if it.get("status") is not None), None)
-    return {
-        "observation": next(((it.get("observation") or "").strip() for it in items if (it.get("observation") or "").strip()), ""),
-        "signal_type": first.get("signal_type", "preference"),
-        "confidence": first.get("confidence", 0.5),
-        "evidence": evidence or [f"session {date}"],
-        "claims": any(bool(it.get("confirmed")) or it.get("status") == "confirmed" for it in items),
-        "quote": quote,
-        "statuses": [it.get("status") for it in items],
-        "wanted": wanted,
-    }
 
 
 # Function words that carry no claim. A quote and a statement "share a content word" only through words that are
@@ -2688,18 +2734,6 @@ def _fold(text) -> str:
 
 
 _INVISIBLE = ("Cf", "Mn")
-
-
-def _spaced(text) -> str:
-    """The text (NFC) with every invisible character read as a space."""
-    nfc = unicodedata.normalize("NFC", str(text or ""))
-    return "".join(" " if unicodedata.category(ch) in _INVISIBLE else ch for ch in nfc)
-
-
-def _tokens(text):
-    """Every word of 2+ characters in comparison form. An invisible character is read once as nothing and once as a
-    space, so neither 'hal<ZWSP>ten' nor 'Antworten<ZWSP>kurz<ZWSP>halten' hides a word (round 6)."""
-    return {w for t in (text, _spaced(text)) for w in re.findall(r"[^\W_]{2,}", _fold(t))}
 
 
 def _content_words(text):
@@ -2732,160 +2766,6 @@ def _polarity_differs(quote, text) -> bool:
     return identity_quote.has_negation(quote) != identity_quote.has_negation(_CITATION_SUFFIX.sub("", str(text or "")))
 
 
-def apply_user_candidates(mem, plan, date, dry, touched, tally, session_id="", transcript=None, paths=None):
-    """Step 6.2 enqueue + 6.3 FULL queue re-review. Both rules are deterministic.
-
-    P1/B2 - `confirmed` is earned, never declared. A candidate that claims it (`confirmed: true`
-    or `status: "confirmed"`) is confirmed at first sight only when its `quote` is a substring
-    of a genuine user message in the session transcript (scripts/identity_quote.py). Otherwise it stays
-    observed / inferred and the old rule applies: the second mention confirms. The verdict is stored
-    on the candidate (`quote_verified`: true | false | "kein_transkript") and measured in the tally.
-    No transcript to check against is not an error, it just never confirms at first sight.
-
-    D1 - the second mention counts only from ANOTHER session: the candidate carries `sessions` (the ids of the
-    sessions that named it) and `occurrences` rises only when the current session id is not among them. The same
-    key twice in one plan is one mention; a rerun in the same session adds nothing; an empty session id counts
-    nothing (a repetition cannot be proven). A legacy row without `sessions` keeps its `occurrences` and the
-    first new session adds one.
-    D2 - if CLAUDE_CODE_SESSION_ID names another session than the one given, the identity evidence of this run
-    is not verifiable: no quote verifies and nothing is counted.
-    """
-    obs = plan.get("user_candidates") or []
-    paths = _id_paths(mem, paths)
-    queue = load_json(paths.root, paths.queue, [])
-    # A run that died after the changelog (written FIRST) and before the queue left its candidate id only in the
-    # audit log and the profile; re-issuing it would make another statement a 'duplicate' of that line (Codex P2-A-01)
-    taken = [{"id": e["candidate_id"]} for e in load_json(paths.root, paths.changelog, [])
-             if isinstance(e, dict) and isinstance(e.get("candidate_id"), str)]
-    by_key = {c.get("key"): c for c in queue}
-    sid = str(session_id or "").strip()
-    binding = identity_quote.session_binding(sid)
-    can_count = bool(sid) and not binding["mismatch"]
-    if obs and not can_count:
-        if binding["mismatch"]:
-            tally["session_binding_mismatch"] = True
-            msg = identity_quote.mismatch_warning(binding)
-        else:
-            msg = "user candidates: no session id - repeats are not counted (a repetition cannot be proven)"
-        if msg not in tally["warnings"]:
-            tally["warnings"].append(msg)
-
-    # Trust boundary first: a foreign-source candidate is dropped before anything is checked or merged for it.
-    grouped = {}
-    for o in obs:
-        key = (o.get("key") or "").strip()
-        if not key:
-            raise PlanError("user candidate without 'key'")
-        if o.get("trust_source", "conversation") != "conversation":
-            # Step 6.1 trust boundary - memory-poisoning defense.
-            tally["candidates_rejected_trust"] += 1
-            continue
-        if key in grouped:
-            tally["plan_duplicates_merged"] += 1
-            tally["warnings"].append(f"candidate {key!r} appears more than once in the plan - merged, counted as one mention")
-        grouped.setdefault(key, []).append(o)
-
-    quotes = [q for items in grouped.values() for q in (_clean_quote(it.get("quote")) for it in items) if q]
-    verdicts, reasons = {}, {}
-    if quotes:
-        verdicts, reasons = _verify_identity_quotes(quotes, sid, transcript, tally)
-
-    for key, items in grouped.items():
-        eff = _merge_plan_entries(items, date, verdicts)
-        quote = eff["quote"]
-        verdict = verdicts.get(quote) if quote else None
-        if quote:
-            tally["quotes_verified" if verdict is True else
-                  "quotes_no_transcript" if verdict == identity_quote.NO_TRANSCRIPT else "quotes_unverified"] += 1
-            if verdict is not True and reasons.get(quote):
-                tally["quote_reasons"][key] = reasons[quote]
-            # R1 round 3: the relation is checked against the text that is STORED and later promoted - for a known
-            # key that is the queue row's observation, not what this plan happens to carry.
-            stored_obs = (by_key[key].get("observation") if key in by_key else eff["observation"]) or ""
-            if verdict is True and stored_obs and not _quote_related(quote, stored_obs):
-                tally["quote_unrelated"].append(key)
-                tally["warnings"].append(f"candidate {key!r}: the verified quote shares no content word with the "
-                                         f"observation - check that it really supports it")
-            if verdict is True and stored_obs and _polarity_differs(quote, stored_obs):
-                tally["quote_polarity"].append(key)  # calibration data only, no warning (noise)
-        claims = eff["claims"]
-        earned = claims and verdict is True
-        wanted = eff["wanted"]
-        for st in eff["statuses"]:
-            if st not in (None, "confirmed") + PLAN_CANDIDATE_STATUSES:
-                tally["warnings"].append(f"candidate {key!r}: status {st!r} is not allowed in a plan - recorded as observed")
-        if key in by_key:
-            c = by_key[key]
-            if c.get("status") == "expired":
-                # 5.11.0: an expired one-off observation named again is alive again - it keeps its history
-                c["status"] = c.get("expired_from") if c.get("expired_from") in PLAN_CANDIDATE_STATUSES else "observed"
-                c["revived_at"] = date
-                tally["candidates_revived"] += 1
-            sessions = c.get("sessions") if isinstance(c.get("sessions"), list) else []
-            counted = False
-            if can_count and "sessions" in c and not sessions:
-                # D1 round 2: the row was born without a provable session (empty id, blank id, session mismatch).
-                # The first real id is taken in WITHOUT counting - the earlier run may be this very session, and
-                # a repetition cannot be proven. Only a row without the key (legacy) follows the plain D1 rule.
-                c["sessions"] = [sid]
-                tally["session_adopted"] += 1
-                tally["warnings"].append(f"candidate {key!r}: created without a provable session - session {sid} taken in, "
-                                         f"the mention is not counted as a repeat")
-            elif can_count and sid not in sessions:
-                c["occurrences"] = int(c.get("occurrences", 1)) + 1
-                c["sessions"] = sessions + [sid]
-                counted = True
-            else:
-                tally["repeat_not_counted"] += 1  # same session again, no session id, or a session mismatch
-            c["last_seen"] = date
-            ev = c.setdefault("evidence", [])
-            for e in eff["evidence"]:
-                if e not in ev:
-                    ev.append(e)
-            if quote and (verdict is True or c.get("quote_verified") is not True):
-                c["quote"], c["quote_verified"] = quote, verdict
-            if c.get("status") in PLAN_CANDIDATE_STATUSES and (earned or (counted and int(c["occurrences"]) >= 2)):
-                c["status"] = "confirmed"
-                c["confirmed_by"] = "quote" if earned else "repeat"
-            elif earned and c.get("status") == "confirmed":
-                c["confirmed_by"] = "quote"  # D9: the user's verified words lift a row confirmed by repetition to the top proof
-            tally["candidates_updated"] += 1
-        else:
-            c = {
-                "id": next_id(queue, paths.id_prefix, reserved=taken),
-                "key": key,
-                "observation": eff["observation"],
-                "status": "confirmed" if earned else (wanted if wanted in PLAN_CANDIDATE_STATUSES else "observed"),
-                "signal_type": eff["signal_type"],
-                "confidence": float(eff["confidence"]),
-                "occurrences": 1,
-                "sessions": [sid] if can_count else [],
-                "evidence": list(eff["evidence"]),
-                "first_seen": date,
-                "last_seen": date,
-                "trust_source": "conversation",
-            }
-            if quote:
-                c["quote"], c["quote_verified"] = quote, verdict
-            if earned:
-                c["confirmed_by"] = "quote"
-            if paths.central:
-                c["origin"] = _origin(mem)
-            queue.append(c)
-            by_key[key] = c
-            tally["candidates_new"] += 1
-        if claims and c.get("status") in PLAN_CANDIDATE_STATUSES:
-            # the claim was not honoured: no quote, not found, or nothing to check it against
-            tally["confirm_downgraded"] += 1
-            tally["confirm_downgraded_keys"].append(key)
-
-    marks = [c.get("blocked_by_supersede") for c in queue]
-    promoted = promote_candidates(mem, queue, date, dry, touched, tally, paths=paths)
-    if obs or promoted or marks != [c.get("blocked_by_supersede") for c in queue]:  # a new block note must reach the file
-        write_json(paths.root, paths.queue, queue, dry, touched, via="identity")
-    tally["queue_open"] = sum(1 for c in queue if c.get("status") not in ("promoted", "expired"))
-
-
 def _norm_tokens(text):
     return set(re.sub(r"[^a-z0-9\s]", " ", str(text or "").lower()).split())
 
@@ -2900,278 +2780,11 @@ def _jaccard(a, b):
 _CITATION_SUFFIX = re.compile(r"\s*[\[(]\s*(?:UC|PC)\d+\s*,[^\])]*[\])]\s*$")
 
 
-def _already_in_user_md(cand, user_md):
-    """Return the user.md line a candidate duplicates, else None. Duplicate =
-    the candidate id is already cited, or the observation nearly repeats an
-    existing line (Jaccard >= 0.8 after stripping the '(UCn, date)' citation).
-    2026-07-27: UC1-UC3 were re-promoted as plain duplicates. Limitation: a
-    negated restatement ('niemals') still scores as a duplicate - that is why
-    every skip is written to the changelog instead of vanishing."""
-    cid = str(cand.get("id", ""))
-    obs = cand.get("observation", "")
-    for lines in user_md.values():
-        for line in lines:
-            if cid and re.search(r"[\[(]\s*" + re.escape(cid) + r"\s*[,\])]", line):
-                return line
-            if _jaccard(obs, _CITATION_SUFFIX.sub("", line)) >= 0.8:
-                return line
-    return None
-
-
-# D9: a statement the owner retracted through user_md_supersede must not come back on a lower proof. The word measure does
-# not judge the MEANING (every such heuristic has a gap) - it only decides the PROOF LEVEL: a candidate that touches a
-# retracted statement is promoted only when it is confirmed by a verified quote (confirmed_by == "quote", the user's own
-# words); a repetition or an inference does not bring it back. "Touches" is measured generously, a false alarm costs one
-# quote: the retracted line is read twice - without the citation "(UC3, 2026-07-01)" at its END (every other bracket
-# stays content) and without every unnested bracket group at its end ("(Owner, 2026-07-01)", "(seit Juli)") - and it is
-# touched when one reading is. From RETRACT_MIN_TOKENS content words (4+ letters, no function words, umlauts written
-# out) on, at least RETRACT_MIN of them stand in the observation; a line of 1-2 content words needs all of them (a
-# function word of the line may be missing, round 5), a line without one ("Mag TDD") all its tokens of 2+ characters.
-# "Stand in" = an equal or same-stem word among ALL words of the observation, function words included ("noch einmal"
-# stands for "nochmal", round 6). Known limits: a synonym or a paraphrase that keeps under half of the words ("kurz" ->
-# "knapp" in a longer sentence), a candidate that names only part of the line ("Will keine Emojis" against "Will keine
-# Emojis in Commits"), and deliberately disguised wording (look-alike letters) are not touched.
-RETRACT_MIN = 0.5
-RETRACT_MIN_TOKENS = 3
-
-
-def _share(words, pool) -> float:
-    """Share of `words` that stand in `pool` (the same word or the same stem)."""
-    return sum(1 for w in words if any(_words_related(w, p) for p in pool)) / len(words)
-
-
 _CITED_ID = re.compile(r"[\[(]\s*([A-Za-z]{1,6}\d{1,6})\s*[,\])]")
 # The citation "(UC3, 2026-07-01)" at the END of the line (optionally followed by further notes): a bracket in the
-# middle of the line ("Nutzt Python (py3, uv) ...") is no citation (Pruefer Runde 3, N6).
+# middle of the line ("Nutzt Python (py3, uv) ...") is no citation (Pruefer Runde 3, N6). user_md_retire records the
+# id the removed line cited.
 _CITED_AT_END = re.compile(r"[\[(]\s*([A-Za-z]{1,6}\d{1,6})\s*,[^\[\]()]*[\])]\s*(?:[\[(][^\[\]()]*[\])]\s*)*$")
-
-
-def retracted_statements(changelog):
-    """Every user.md supersede in the audit log, as {old, line, readings}: statements the owner has contradicted or
-    refined, which must not come back through a fresh candidate (D9). `line` = the id of the replaced line (the entry's
-    candidate_id, else the id the old line cited) or None; `readings` = the two readings of the old line the measure
-    compares, taken from the line as written and from the line with its invisible characters read as spaces, each also
-    with its invisible characters read as spaces (round 7; computed once per entry, not per candidate)."""
-    out = []
-    for e in changelog:
-        if isinstance(e, dict) and e.get("field") in ("user.md/supersede", "user.md/retire") and e.get("old_value"):
-            old = str(e["old_value"])
-            cited = _CITED_AT_END.search(old) or _CITED_ID.search(old)
-            # the notes come off the line as written AND with its invisible characters read as spaces: a zero-width
-            # character behind the closing bracket would otherwise keep the note in (Codex-Verifier 2026-10-28, P1-B2-01)
-            readings = tuple(rx.sub("", s) for s in (old, _spaced(old)) for rx in (_CITED_AT_END, _NOTES_AT_END))
-            out.append({"old": old, "line": e.get("candidate_id") or (cited.group(1) if cited else None),
-                        "readings": tuple(dict.fromkeys(readings + tuple(_spaced(r) for r in readings)))})
-    return out
-
-
-_NOTES_AT_END = re.compile(r"(?:\s*[\[(][^\[\]()]*[\])])+[\s.,;:!?]*$")
-
-
-def _touches_line(pool, line) -> bool:
-    """Does the observation whose words are `pool` (_tokens) touch this reading of a retracted line?"""
-    words = set(_content_words(line))
-    if words:
-        return _share(words, pool) >= (RETRACT_MIN if len(words) >= RETRACT_MIN_TOKENS else 1)
-    words = set(re.findall(r"[^\W_]{2,}", _fold(line)))
-    return bool(words) and _share(words, pool) == 1
-
-
-def promote_candidates(mem, queue, date, dry, touched, tally, paths=None):
-    """Step 6.3: review EVERY candidate, not just this session's."""
-    promotable = []
-    for c in queue:
-        if c.get("status") == "promoted":
-            continue
-        if c.get("signal_type") == "mood":
-            continue  # signal:mood is NEVER promoted
-        if c.get("trust_source") != "conversation":
-            # The enqueue path rejects foreign sources, but this full-queue
-            # re-review also sees rows written by older versions, other code
-            # paths, or a hand-edited file. Without this check a poisoned row
-            # already sitting in the queue would be laundered into user.md -
-            # exactly what the Step 6.1 boundary exists to prevent.
-            tally["promotion_blocked_trust"] += 1
-            continue
-        status = c.get("status")
-        occ = int(c.get("occurrences", 1))
-        conf = float(c.get("confidence", 0.0))
-        if status == "confirmed" or (status == "inferred" and occ >= 2 and conf >= 0.6):
-            promotable.append(c)
-
-    if not promotable:
-        return []
-
-    paths = _id_paths(mem, paths)
-    changelog = load_json(paths.root, paths.changelog, [])
-    user_md = read_user_md(mem, paths)
-    retracted = retracted_statements(changelog)
-    now = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
-
-    promoted, additions, blocked, log_changed = [], [], [], False
-    for c in promotable:
-        dup = _already_in_user_md(c, user_md)
-        if dup is not None:
-            changelog.append({
-                "ts": now,
-                "field": "user.md/skipped-duplicate",
-                "old_value": dup,
-                "new_value": c.get("observation"),
-                "candidate_id": c.get("id"),
-                "evidence": c.get("evidence") or [],
-                "reason": "duplicate_of_existing",
-            })
-            if paths.central:
-                changelog[-1]["origin"] = c.get("origin") or _origin(mem)
-            log_changed = True
-            c["status"] = "promoted"
-            c["status_after_promotion"] = "duplicate_of_existing"
-            c.pop("blocked_by_supersede", None)
-            tally["promotion_skipped_duplicate"] += 1
-            continue
-        # D9: a candidate that touches a statement the owner retracted needs the highest proof, his verified words.
-        hit = None
-        if c.get("confirmed_by") != "quote":
-            pool = _tokens(c.get("observation", ""))
-            hit = next((r for r in retracted if any(_touches_line(pool, ln) for ln in r["readings"])), None)
-        if hit is not None:
-            # There is no rejected status in the candidate schema: the status stays, it is just not promoted.
-            # The block is noted on the candidate (blocked_by_supersede = the id of the replaced line) and warned about
-            # once - the same candidate would otherwise be reported again by every wrap-up.
-            tally["promotion_blocked_superseded"] += 1
-            line = hit["line"] or "unknown"
-            if c.get("blocked_by_supersede") != line:
-                c["blocked_by_supersede"] = line
-                tally["warnings"].append(f"candidate {c.get('id')} ({c.get('key')}) touches a statement a user.md supersede "
-                                         f"retracted (line {line}) - not promoted: it needs the verified words of the user "
-                                         f"(confirmed with a verified quote), a repetition is not enough (wrap-up 6.3)")
-            blocked.append(c)
-            continue
-        c.pop("blocked_by_supersede", None)
-        promoted.append(c)
-        section = SECTION_BY_SIGNAL.get(c.get("signal_type", "preference"), "Preferences")
-        line = f"- {c.get('observation')} ({c.get('id')}, {date})"
-        # changelog BEFORE edit - ordering is part of the contract
-        entry = {
-            "ts": now,
-            "field": f"user.md/{section}",
-            "old_value": None,
-            "new_value": c.get("observation"),
-            "candidate_id": c.get("id"),
-            "evidence": c.get("evidence") or [],
-        }
-        if c.get("quote"):  # P1/B2: the audit trail names the words the confirmation rests on
-            entry["quote"], entry["quote_verified"] = c["quote"], c.get("quote_verified")
-        if c.get("confirmed_by"):
-            entry["confirmed_by"] = c["confirmed_by"]
-        if paths.central:
-            entry["origin"] = c.get("origin") or _origin(mem)
-        changelog.append(entry)
-        log_changed = True
-        additions.append((section, line))
-        c["status"] = "promoted"
-        c["status_after_promotion"] = "promoted"
-
-    if log_changed:
-        write_json(paths.root, paths.changelog, changelog, dry, touched, via="identity")
-    if additions:
-        insert_user_md_lines(mem, additions, dry, touched, paths)
-    tally["candidates_promoted"] = len(promoted)
-    tally["promoted_ids"] = [c.get("id") for c in promoted]
-    return [c for c in promotable if c not in blocked]
-
-
-def read_user_md(mem, paths=None):
-    """Parse user.md into {section: [lines]} preserving unknown sections."""
-    paths = _id_paths(mem, paths)
-    path = os.path.join(paths.root, paths.md)
-    sections, current = {}, None
-    if os.path.exists(path):
-        for raw in open(path, encoding="utf-8-sig"):  # a BOM may stand right before the first '## '
-            line = raw.rstrip("\n")
-            if line.startswith("## "):
-                current = line[3:].strip()
-                sections.setdefault(current, [])
-            elif line.startswith("# "):
-                current = None
-            elif current is not None and line.strip():
-                sections[current].append(line)
-    return sections
-
-
-def write_user_md(mem, sections, dry, touched, paths=None):
-    """The CANONICAL form, for a user.md that does not exist yet. An existing file is never rewritten this way
-    (see insert_user_md_lines): it would lose the BOM, CRLF, the preamble and the section order."""
-    order = ["Preferences", "Work Style", "Known Corrections"]
-    ordered = order + [s for s in sections if s not in order]
-    out = ["# User Profile", ""]
-    for s in ordered:
-        if s not in sections:
-            continue
-        out.append(f"## {s}")
-        out.append("")
-        out.extend(sections[s] or [])
-        out.append("")
-    paths = _id_paths(mem, paths)
-    write_atomic(paths.root, paths.md, "\n".join(out).rstrip() + "\n", dry, touched, via="identity")
-
-
-def _is_heading(content: str) -> bool:
-    c = content.lstrip(BOM)
-    return c.startswith("## ") or c.startswith("# ")
-
-
-def _dominant_eol(lines) -> str:
-    crlf = sum(1 for _c, e in lines if e == "\r\n")
-    lf = sum(1 for _c, e in lines if e == "\n")
-    return "\r\n" if crlf > lf else "\n"
-
-
-def insert_user_md_lines(mem, additions, dry, touched, paths=None):
-    """Add promoted lines to identity/user.md WITHOUT rewriting the file (D8): each `(section, line)` goes after
-    the last non-blank line of its `## section`; a missing section is appended at the end. Everything else stays
-    byte for byte - the BOM, CRLF or LF, the preamble, the order of the sections, a last line without a line ending.
-    A user.md that does not exist yet (or is blank) gets the canonical form."""
-    paths = _id_paths(mem, paths)
-    path = os.path.join(paths.root, paths.md)
-    text = _read_user_md_raw(mem, "promotion", paths) if os.path.isfile(path) else ""
-    if not text.strip():
-        sections = {}
-        for section, line in additions:
-            bucket = sections.setdefault(section, [])
-            if line not in bucket:
-                bucket.append(line)
-        write_user_md(mem, sections, dry, touched, paths)
-        return
-    lines = split_user_md(text)
-    for section, line in additions:
-        contents = [c for c, _e in lines]
-        head = next((i for i, c in enumerate(contents)
-                     if c.lstrip(BOM).startswith("## ") and c.lstrip(BOM)[3:].strip() == section), None)
-        if head is None:
-            eol = _dominant_eol(lines)
-            if len(lines) > 1 and lines[-1] == ("", ""):
-                lines.pop()  # the empty tail after the final line ending is not a line
-            if lines and lines[-1][1] == "":
-                lines[-1] = (lines[-1][0], eol)  # the last line gets an ending before something follows it
-            if lines and lines[-1][0].strip():
-                lines.append(("", eol))
-            lines += [(f"## {section}", eol), ("", eol), (line, eol)]
-            continue
-        end = next((i for i in range(head + 1, len(contents)) if _is_heading(contents[i])), len(contents))
-        if any(contents[i] == line for i in range(head + 1, end)):
-            continue  # the very line is already in this section
-        last = head
-        for i in range(head + 1, end):
-            if contents[i].strip():
-                last = i
-        content, eol = lines[last]
-        if eol:
-            lines.insert(last + 1, (line, eol))
-        else:  # the last line of the file has no ending: it gets one, the new line takes over "no ending"
-            lines[last] = (content, _dominant_eol(lines))
-            lines.insert(last + 1, (line, ""))
-    write_atomic(paths.root, paths.md, "".join(c + e for c, e in lines), dry, touched, via="identity")
 
 
 def apply_soul_candidates(mem, plan, date, dry, touched, tally):
@@ -3282,8 +2895,7 @@ def apply_session_summary(mem, plan, dry, touched, tally, central_dir=DEFAULT_CE
     out += ["", "## Next Steps", ""]
     out += [f"{i}. {x}" for i, x in enumerate((s.get("next_steps") or [])[:3], 1)] or ["1. none"]
     out += ["", "## Statistics", "",
-            f"- Iterations: {st.get('iterations', 0)} | Errors: {st.get('errors', 0)} "
-            f"| New Patterns: {st.get('new_patterns', 0)}"]
+            f"- Iterations: {st.get('iterations', 0)}"]  # 6.0.0: no error count, errors.json is frozen data
     warn = s.get("warnings") or []
     if warn:
         out += ["", "## Active Warnings", ""] + [f"- {x}" for x in warn]
@@ -3292,7 +2904,6 @@ def apply_session_summary(mem, plan, dry, touched, tally, central_dir=DEFAULT_CE
         out += ["", "## Handoff Context", "",
                 f"- **Active task**: {h.get('active_task', '')}",
                 f"- **Current state**: {h.get('current_state', '')}",
-                f"- **Active patterns**: {h.get('active_patterns', '')}",
                 f"- **Open questions**: {h.get('open_questions', '')}"]
     body = "\n".join(out).rstrip() + "\n"
     n = len(body.splitlines())
@@ -3371,8 +2982,7 @@ def new_tally() -> dict:
     """The measured counters of one run, all at zero. One home for the field list: main() uses it and so can
     a test that calls an applier in-process."""
     return {
-        "iterations_logged": 0, "iterations_skipped_duplicate": 0,
-        "errors_added": 0, "errors_recurred": 0,
+        "iterations_logged": 0, "iterations_skipped_duplicate": 0, "ignored_sections": [],
         "decisions_added": 0, "decisions_superseded": 0,
         "decisions_skipped_duplicate": 0, "decision_ids": [],
         "learnings_added": 0, "learnings_skipped_duplicate": 0, "learnings_skipped_low_importance": 0, "learning_ids": [],
@@ -3382,33 +2992,28 @@ def new_tally() -> dict:
         "tasks_retitled": 0, "learnings_corrected": 0, "corrections_skipped_unchanged": 0,
         "decisions_corrected": 0, "user_lines_corrected": 0, "candidates_corrected": 0,
         "correction_ids": [], "corrections_projection_needed": False,
-        "restored": 0, "restored_ids": [], "restore_skipped_live": 0, "restore_dropped": [],
         "principles_added": 0, "principles_updated": 0, "principles_unchanged": 0, "principle_ids": [],
         "principles_retired": [], "principles_unmerged": [], "principle_retire_skipped": 0,
-        "candidates_new": 0, "candidates_updated": 0, "candidates_promoted": 0,
-        "candidates_rejected_trust": 0, "promotion_blocked_trust": 0,
-        "promotion_skipped_duplicate": 0,
-        "quotes_verified": 0, "quotes_unverified": 0, "quotes_no_transcript": 0, "quote_transcript": None,
-        "confirm_downgraded": 0, "confirm_downgraded_keys": [],
+        "learning_updates": {"superseded": 0, "cleared": 0, "review_after": 0, "obsolete": 0},
+        "learning_updates_unchanged": 0, "pflegelauf_stamp": None,
+        "quote_transcript": None,
         "user_lines_superseded": 0, "supersede_skipped_unchanged": 0, "supersede_skipped_legacy": 0,
         "user_lines_retired": 0, "retire_skipped_unchanged": 0, "retire_skipped_unverified": 0, "retire_skipped_legacy": 0,
-        "candidates_expired": 0, "candidates_expired_ids": [], "candidates_revived": 0,
-        "identity_target": "project", "central_path": None,
-        "promoted_ids": [], "queue_open": 0,
+        "candidates_expired": 0, "candidates_expired_ids": [],
+        "identity_target": "project", "central_path": None, "queue_open": 0,
         "soul_candidates_added": 0, "soul_skipped_duplicate": 0, "soul_rejected_trust": 0,
         "tasks_added": 0, "tasks_closed": 0, "tasks_skipped_duplicate": 0,
         "session_summary_lines": 0, "dirty_files_consolidated": 0,
         "touched_files_seen": 0, "warnings": [],
-        "quote_reasons": {}, "transcript_override_rejected": False, "session_binding_mismatch": False,
-        "repeat_not_counted": 0, "session_adopted": 0, "plan_duplicates_merged": 0,
-        "supersede_skipped_unverified": 0, "promotion_blocked_superseded": 0, "quote_unrelated": [], "quote_polarity": [],
+        "transcript_override_rejected": False, "session_binding_mismatch": False,
+        "supersede_skipped_unverified": 0, "quote_unrelated": [], "quote_polarity": [],
     }
 
 
 # -------------------------------------------------------------------- main
 
 def main() -> int:
-    # Windows default stdout is cp1252; the identity status line contains "→".
+    # Windows default stdout is cp1252; the report lines carry non-ASCII text.
     # Without this the whole run dies AFTER the files were written.
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -3433,7 +3038,7 @@ def main() -> int:
     ap.add_argument("--lock-timeout", type=float, default=store_lock.TIMEOUT_SECONDS,
                     help="seconds to wait for working/store.lock")
     ap.add_argument("--transcript", default=None,
-                    help="transcript file the quotes (user_candidates, user_md_supersede) are checked against. Accepted "
+                    help="transcript file the quotes (user_md_supersede, user_md_retire) are checked against. Accepted "
                          "only as <HOME>/.claude/projects/<dir>/<session-id>.jsonl, otherwise refused (default: the "
                          "session's own transcript there, resolved at call time; read-only)")
     ap.add_argument("--identity-store", default=None,
@@ -3499,6 +3104,7 @@ def main() -> int:
     session_id = args.session_id if args.session_id is not None else plan.get("session_id", "")
 
     tally = new_tally()
+    tally["ignored_sections"] = ignored_sections(plan)  # 6.0.0: counted, never refused, nothing written for them
     touched: list = []
     snapshot = None
     try:
@@ -3514,7 +3120,7 @@ def main() -> int:
         tally["identity_target"], tally["central_path"] = "central", paths.root
 
     # One store lock from the first read to the last write (5.3.0): without it a
-    # wrap-up and the nightly run (or extract_patterns) lose each other's rows.
+    # wrap-up and the nightly run lose each other's rows.
     # A dry run only reads and takes no lock.
     guard = (contextlib.nullcontext() if args.dry_run
              else store_lock.store_lock(args.mem, timeout=args.lock_timeout))
@@ -3532,8 +3138,7 @@ def main() -> int:
                 snapshot = store_snapshot.take(args.mem)["snapshot"]
             apply_iterations(args.mem, plan, date, args.dry_run, touched, tally)
             apply_decisions(args.mem, plan, date, args.dry_run, touched, tally)
-            apply_restore(args.mem, plan, date, args.dry_run, touched, tally)
-            # BEFORE corrections and promotions: they are the only other writers of user.md, and the
+            # BEFORE corrections: the only other writer of user.md in the same plan, and the
             # check above resolved the target lines against the file as it stands now.
             apply_user_md_supersede(args.mem, plan, date, args.dry_run, touched, tally, session_id, args.transcript,
                                     paths=paths)
@@ -3541,23 +3146,21 @@ def main() -> int:
             apply_learnings(args.mem, plan, date, args.dry_run, touched, tally)
             apply_principle_retire(args.mem, plan, date, args.dry_run, touched, tally)
             apply_principles(args.mem, plan, date, args.dry_run, touched, tally)
+            apply_learning_updates(args.mem, plan, date, args.dry_run, touched, tally)
             apply_bridge_decisions(args.mem, plan, date, args.dry_run, touched, tally)
             apply_rule_explanations(args.mem, plan, date, args.dry_run, touched, tally)
             apply_rule_releases(args.mem, plan, date, args.dry_run, touched, tally)
             apply_user_md_retire(args.mem, plan, date, args.dry_run, touched, tally, session_id, args.transcript,
                                  paths=paths)
             apply_identity_expire(args.mem, plan, date, args.dry_run, touched, tally, paths=paths)
-            if "user_candidates" in plan or plan.get("consolidate"):
-                # Identity growth is wrap-up Step 6's job: an iterations-only plan
-                # (/agentic-os:log) must not re-review the queue and promote to user.md.
-                apply_user_candidates(args.mem, plan, date, args.dry_run, touched, tally, session_id, args.transcript,
-                                      paths=paths)
             if paths.md in touched or paths.queue in touched:
                 # P2: the briefing shows the most confirmed profile lines, never the oldest ones (DCO #10148)
                 identity_briefing.write_projection(paths, args.dry_run, touched)
             apply_soul_candidates(args.mem, plan, date, args.dry_run, touched, tally)
             apply_open_tasks(args.mem, plan, date, args.dry_run, touched, tally)
             apply_session_summary(args.mem, plan, args.dry_run, touched, tally, args.central_dir)
+            # after every learnings.json writer: id_keys is counted on the file as it finally stands
+            write_pflegelauf_stamp(args.mem, plan, date, args.dry_run, touched, tally)
             # LAST: marker only after everything else succeeded (Step 9.5 rule 5)
             apply_consolidation(args.mem, plan, session_id, args.dry_run, touched, tally)
     except (PlanError, OSError, ValueError) as e:
@@ -3575,12 +3178,6 @@ def main() -> int:
 
     if tally["rule_class_open"] is None:
         tally["rule_class_open"] = rule_class_open(load_json(args.mem, "learnings/learnings.json", []))
-    identity_line = (
-        f"Identity: {tally['candidates_new'] + tally['candidates_updated']} beobachtet, "
-        f"{tally['candidates_promoted']} → {'profile.md' if paths.central else 'user.md'} promotet, "
-        f"{tally['soul_candidates_added']} soul-candidates; "
-        f"Queue: {tally['queue_open']} offen"
-    )
     result = {
         "ok": True,
         "dry_run": args.dry_run,
@@ -3590,14 +3187,15 @@ def main() -> int:
         # Step 3a: live learnings close to a planned one, for the model's verdict.
         "near_duplicates": tally.pop("near_duplicates"),
         "tally": tally,
-        "identity_status_line": identity_line,
     }
+    if tally["ignored_sections"]:
+        result["ignored_status_line"] = ignored_status_line(tally["ignored_sections"])
     if snapshot:
         result["snapshot"] = snapshot
     queue = tally["rule_class_open"]
     if queue["needs_explanation"] or queue["explained"] or any(
             k in plan for k in ("rule_explanations", "rule_releases")):
-        # Step 3f: the measured line for the report, like the bridge and identity lines.
+        # Step 3f: the measured line for the report, like the bridge line.
         result["rule_class_status_line"] = (
             f"Regel-Learnings: {len(queue['needs_explanation'])} warten auf die Zweitmodell-Erklärung "
             f"({', '.join(queue['needs_explanation']) or '-'}), {len(queue['explained'])} auf die "
@@ -3605,7 +3203,7 @@ def main() -> int:
             f"erklärt {len(tally['rule_explained'])}, freigegeben {len(tally['rule_released'])}, "
             f"abgelehnt {len(tally['rule_rejected'])}")
     if "bridge_decisions" in plan:
-        # Step 3d.4: the measured line for the mandatory report, like Step 6.5's.
+        # Step 3d.4: the measured line for the mandatory report.
         result["bridge_status_line"] = (
             f"Bridge: {len(tally['bridge_approved'])} approved, {len(tally['bridge_rejected'])} rejected, "
             f"{tally['bridge_status_changed']} geaendert; offen: {len(tally['bridge_candidates'])}")

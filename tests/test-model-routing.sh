@@ -22,9 +22,9 @@ else
     exit 1
 fi
 
-# 2. Exactly 5 rows (one per skill)
+# 2. Exactly 4 rows (one per skill)
 n=$(echo "$OUT" | grep -c .)
-if [ "$n" -eq 5 ]; then pass "list has 5 rows"; else fail "list has $n rows (expected 5)"; fi
+if [ "$n" -eq 4 ]; then pass "list has 4 rows"; else fail "list has $n rows (expected 4)"; fi
 
 # 3. Every listed skill directory exists
 while IFS=$'\t' read -r sk cls mdl eff; do

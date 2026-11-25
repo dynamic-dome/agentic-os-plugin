@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Decay report for the memory hub (spec §4). REPORT ONLY — never mutates.
 
+6.0.0: wrap-up no longer writes this report; the daily job may still call --report.
+The Pflegelauf (/agentic-os:maintain) reads --candidates-json and judges the rows.
+
 (a) learnings with review_after < today (not superseded, not retired)
 (b) native auto-memory notes not linked from MEMORY.md and older than --stale-days
 (c) bridge candidates older than --candidate-days (decision overdue)
@@ -11,9 +14,16 @@
 "restored:..."). Without these two charges, rows lacking review_after - 366 live
 plus every restored one - never reach a review at all (plan blocker #3).
 
+--candidates-json (6.0.0) is the "faellig" candidate source of the Pflegelauf
+(/agentic-os:maintain): a JSON list [{"id", "reason"}] in store order, reason
+"due:YYYY-MM" (review_after before today) or "ohne-termin" (no review_after).
+A live pointer (kind principle) and its members are left out: they are anchored
+already and the run cannot supersede them. Read-only, also with --report given.
+
 Usage: python review_sweep.py <mem-dir> [--native-memory <dir>] [--stale-days 90]
        [--candidate-days 30] [--report <md>] [--today YYYY-MM-DD]
        python review_sweep.py <mem-dir> --charges [--json]
+       python review_sweep.py <mem-dir> --candidates-json [--today YYYY-MM-DD]
 Exit: 0 ok · 1 learnings.json unreadable · 2 usage.
 """
 import argparse
@@ -95,6 +105,23 @@ def charges(rows, label):
     return [{"name": n, "count": len(ids), "ids": ids} for n, ids in sorted(out.items())]
 
 
+def pflege_candidates(rows, today):
+    """Pflegelauf source 'faellig' (read-only): reviewable rows whose review_after is due or missing,
+    without live pointers and their members (anchored; the applier refuses superseded_by on them)."""
+    anchored = {str(m) for r in rows if r.get("kind") == "principle" and not r.get("superseded_by")
+                for m in (r.get("derived_from") or []) if isinstance(m, str)}
+    out = []
+    for r in rows:
+        if not reviewable(r) or r.get("kind") == "principle" or str(r.get("id")) in anchored:
+            continue
+        when = r.get("review_after")
+        if not when:
+            out.append({"id": str(r.get("id")), "reason": "ohne-termin"})
+        elif str(when) < today.isoformat():
+            out.append({"id": str(r.get("id")), "reason": f"due:{str(when)[:7]}"})
+    return out
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="review_sweep.py")
     ap.add_argument("mem_dir")
@@ -105,6 +132,8 @@ def main(argv):
     ap.add_argument("--today")
     ap.add_argument("--charges", action="store_true", help="group reviewable rows into charges")
     ap.add_argument("--json", action="store_true", help="with --charges: print JSON")
+    ap.add_argument("--candidates-json", action="store_true",
+                    help="Pflegelauf candidates (due or without review_after) as a JSON list; writes nothing")
     try:
         a = ap.parse_args(argv)
     except SystemExit:
@@ -115,6 +144,10 @@ def main(argv):
     except (OSError, ValueError) as exc:
         print(f"review-sweep: learnings.json unreadable: {exc}", file=sys.stderr)
         return 1
+
+    if a.candidates_json:
+        print(json.dumps(pflege_candidates(rows, today), ensure_ascii=False))
+        return 0
 
     if a.charges:
         found = charges(rows, store_label(a.mem_dir))
@@ -139,7 +172,8 @@ def main(argv):
         lines += [f"- {name} (mtime {m})" for name, m in stale]
         lines += ["", f"## (c) Bridge-Kandidaten älter als {a.candidate_days} Tage ({len(cands)})"]
         lines += [f"- [{r.get('id')}] candidate since {r.get('date')} {str(r.get('text', ''))[:120]}" for r in cands]
-        lines += ["", "Entscheidung pro Eintrag: behalten · ersetzen (superseded_by mit Nachfolger) · zurückziehen (bridge_status retired). Nichts wird automatisch geändert und nichts archiviert; bis es einen Schreibweg dafür gibt, werden Entscheidungen nur notiert."]
+        lines += ["", "Dieser Bericht ändert nichts und archiviert nichts. Fällige Learnings beurteilt der Pflegelauf "
+                      "(/agentic-os:maintain): bleibt, doppelt, überholt, verwandt oder global."]
         os.makedirs(os.path.dirname(os.path.abspath(a.report)), exist_ok=True)
         tmp = a.report + ".tmp"
         with open(tmp, "w", encoding="utf-8", newline="") as f:

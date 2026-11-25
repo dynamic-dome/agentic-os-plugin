@@ -29,6 +29,9 @@ T-028b cut it: the mechanics are code now, so wrap-up's surface is the body, its
 (WRAPUP_SURFACE). A gate may live in any of them, but it must still be found: the rule "no gate logic leaves
 the body" became "no gate logic leaves the surface". Removed on purpose in that commit: cross-session-rag
 (owner scope decision 2026-09-08, D-018) and layer-lifecycle (prose without any executable path).
+6.0.0 (T-090) removed the identity harvest: user-candidate-gate and identity-starvation (bootstrap 6.5 b/c),
+identity-harvest, queue-re-review and identity-visible (wrap-up) are gone on purpose; old-sections-ignored and
+user-supersede (the one remaining way a profile line changes) took their place.
 
 Design: memevalharness.md (membrain).
 """
@@ -71,26 +74,15 @@ BOOTSTRAP_GATES = [
         ["`last_consolidated_by` is not"],               # trigger: never after a headless stamp (5.5.0)
         ["downgrade"],                                   # action: one-line note
     ]},
-    {"name": "soul-candidate-gate", "clauses": [
-        ["Soul candidate gate — retired"],               # 5.11.0: gate retired, no [j/n]
-        ["never write `soul.md`"],                       # action: read-only without exception
-    ]},
-    {"name": "user-candidate-gate", "clauses": [
-        ["user-candidates.json"],                        # trigger: candidate queue
-        ["promotion"],                                   # action: promote to user.md
-    ]},
-    {"name": "identity-starvation", "clauses": [
-        ["2+ sessions old"],                             # trigger: stale scan
-        ["Pipeline verhungert"],                         # action: HEALTH warning
+    {"name": "read-only", "clauses": [
+        ["Do NOT write to any files yourself"],          # 5.11.0 soul gate and 6.0.0 identity gates gone
+        ["no gate, no queue, no exception"],             # action: read-only without exception
     ]},
     {"name": "thresholds", "clauses": [
         ["memory-thresholds.sh"],                        # trigger: SSoT script
         ["Exit 10"],                                     # trigger: scaling signal
         ["THRESHOLD:"],                                  # action: HEALTH lines
-    ]},
-    {"name": "escalation", "clauses": [
-        ["escalations-<session-id>.json"],               # action: append record
-        ["ESKALATION:"],                                 # action: visible line
+        ["PFLEGELAUF:"],                                 # action: a due Pflegelauf (6.0.0)
     ]},
     {"name": "rag-learnings", "clauses": [
         ["memory_search_tool"],                          # trigger: Atlas primary
@@ -120,15 +112,7 @@ BOOTSTRAP_GATES = [
     {"name": "json-repair", "clauses": [
         ["parse fails"],                                 # trigger: corrupt JSON
         ["Never rename"],                                # action: no rename / recreate
-        ["Step 2 is the only repair path"],              # action: route to maintain
-    ]},
-    {"name": "active-warning-thresholds", "clauses": [
-        ["confidence >= 0.7"],                           # trigger: pattern confidence
-        ["occurrences >= 3"],                            # trigger: pattern recurrence
-    ]},
-    {"name": "cost-trace", "clauses": [
-        ["cost-trace.sh"],                               # trigger: SSoT script
-        ["context-bytes"],                               # action: log run trace
+        ["Step 4 is the only repair path"],              # action: route to maintain
     ]},
 ]
 
@@ -166,10 +150,6 @@ WRAPUP_GATES = [
         ['out["projections"] = _projections('],          # trigger: projections after the verdicts
         ["bridge_projection.py"],                        # action: projection run
     ]},
-    {"name": "pattern-extraction", "clauses": [
-        ['"extract_patterns.py", [mem, "--update"]'],    # action: run the extractor script
-        ["pattern_proposals"],                           # action: unnamed clusters go to the report
-    ]},
     {"name": "decision-scan", "clauses": [
         ["(decision-scan)"],                             # marker
         ["Plan section `decisions`"],                    # action: into the plan (T-015)
@@ -182,29 +162,24 @@ WRAPUP_GATES = [
         ["single source of truth"],                      # contract: SSoT
         ["cross_project"],                               # action: flag feeds handoff
     ]},
-    {"name": "identity-harvest", "clauses": [
-        ["(identity-harvest)"],                          # marker
-        ["(user-growth)"],                               # marker
-        ["none_because"],                                # action: an empty scan must say why
+    {"name": "old-sections-ignored", "clauses": [
+        ["ignored_sections"],                            # trigger: identity / user_candidates / errors sent (6.0.0)
+        ["Ignoriert (6.0.0)"],                           # action: named in the report, never refused
     ]},
     {"name": "trust-boundary", "clauses": [
         ["(trust-boundary)"],                            # marker
         ["conversation"],                                # trigger: only source allowed
         ["web/docs/NotebookLM/Wiki"],                    # action: discard poisoned
     ]},
-    {"name": "queue-re-review", "clauses": [
-        ["(queue-re-review)"],                           # marker
-        ["user-changelog.json"],                         # action: changelog before edit
-        ["confidence >= 0.6"],                           # trigger: promotion gate
+    {"name": "user-supersede", "clauses": [
+        ["(user-supersede)"],                            # marker
+        ["VERIFIED quote"],                              # trigger: only the user's verified words apply it
+        ["user-changelog.json` FIRST"],                  # action: changelog before edit
     ]},
     {"name": "soul-growth", "clauses": [
         ["(soul-growth)"],                               # marker
         ["Retired in 5.11.0"],                           # 5.11.0: no soul candidates planned
         ["never write `soul.md` here"],                  # action: soul.md stays read-only
-    ]},
-    {"name": "identity-visible", "clauses": [
-        ["(identity-visible)"],                          # marker
-        ["Identity: {n} beobachtet"],                    # action: mandatory status line
     ]},
     {"name": "wiki-sync-gate", "clauses": [
         ["(wiki-sync-gate)"],                            # marker
@@ -245,15 +220,10 @@ WRAPUP_GATES = [
     ]},
     {"name": "thresholds", "clauses": [
         ["memory-thresholds.sh"],                        # trigger: SSoT script
-        ["threshold_lines"],                             # trigger: scaling signal in the report
+        ["pflegelauf_due"],                              # trigger: Pflegelauf signal in the brief (6.0.0)
         ["/agentic-os:maintain"],                        # action: recommend cleanup command
     ]},
-    {"name": "escalation-rules", "clauses": [
-        ["escalations-<session-id>.json"],               # action: append record
-        ["ESKALATION:"],                                 # action: visible line
-    ]},
     {"name": "cost-trace", "clauses": [
-        ["cost-trace.sh"],                               # trigger: SSoT script
         ["--write-hash"],                                # action: refresh state hash
         ["reports.cost_trace"],                          # action: a trace status that is not ok reaches the report
     ]},

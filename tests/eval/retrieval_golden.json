@@ -196,7 +196,7 @@
       "expected_leading_source": "patterns",
       "allowed_supporting": ["skill-file", "iteration-log"],
       "typical_wrong_pick": "wiki-session-note",
-      "why": "implemented_by/validated_by carry the answer; the skill file verifies it actually landed (memory-audit Step 3.4)."
+      "why": "implemented_by/validated_by carry the answer; the skill file verifies it actually landed."
     },
     {
       "id": "R20",

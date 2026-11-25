@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 # memory-thresholds.sh — single source of truth for .agent-memory scaling thresholds.
-# Used by: wrapup_core.py (THRESHOLD lines + recommendation) and /agentic-os:maintain (report).
+# Used by: session-start.sh (THRESHOLD + PFLEGELAUF lines in the start briefing), session-bootstrap (HEALTH)
+# and wrapup_core.py (only the PFLEGELAUF line, as `pflegelauf_due`). Only the PFLEGELAUF line points to
+# /agentic-os:maintain; that command does not run this script.
 # Exit 0 = all within limits. Exit 10 = at least one threshold exceeded (lines on stdout).
 # 5.2.1 (D-021, owner decision 2026-10-07): a
 # threshold only REPORTS. Nothing is archived, pruned, compacted or moved because of a
 # count - archive files are invisible to the Atlas RAG, and count-based archiving took
-# long-term and importance>=4 learnings out of retrieval. The lines name what grew and
-# point to the maintain report; tests/test-memory-thresholds.sh pins the wording.
+# long-term and importance>=4 learnings out of retrieval. The lines name what grew;
+# tests/test-memory-thresholds.sh pins the wording.
 # Usage: bash scripts/memory-thresholds.sh [path-to-.agent-memory]  (default: ./.agent-memory)
 
 set -u
 MEM="${1:-.agent-memory}"
 EXCEEDED=0
+PFLEGE_NEU=30   # new learnings since the last maintenance run that make a run due (6.0.0)
 
-note() { echo "THRESHOLD: $1 — report only, nothing is moved (D-021) → /agentic-os:maintain"; EXCEEDED=1; }
+# 6.0.0: a THRESHOLD line names no command - /agentic-os:maintain (the Pflegelauf) does not act on these counts;
+# only the PFLEGELAUF line below points there.
+note() { echo "THRESHOLD: $1 — report only, nothing is moved (D-021)"; EXCEEDED=1; }
 
 count_ids() { # count JSON array entries by "id" keys (no jq dependency)
   [ -f "$1" ] && grep -o '"id"' "$1" | wc -l | tr -d ' ' || echo 0
@@ -26,10 +31,6 @@ if [ -f "$MEM/iterations/iteration-log.md" ]; then
   n=$(grep -c '^## ' "$MEM/iterations/iteration-log.md" 2>/dev/null); n=${n:-0}
   [ "$n" -gt 100 ] && note "iteration-log.md has $n entries (soft limit 100)"
 fi
-
-# errors.json: max 50 entries
-n=$(count_ids "$MEM/iterations/errors.json")
-[ "$n" -gt 50 ] && note "errors.json has $n entries (soft limit 50)"
 
 # learnings.json: max 1000 entries. Owner decision 2026-10-06: learnings are collected, not
 # pruned, until a retrieval/condensation strategy exists (archive files are invisible to the
@@ -69,6 +70,22 @@ if [ -d "$MEM/working" ]; then
   # miss the superseded dirty:true markers).
   n_dirty=$(find "$MEM/working" -maxdepth 1 -name 'dirty-*.json' 2>/dev/null | wc -l | tr -d ' ')
   [ "$n_dirty" -gt 10 ] && note "working/ has $n_dirty dirty-marker(s) — preview with scripts/gc_dirty_markers.py; only closed markers are removed (daily run, D-024)"
+fi
+
+# Pflegelauf due (6.0.0): learnings added since the last maintenance run. Base = working/pflegelauf.json,
+# written by apply_wrapup.py (pflegelauf_stamp); its id_keys counts '"id"' like count_ids (same measure, L154).
+# No stamp = no run yet, all learnings count. A stamp that cannot be read (no id_keys or no date) or whose
+# id_keys is above today's count (learnings removed) gives no line: unclear is not due.
+stamp="$MEM/working/pflegelauf.json"
+total=$(count_ids "$MEM/learnings/learnings.json")
+if [ ! -f "$stamp" ]; then
+  [ "$total" -ge "$PFLEGE_NEU" ]     && { echo "PFLEGELAUF: $total Learnings, noch kein Pflegelauf → /agentic-os:maintain"; EXCEEDED=1; }
+else
+  base=$(grep -o '"id_keys": *[0-9]*' "$stamp" 2>/dev/null | head -1 | grep -o '[0-9]*$')
+  day=$(grep -o '"date": *"[^"]*"' "$stamp" 2>/dev/null | head -1 | sed 's/.*: *"\(.*\)"/\1/')
+  if [ -n "$base" ] && [ -n "$day" ] && [ "$total" -ge "$base" ] && [ $((total - base)) -ge "$PFLEGE_NEU" ]; then
+    echo "PFLEGELAUF: $((total - base)) neue Learnings seit $day → /agentic-os:maintain"; EXCEEDED=1
+  fi
 fi
 
 [ "$EXCEEDED" -eq 1 ] && exit 10

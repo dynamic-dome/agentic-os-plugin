@@ -24,7 +24,7 @@ this; if it is false the step is skipped silently and this file is never read).
    - If not found: try Grep for `project_id` in entity filenames
    - If still not found: skip entity, continue with other steps
    - **Read at most the first 80 lines** of the entity page (frontmatter + summary +
-     patterns) — entity pages are uncapped in length and can cost 2k+ tokens full-read
+     status) — entity pages are uncapped in length and can cost 2k+ tokens full-read
 4. **Entry Points** — load pages from `default_entrypoints`:
    - For each path: check if file exists at `$WIKI_ROOT/{path}`
    - **Skip non-existing entry points silently** (no error — they may be planned for later sprints)
@@ -48,7 +48,6 @@ Add to the briefing output (Step 4):
 WIKI CONTEXT
   Entity: [[wiki/entities/{slug}]] (updated: {date})
   Sessions: {n} (last: {date} — {summary})
-  Patterns: {list of high-confidence patterns from entity page}
   Docs: {count} Claude Code Sources available
 ```
 

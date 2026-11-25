@@ -37,10 +37,8 @@ Bootstrap the `.agent-memory/` knowledge system in the current project directory
    ├── identity/{soul.md, user.md}
    ├── context/{project-context.md*, decisions.json, open-tasks.json}
    ├── iterations/{iteration-log.md, errors.json}
-   ├── patterns/{patterns.md, patterns.json}
    ├── learnings/{learnings.md, learnings.json}
    ├── working/current-session.json
-   ├── generated-skills/
    ├── config.json              (optional, created by Wiki Integration step)
    └── session-summary.md
    ```

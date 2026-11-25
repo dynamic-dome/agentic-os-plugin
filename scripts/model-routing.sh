@@ -49,7 +49,6 @@ case "$cmd" in
     printf 'session-bootstrap\tcheap-write\tsonnet\tlow\n'
     printf 'obsidian-sync\tcheap-write\tsonnet\tmedium\n'
     printf 'context-keeper\tstandard\t-\t-\n'
-    printf 'pattern-extractor\tstandard\t-\t-\n'
     ;;
   list-agents)
     printf 'context-detective\tcheap-write\tsonnet\tmedium\n'

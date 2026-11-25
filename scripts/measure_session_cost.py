@@ -3,8 +3,8 @@
 
 Why this exists
 ---------------
-`cost-trace.sh` writes ESTIMATES (`context_bytes / 4`, `"estimate": true`) because a
-skill cannot see its own token counts. Estimates are not evidence: the first manual
+A skill cannot see its own token counts, and an estimate (`context_bytes / 4`,
+`"estimate": true`) is not evidence: the first manual
 transcript analysis of a wrap-up run was 2.77x too high
 because it summed one record per CONTENT BLOCK while `usage` is reported once per API
 RESPONSE. This script reads the transcript and reports what actually happened.
@@ -46,7 +46,7 @@ from datetime import datetime, timezone
 def _nested_store_guard(mem_dir):
     """True if writing under mem_dir would nest a store inside .agent-memory.
 
-    Mirrors cost-trace.sh's guard (b34d055, DCO-9192): resolve mem_dir to an
+    Guards against a nested store (b34d055, DCO-9192): resolve mem_dir to an
     absolute path and check its PARENT for an .agent-memory path segment — a
     relative default combined with a cwd that already sits inside a store
     would otherwise create .agent-memory/.agent-memory/metrics.
@@ -251,7 +251,7 @@ def analyse(calls, rates, rewrite_threshold, top, window="session", price_basis=
 
 
 def append_trace(mem_dir, result, task):
-    """Write a MEASURED record next to cost-trace.sh's estimates ("estimate": false).
+    """Write a MEASURED record ("estimate": false) into metrics/cost-trace.jsonl, next to older estimate rows.
     A row labelled "wrap-up" must have measured the wrap-up window; otherwise it is a "session" row.
     Fail-soft: a failed trace never changes the exit code or the stdout payload."""
     if task == "wrap-up" and result.get("window") != "wrap-up":
