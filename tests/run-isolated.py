@@ -10,6 +10,11 @@ start without AGENTIC_OS_TEST_HOME; this runner is the way in. It builds the chi
 `_isolated_home` (HOME and USERPROFILE point to a fresh home on the drive root, never under a store;
 session variables and every AGENTIC_OS_* are dropped), removes every CLAUDE_* variable, sets
 AGENTIC_OS_TEST_HOME=1 and starts the tests with the bash found on PATH (never the WSL launcher).
+It sets no Python encoding and drops an inherited PYTHONIOENCODING/PYTHONUTF8 (6.0.1), as the release export
+run does. With redirected output (a pipe or file, as in agent runs and the export run) Python then writes the
+locale encoding (cp1252 on a Western Windows), so a script or test that prints a character this encoding lacks
+(e.g. "→"; "é" is fine in cp1252) without choosing UTF-8 itself fails here, not only at release time. In an interactive Windows console Python writes UTF-8 and the gap
+stays hidden.
 
 Before and after the run it takes a snapshot (relative path, mtime, size) of the real stores that exist:
 ~/.agent-memory, ~/AI/.agent-memory, the repo's own .agent-memory and every --guard path. Differences are
@@ -105,9 +110,19 @@ def commands(scripts: list[str], bash: str) -> list[list[str]]:
     return cmds
 
 
+ENCODING_VARS = ("PYTHONIOENCODING", "PYTHONUTF8")
+
+
 def strip_claude_vars(env: dict) -> dict:
     for key in [k for k in env if k.upper().startswith("CLAUDE_")]:
         del env[key]
+    return env
+
+
+def strip_encoding_vars(env: dict) -> dict:
+    """No inherited UTF-8 switch: the export run drops the same two variables."""
+    for key in ENCODING_VARS:
+        env.pop(key, None)
     return env
 
 
@@ -131,9 +146,9 @@ def main(argv: list[str] | None = None) -> int:
 
     code = 0
     try:
-        with isolated_env(PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
-                          AGENTIC_OS_TEST_HOME="1") as (env, _home):
+        with isolated_env(PYTHONDONTWRITEBYTECODE="1", AGENTIC_OS_TEST_HOME="1") as (env, _home):
             strip_claude_vars(env)
+            strip_encoding_vars(env)
             for cmd in cmds:
                 sys.stdout.flush()
                 try:

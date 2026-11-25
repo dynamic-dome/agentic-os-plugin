@@ -4,6 +4,11 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-25] Release v6.0.1 — Testlauf ohne geerbte UTF-8-Einstellung
+
+- **`tests/run-isolated.py` setzt keine Python-Kodierung mehr und entfernt geerbte `PYTHONIOENCODING`/`PYTHONUTF8`.** Bisher gab der Runner den Tests `PYTHONIOENCODING=utf-8` mit, der Testlauf des Exports dagegen nicht. Ein Test, der ein Zeichen außerhalb von cp1252 ausgibt (etwa „→“), ohne selbst UTF-8 zu wählen, war deshalb in der Suite grün und scheiterte erst beim Release mit `UnicodeEncodeError` (cp1252 unter Windows). Jetzt entfernen Runner und Export-Testlauf dieselben zwei Variablen; bei umgeleiteter Ausgabe (Agenten-Läufe, Export) zeigt die Suite den Fehler. In einer interaktiven Windows-Konsole schreibt Python UTF-8, dort bleibt er unsichtbar. Gegenprobe: Der Kern-Test ohne seine `reconfigure`-Zeile ist im Runner rot (`UnicodeEncodeError` bei „→“), mit ihr grün; die volle Suite ist grün, kein weiterer Test war betroffen.
+- **Public-Commits tragen die GitHub-noreply-Adresse.** Der Export schrieb eine feste private Adresse als Autor; GitHub lehnte den Push ab (GH007). Die Adresse kommt jetzt über `GIT_AUTHOR_*`/`GIT_COMMITTER_*` des Commit-Prozesses, so dass auch geerbte Variablen oder `author.email` sie nicht ersetzen. Tests prüfen Autor und Committer einzeln gegen die noreply-Adresse, auch mit fremder geerbter Git-Identität.
+
 ## [2026-11-25] Release v6.0.0 — Schlank: Learnings erreichbar, Wiedereinstieg im Projekt
 
 MAJOR: Skills und Commands entfallen, wrap-up-Plansektionen ändern sich. Jeder verbleibende Baustein dient einem von zwei
