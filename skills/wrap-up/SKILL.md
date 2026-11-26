@@ -8,7 +8,7 @@ model: sonnet
 effort: medium
 metadata:
   author: agentic-os
-  version: '5.3'
+  version: '5.4'
   part-of: agentic-os
   layer: core
 ---
@@ -70,7 +70,9 @@ one are ONE iteration with `attempts: 3`, at least 2 lowercase tags; put a root 
 iteration's `summary` or a learning. `apply_wrapup.py` owns the writes to `iteration-log.md`.
 
 **Learnings.** A learning would prevent a future mistake, reveals something non-obvious, or documents a rationale
-not in the code. Plan at most 3: the core keeps the most important (`learnings_dropped_by_cap`), rule-class
+not in the code. A preference of the user (how they want to work, be informed or be asked) is a learning once it
+holds beyond this session: write it with its condition or reason, taken from their own words ("X, because Y",
+"X, but only if Y"), and tag it `vorliebe`; the condition is the part a later session cannot reconstruct. Plan at most 3: the core keeps the most important (`learnings_dropped_by_cap`), rule-class
 learnings are exempt. Importance: 5 prevents data loss or a security issue, 4 prevents multi-attempt debugging,
 3 is non-obvious behavior. Below 3 is not stored (min-importance), so do not plan it. `summary`: the rule in one
 sentence, at most 150 characters. `derived_from`: this session's origins or `[]`, never a guess.

@@ -4,6 +4,11 @@ Neueste Eintraege oben. Format: `## [YYYY-MM-DD] Kurztitel`
 
 ---
 
+## [2026-11-26] Release v6.0.3 — Vorlieben mit Bedingung oder Begründung
+
+- **wrap-up schreibt eine Vorliebe des Nutzers mit ihrer Bedingung oder Begründung.** Wie jemand arbeiten, informiert oder gefragt werden will, ist ein Learning, sobald es über die Sitzung hinaus gilt. Der Text nennt dann die Bedingung oder den Grund in den Worten des Nutzers („X, weil Y“, „X, aber nur wenn Y“) und trägt den Tag `vorliebe`. Anlass: Eine Prüfung früherer Sitzungen fand Vorlieben, die im Gedächtnis standen, deren Bedingung aber fehlte (etwa „Dienst abschalten ja, aber das System muss merken, wenn er fehlt“). Die Bedingung ist der Teil, den eine spätere Sitzung nicht rekonstruieren kann. Die Obergrenze von 3 Learnings je Sitzung und die Mindestwichtigkeit 3 bleiben.
+- Skill-Version wrap-up 5.4. Keine Änderung an Skripten, Store-Format oder Plan-Schema.
+
 ## [2026-11-26] Release v6.0.2 — Restbefunde aus der Abnahme von 6.0.0
 
 - **Der Pflegelauf-Stempel zählt Learnings nicht mit, die ab dem Startdatum des Laufs datiert sind.** Bisher zählte `id_keys` die ganze Datei am Ende des Laufs, also auch ein Learning, das eine andere Sitzung während eines mehrtägigen Laufs schrieb; der nächste Auslöser hielt es für alt. Jetzt zählt es als neu. Ein Learning ohne lesbares Datum bleibt in der Basis (als neu gezählt käme es nach jedem Lauf wieder).
