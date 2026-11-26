@@ -387,6 +387,15 @@ pb, cb = snapshot(mem), snapshot(store)
 rc, out = run(mem, C7_PLAN, "--identity-store", store)
 check(rc == 2 and snapshot(mem) == pb and snapshot(store) == cb and "profile-candidates.json" in str(out.get("error")),
       f"C7 kaputte Zentral-Queue: rc 2, nichts geschrieben ({str(out.get('error'))[:90]})")
+# C7b (6.0.2, Codex): user_md_retire liest die Zentral-Queue nicht - eine kaputte Queue blockiert ihn nicht mehr
+mem, store = make_project(), make_profile()
+write(os.path.join(store, ids.PROFILE_QUEUE), "{kaputt")
+ret = {"match": "- Arbeitet gern abends", "reason": "Owner will die Zeile nicht mehr", "plain": PLAIN,
+       "quote": "die Zeile mit abends kann weg"}
+rc, out = run(mem, {"date": DATE, "user_md_retire": [ret]}, "--identity-store", store)
+check(rc == 0 and "profile-candidates.json" not in str(out.get("error"))
+      and read_rel(store, ids.PROFILE_QUEUE) == "{kaputt",
+      f"C7b kaputte Zentral-Queue blockiert user_md_retire nicht, Queue unberuehrt (rc={rc}, {str(out.get('error'))[:90]})")
 mem, store = make_project(), make_profile()
 with open(os.path.join(store, ids.PROFILE_MD), "wb") as fh:
     fh.write(b"# Profil\n\n## Preferences\n- kaputt \xff\xfe\n")

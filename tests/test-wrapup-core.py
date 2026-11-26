@@ -1084,8 +1084,11 @@ def test_prelude_gaps():
     try:
         r = pg.prelude_gaps(sid, log, now=now)
         prompts = [g["prompt"] for g in r["gaps"]]
-        check(r["status"] == "ok" and len(prompts) == 2 and prompts[0].startswith("neuer") and prompts[1] == "alter",
-              f"own gaps only, newest first, yesterday counts {r['status']} {prompts}")
+        check(len(prompts) == 2 and prompts[0].startswith("neuer") and prompts[1] == "alter",
+              f"own gaps only, newest first, yesterday counts {prompts}")
+        # 6.0.2 (Codex): "uralt" lies 9 days back, outside the window - the list is incomplete, not "ok"
+        check(r["status"] == "teilweise: Einträge vor 2026-11-17 nicht gelesen",
+              f"an own entry before the window makes the status partial {r['status']!r}")
         check(r["geprueft"] == 3 and r["nicht_geprueft"] == 1, f"checked 3 (2 gaps + 1 with learning), unchecked 1 (budget) {r}")
         check("[Code]" in prompts[0] and "print(1)" not in prompts[0] and len(prompts[0]) <= 300 and "\n" not in prompts[0],
               f"code replaced, whitespace folded, cut to 300 {len(prompts[0])}")
@@ -1095,7 +1098,35 @@ def test_prelude_gaps():
             put(p, json.dumps({"session": sid, "ts": 1000 + i, "prompt": f"p{i}", "reason": "empty", "kept": {}}))
         res = pg.prelude_gaps(sid, many, now=now)
         check(len(res["gaps"]) == 15 and res["gaps"][0]["prompt"] == "p19" and res["geprueft"] == 20, f"cap 15, newest first {res['geprueft']}")
+        check(res["status"] == "ok", f"only entries inside the window: ok {res['status']!r}")
+        put(os.path.join(many, "2026-11-01", f"1-{'ffff0000'}.json"), "{}")  # an old day of another session
+        check(pg.prelude_gaps(sid, many, now=now)["status"] == "ok", "an old day of another session keeps ok")
+        put(os.path.join(many, "2026-11-01", f"2-{sid[:8]}.json"), "{}")
+        check(pg.prelude_gaps(sid, many, now=now)["status"].startswith("teilweise:"), "an old day of this session: partial")
         shutil.rmtree(many, ignore_errors=True)
+        only_old = tempfile.mkdtemp(prefix="wrapupcore-prelude-old-")
+        put(os.path.join(only_old, "2026-11-10", f"3-{sid[:8]}.json"), "{}")
+        res = pg.prelude_gaps(sid, only_old, now=now)
+        check(res["status"].startswith("teilweise:") and res["gaps"] == [],
+              f"only entries before the window: partial, not 'keine Einträge' {res['status']!r}")
+        shutil.rmtree(only_old, ignore_errors=True)
+        # Codex re-check: an older day that cannot be listed keeps the gaps found so far and says 'teilweise'
+        real_listdir = os.listdir
+
+        def listdir_old_fails(path):
+            if os.path.basename(os.path.normpath(path)) == "2026-11-10":
+                raise PermissionError("gesperrt")
+            return real_listdir(path)
+        sperre = tempfile.mkdtemp(prefix="wrapupcore-prelude-lock-")
+        put(os.path.join(sperre, now.date().isoformat(), f"4-{sid[:8]}.json"),
+            json.dumps({"session": sid, "ts": 4, "prompt": "heute", "reason": "empty", "kept": {}}))
+        os.makedirs(os.path.join(sperre, "2026-11-10"))  # no own entry there - only the error can mark it partial
+        check(pg.prelude_gaps(sid, sperre, now=now)["status"] == "ok", "without the error: ok")
+        with mock.patch.object(pg.os, "listdir", side_effect=listdir_old_fails):
+            res = pg.prelude_gaps(sid, sperre, now=now)
+        check(res["status"].startswith("teilweise:") and [g["prompt"] for g in res["gaps"]] == ["heute"],
+              f"unreadable older day: partial, the gap found today stays {res['status']!r} {res['gaps']}")
+        shutil.rmtree(sperre, ignore_errors=True)
         check(pg.prelude_gaps(sid, None)["status"] == "nicht eingerichtet", "no setting: status says so")
         check(pg.prelude_gaps(sid, os.path.join(log, "gibt-es-nicht"))["status"] == "nicht geprüft: Ordner fehlt", "missing folder")
         with mock.patch.dict(os.environ, {"AGENTIC_OS_PRELUDE_LOG_DIR": "/aus/env"}):
@@ -1136,7 +1167,8 @@ def test_prelude_gaps():
         with mock.patch.object(wc, "prelude_gaps", side_effect=fixed), contextlib.redirect_stdout(buf):
             wc.main(["pre", "--mem", mem, "--session-id", sid])
         brief = json.loads(buf.getvalue()).get("prelude_gaps") or {}
-        check(brief.get("status") == "ok" and isinstance(brief.get("gaps"), list), f"pre carries prelude_gaps {brief.get('status')}")
+        check(brief.get("status") == r["status"] and len(brief.get("gaps") or []) == 2,
+              f"pre carries prelude_gaps {brief.get('status')}")
     finally:
         shutil.rmtree(log, ignore_errors=True)
         shutil.rmtree(proj, ignore_errors=True)

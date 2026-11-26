@@ -324,6 +324,37 @@ def test_regel_tag_geschuetzt():
     check(rc == 0 and by(mem, "L13").get("review_after") == "2027-05-16", f"review_after stays allowed ({rc}, {out.get('error')})")
 
 
+def test_regelquelle_bleibt_sichtbar():
+    """6.0.2 (Task-10a review): 'gegenstandslos' on the derived_from source of a rule-class learning is refused -
+    for a rule proposal of the same plan and for a live rule-class row of an earlier chunk."""
+    print("--- test_regelquelle_bleibt_sichtbar")
+    vorschlag = {"text": "Globale Regel aus L3", "summary": "Globale Regel aus L3", "importance": 4,
+                 "tags": ["pflegelauf", "global"], "derived_from": ["L3"], "rule_class": True}
+    refused({"learnings": [vorschlag], "learning_updates": [{"id": "L3", "obsolete": True, "reason": "weg"}]},
+            "obsolete on the source of a rule proposal in the same plan", expect="derived_from")
+    refused({"learnings": [dict(vorschlag, rule_class=False, tags=["regel"])],
+             "learning_updates": [{"id": "L3", "obsolete": True, "reason": "weg"}]},
+            "obsolete on the source of a tag-only rule proposal", expect="derived_from")
+
+    def setup_regel_mit_quelle():
+        tmp, mem = setup()
+        put(learn_path(mem), rows_of(mem) + [row("L13", "Regel aus L3", 5, rule_class=True, derived_from=["L3"],
+                                                 release={"status": "needs_explanation"})])
+        return tmp, mem
+    refused({"learning_updates": [{"id": "L3", "obsolete": True, "reason": "weg"}]},
+            "obsolete on the source of a live rule-class row (earlier chunk)", expect="derived_from",
+            make=setup_regel_mit_quelle)
+    # what stays allowed: a plain learning as proposal source, and doppelt/überholt with a live successor
+    _, mem = setup()
+    rc, out = apply(mem, {"learnings": [dict(vorschlag, rule_class=False, tags=["pflegelauf"])],
+                          "learning_updates": [{"id": "L3", "obsolete": True, "reason": "weg"}]})
+    check(rc == 0, f"obsolete next to a plain (non-rule) learning stays allowed ({rc}, {out.get('error')})")
+    _, mem = setup_regel_mit_quelle()
+    rc, out = apply(mem, {"learning_updates": [{"id": "L3", "superseded_by": "L2", "reason": "doppelt"}]})
+    check(rc == 0 and by(mem, "L3").get("superseded_by") == "L2",
+          f"superseded_by on a rule source with a live successor stays allowed ({rc}, {out.get('error')})")
+
+
 def test_nachfolger_bleibt_lebendig():
     """Codex 25.11.: chunk 1 writes L1 -> L2; a later chunk must not hide L2, or L1 points at nothing live."""
     print("--- test_nachfolger_bleibt_lebendig")
@@ -510,7 +541,7 @@ def test_stempel():
     with open(learn_path(mem), encoding="utf-8-sig") as fh:
         text = fh.read()
     stamp = json.load(open(stamp_path(mem), encoding="utf-8")) if os.path.exists(stamp_path(mem)) else {}
-    check(rc == 0 and stamp == {"date": "2026-11-16", "id_keys": text.count('"id"')},
+    check(rc == 0 and stamp == {"date": "2026-11-16", "id_keys": text.count('"id"'), "zaehlung": 2},
           f"stamp = date + id_keys counted on the written file ({rc}, {stamp}, {text.count(chr(34) + 'id' + chr(34))})")
     check(any("pflegelauf.json" in str(f) for f in out.get("files_written", [])), "files_written names the stamp")
     # a maintenance run that found nothing still resets the counter
@@ -522,6 +553,26 @@ def test_stempel():
     stamp = json.load(open(stamp_path(mem), encoding="utf-8")) if os.path.exists(stamp_path(mem)) else {}
     check(rc == 0 and sha(learn_path(mem)) == before and stamp.get("id_keys") == text.count('"id"') == 10,
           f"stamp-only plan: store untouched, stamp counts the current file ({rc}, {stamp})")
+    # 6.0.2 (Codex): a learning dated on/after the run's start date (written by another session during a run of
+    # several days) stays out of the base, so the next trigger counts it as new; a tag "id" is no key
+    _, mem = setup()
+    put(learn_path(mem), rows_of(mem) + [row("L11", "Kam waehrend des Laufs", date="2026-11-16"),
+                                         row("L12", "Nach Mitternacht", date="2026-11-17T00:30"),
+                                         row("L13", "Tag heisst id", tags=["id"]),
+                                         row("L14", "Kein Datum", date="kein Datum")])
+    rc, out = apply(mem, {"pflegelauf_stamp": True})
+    stamp = json.load(open(stamp_path(mem), encoding="utf-8")) if os.path.exists(stamp_path(mem)) else {}
+    check(rc == 0 and stamp.get("id_keys") == 12,
+          f"base = rows dated before 2026-11-16 (10 + L13) plus L14 without a readable date ({rc}, {stamp})")
+    # Codex 6.0.2 re-check: the stamp counts the file text the trigger counts - also "id" at the start of a line
+    _, mem = setup()
+    raw = "[\n" + ",\n".join('{\n"id"\n: "L%d",\n"date": "2026-08-01",\n"text": "t"\n}' % i for i in range(1, 8)) + "\n]\n"
+    with open(learn_path(mem), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(raw)
+    rc, out = apply(mem, {"pflegelauf_stamp": True})
+    stamp = json.load(open(stamp_path(mem), encoding="utf-8")) if os.path.exists(stamp_path(mem)) else {}
+    check(rc == 0 and stamp.get("id_keys") == 7 and stamp.get("zaehlung") == 2,
+          f"unindented file, 'id' and colon on two lines: 7 rows counted ({rc}, {stamp})")
     # no stamp unless asked for
     _, mem = setup()
     apply(mem, {"learning_updates": [{"id": "L3", "review_after": "2027-05-16", "reason": "bleibt"}]})
@@ -542,7 +593,7 @@ def test_dry_run_schreibt_nichts():
 
 for fn in (test_superseded_wird_gesetzt, test_zuruecknehmen, test_review_after, test_bleibt_kommt_wieder, test_unveraendert_schreibt_nichts,
            test_gegenstandslos_wird_gesetzt, test_gegenstandslos_verweigert, test_gegenstandslos_feedback,
-           test_regel_tag_geschuetzt, test_nachfolger_bleibt_lebendig,
+           test_regel_tag_geschuetzt, test_regelquelle_bleibt_sichtbar, test_nachfolger_bleibt_lebendig,
            test_rule_class_verweigert, test_principle_verweigert, test_zeiger_mitglied_verweigert,
            test_review_after_auf_geschuetzten_zeilen, test_ziel_geschuetzt_verweigert,
            test_kette_verweigert, test_selbstbezug_verweigert, test_kreis_im_plan_verweigert,

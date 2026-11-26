@@ -137,8 +137,9 @@ only when this step runs.
   `iterations/iteration-log.md` should exist. Missing → warn, suggest the skill or command that creates them.
 - **JSON validity:** for each JSON file loaded: if parse fails → warn the user with file and parse error and suggest `/agentic-os:maintain` (Step 4 is the only repair path). Never rename, recreate or empty the file here — the bootstrap is read-only, and a UTF-8 BOM is not corruption (read as `utf-8-sig`).
 - **Scaling guards and Pflegelauf:** run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/memory-thresholds.sh" .agent-memory`.
-  Exit 10 → include its `THRESHOLD:` and `PFLEGELAUF:` lines under HEALTH (a PFLEGELAUF line means
-  `/agentic-os:maintain` is due). Exit 0 → nothing to report. The numbers live ONLY in that script.
+  Exit 10 → include its `PFLEGELAUF:` line under HEALTH (it means `/agentic-os:maintain` is due). Do not repeat
+  the `THRESHOLD:` lines: the start briefing already shows them. Exit 0 → nothing to report. The numbers live
+  ONLY in that script.
 
 ### Recovery Detection (recovery-detect) — read-only
 
@@ -210,7 +211,7 @@ CODEX GOTCHAS (RAG)
 ACTIVE WARNINGS
   {at most 3 entries of `## Active Warnings` in the local session-summary.md}
 HEALTH
-  {missing files, THRESHOLD and PFLEGELAUF lines}
+  {missing files, PFLEGELAUF line}
 RECOVERY
   {un-consolidated sessions with wrap-up recommendation; omit if nothing was flagged}
 ---

@@ -88,6 +88,16 @@ den das Modell sieht; es feuert auch nach `/compact` erneut.
   Einstellung steht `nicht eingerichtet` im Brief.
 - Status ausser `ok`: `nicht geprüft: Ordner fehlt`, `... keine Sitzungs-ID`, `... keine Eintraege dieser Sitzung`
   (falscher Ordner oder Mod aus) oder ein Fehlertext. Einzelne unlesbare Protokolldateien werden uebersprungen.
+- 6.0.2: `teilweise: Eintraege vor <Datum> nicht gelesen`, wenn die Sitzung vor dem Lesefenster (heute und drei
+  UTC-Tage davor) Eintraege hat oder ein aelterer Tagesordner nicht lesbar ist; die gefundenen Luecken bleiben.
+
+## learning_count.py (6.0.2)
+
+- Zaehlt die Learnings einer `learnings.json` durch Einlesen (JSON-Objekte mit `id` in der Liste), auf Wunsch nur
+  die vor einem Datum (`--before YYYY-MM-DD`; ohne lesbares Datum zaehlt eine Zeile als aelter). Eine Zaehlung fuer
+  den PFLEGELAUF-Ausloeser (`memory-thresholds.sh`) und den Stempel (`apply_wrapup.py`, `pflegelauf_stamp`), L154.
+- Nur lesend. Fehlt die Datei: 0. Unlesbar: keine Ausgabe, Exit 1; `memory-thresholds.sh` zaehlt dann die
+  `"id"`-Schluessel im Text.
 
 ## store_lock.py / store_snapshot.py (5.3.0)
 

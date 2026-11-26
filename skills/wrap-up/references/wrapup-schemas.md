@@ -262,7 +262,7 @@ itself, a pointer, a `bridge_status` rejected/retired entry, an unreleased rule-
 pairs); `obsolete` that is not `true` or on a row that is already superseded; the same id twice; a row whose `update_log` is not a list. Each applied entry appends
 `{date, reason, by: "pflegelauf", field, old, new}` (field `superseded_by` or `review_after`, the value before and
 after) to the row's `update_log`; an entry that changes nothing writes and logs nothing (`tally.learning_updates_unchanged`).
-`pflegelauf_stamp: true` (a JSON bool, else refused) writes `working/pflegelauf.json` = `{date, id_keys}` after every
+`pflegelauf_stamp: true` (a JSON bool, else refused) writes `working/pflegelauf.json` = `{date, id_keys, zaehlung}` after every
 learnings writer of the run - the counter base of the `PFLEGELAUF` trigger line. Tally:
 `learning_updates` = `{superseded, cleared, review_after, obsolete}`, `learning_updates_unchanged`, `pflegelauf_stamp`
 (the stamp written, or `null`).

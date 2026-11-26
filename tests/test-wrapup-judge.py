@@ -640,6 +640,17 @@ def test_old_sections_ignored():
         rc, out = run(env, "apply", plan(identity={"candidates": [cand], "none_because": ""}), "--dry-run")
         check(rc == 0 and out.get("tally", {}).get("ignored_sections") == ["identity"],
               f"--dry-run reports the ignored sections {out.get('tally', {}).get('ignored_sections')}")
+        # 6.0.2 (Codex): the old Handoff Mode pattern field is counted, an empty one is not
+        old_handoff = {"what_was_done": ["Alt"], "handoff": {"active_task": "T-1", "current_state": "x",
+                                                             "open_questions": "", "active_patterns": ["P-001"]}}
+        rc, out = run(env, "apply", {"summary": old_handoff}, "--dry-run")
+        check(rc == 0 and out.get("tally", {}).get("ignored_sections") == ["summary.handoff.active_patterns"]
+              and "summary.handoff.active_patterns" in (out.get("ignored_status_line") or ""),
+              f"summary.handoff.active_patterns is ignored and counted {out.get('tally', {}).get('ignored_sections')}")
+        old_handoff["handoff"]["active_patterns"] = []
+        rc, out = run(env, "apply", {"summary": old_handoff}, "--dry-run")
+        check(rc == 0 and out.get("tally", {}).get("ignored_sections") == [],
+              f"an empty active_patterns is not counted {out.get('tally', {}).get('ignored_sections')}")
     finally:
         shutil.rmtree(env["base"], ignore_errors=True)
 

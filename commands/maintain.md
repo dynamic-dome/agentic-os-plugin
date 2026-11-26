@@ -123,7 +123,10 @@ one verdict per candidate:
   A target that is a pointer, has
   `bridge_status` rejected or retired, is an unreleased rule-class learning, is itself superseded
   or declared `obsolete` (point at the live successor, no chains), the id itself, or a pair that
-  supersedes each other. `obsolete` on a row that is already superseded.
+  supersedes each other. `obsolete` on a row that is already superseded. `obsolete` on a source
+  (`derived_from`) of a rule-class learning - a rule proposal of the same plan or a live one from an earlier
+  chunk: the rule would lose its evidence; judge the source `bleibt` (or `doppelt`/`überholt` with a live
+  successor).
   `reason` is 1..300 characters. `review_after` is allowed on every row.
 - **verwandt** - a `principles` entry `{summary, anchor, members, plain, tags}` with the anchor of
   the existing pointer: the same anchor merges the new member in. Copy `summary`, **`plain`** and
@@ -162,7 +165,8 @@ is not available: judge the row `bleibt` and name it as `Lücke` in the report.
 
 Every plan of one run carries the run's **start date** as `date` (the day Step 1 collected the candidates), also
 in a session after midnight or a resumed run: the stamp takes that date, so a learning written while the run was
-going is still in the next run's pair set.
+going is still in the next run's pair set. The stamp's count (`id_keys`) covers only the learnings dated before
+that date, so the trigger counts such a learning as new as well (6.0.2).
 
 Work through the subjects in **chunks of exactly 30** (the last chunk may be smaller): search,
 judge (Step 2) and write one chunk before the next starts, so a compaction or an interrupted session
@@ -212,7 +216,7 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/bridge_projection.py" .agent-memory --agen
   `bleibt`), fix the plan, dry-run again. Never write a store file by hand around a refusal.
 - Apply only after a clean dry run. Report from the tallies (summed over the chunks), not by hand:
   `learning_updates` = `{superseded, cleared, review_after, obsolete}`, `learning_updates_unchanged`,
-  `pflegelauf_stamp` = `{date, id_keys}`, `snapshot` (first chunk only: the Rückholpunkt), `principles_added` /
+  `pflegelauf_stamp` = `{date, id_keys, zaehlung}`, `snapshot` (first chunk only: the Rückholpunkt), `principles_added` /
   `principles_updated` / `principle_ids`, and `learning_ids` for a critical rule proposal.
   `learnings_skipped_duplicate` > 0 means a proposal read as a duplicate of a live row and was not
   written: write the rule's wording, not the candidate's text, and report it as `Lücke` if it stays.

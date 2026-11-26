@@ -410,6 +410,7 @@ CORE_KEYS = ("session_summary",)  # built here from `summary`: never two ways in
 # 6.0.0: the identity harvest is gone. A judge plan from an older skill version may still carry these sections:
 # they are ignored and counted (`tally.ignored_sections`), never refused and never handed to the applier.
 IGNORED_KEYS = ("identity", "user_candidates")
+IGNORED_HANDOFF_PATTERNS = "summary.handoff.active_patterns"  # pattern field of the old Handoff Mode (6.0.2)
 # The Pflegelauf sections belong to /agentic-os:maintain: a stamp from wrap-up would reset the trigger (final review M1).
 MAINTAIN_KEYS = ("learning_updates", "pflegelauf_stamp")
 RULE_TAGS = {"regel", "rule", "verfassung", "constitution"}
@@ -705,6 +706,10 @@ def cmd_apply_plan(args):
     date = plan.get("date") or _dt.date.today().isoformat()
     summary = plan["summary"]
     ignored = [k for k in IGNORED_KEYS if _carries(plan.get(k))]
+    handoff = summary.get("handoff") if isinstance(summary, dict) else None
+    if isinstance(handoff, dict) and _carries(handoff.get("active_patterns")):
+        # 6.0.2 (Codex): the old Handoff Mode field; the renderer drops it, so it is counted like the other old sections
+        ignored.append(IGNORED_HANDOFF_PATTERNS)
     store = {k: v for k, v in plan.items() if k not in ("summary", "consolidate", *IGNORED_KEYS)}
     store.update({"date": date, "session_id": session_id})
     learnings, dropped = _apply_cap(plan.get("learnings") or [], args.learnings_cap)

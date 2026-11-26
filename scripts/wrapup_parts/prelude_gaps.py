@@ -6,6 +6,9 @@ the prompts of this session for which the gate kept no learning. Read-only. Wher
 
 A gap: reason `ok` or `empty` and no kept learning. `budget`, `daemon`, `gate` are unchecked (nobody knows whether
 something was missing); `skip` (too short) and `repeat` (already served) do not count at all.
+Only today and the DAYS UTC days before are read; a session with entries before that (or an older day folder that
+cannot be listed) gets the status `teilweise: ...`. The older check looks at file names only (session[:8]), so a
+rare session with the same prefix can also mark the list as partial.
 """
 from __future__ import annotations
 
@@ -77,12 +80,28 @@ def prelude_gaps(session_id: str, log_dir: str | None, now: _dt.datetime | None 
                     continue
     except OSError as exc:
         return {"status": f"nicht geprüft: {str(exc)[:120]}", "gaps": [], "geprueft": 0, "nicht_geprueft": 0}
-    if not seen:  # wrong folder, mod off, or nothing logged for this session: not a silent "nothing missing"
-        out["status"] = "nicht geprüft: keine Einträge dieser Sitzung"
-        return out
     gaps.sort(key=lambda g: -g["ts"])
     out["gaps"] = gaps[:MAX_GAPS]
+    try:
+        older = _has_older(log_dir, first_day, suffix)
+    except OSError:
+        older = True  # an older day that cannot be listed: completeness unknown, the gaps found so far stay
+    if older:  # 6.0.2 (Codex): a session longer than the window gets an incomplete list, never a plain "ok"
+        out["status"] = f"teilweise: Einträge vor {first_day} nicht gelesen"
+        return out
+    if not seen:  # wrong folder, mod off, or nothing logged for this session: not a silent "nothing missing"
+        out["status"] = "nicht geprüft: keine Einträge dieser Sitzung"
     return out
+
+
+def _has_older(log_dir: str, first_day: str, suffix: str) -> bool:
+    """True when a day folder before the window holds a file of this session (name check only, nothing is read;
+    the file name carries only session[:8], so a rare prefix twin can also mark the list as partial)."""
+    for day in sorted((d for d in os.listdir(log_dir) if d < first_day), reverse=True):
+        path = os.path.join(log_dir, day)
+        if os.path.isdir(path) and any(n.endswith(suffix) for n in os.listdir(path)):
+            return True
+    return False
 
 
 def _ts(value) -> float:

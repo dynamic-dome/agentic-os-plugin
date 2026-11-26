@@ -101,6 +101,32 @@ learnings_json 40 > "$MEM/learnings/learnings.json"
 stamp 50
 [ -z "$(pfl)" ] && pass "id_keys larger than today (learnings removed): no line" || fail "stamp 50/40: $(pfl)"
 
+# 6.0.2 (Codex): only "id" keys count - a tag "id" and an escaped \"id\": inside a text do not (25 rows -> 25)
+python -c "import json; print(json.dumps([{'id': f'L{i}', 'tags': ['id'], 'text': 'x \"id\": y'} for i in range(1, 26)], indent=2))" \
+  > "$MEM/learnings/learnings.json"
+stamp2() { printf '{"date": "2026-11-01", "id_keys": %s, "zaehlung": 2}\n' "$1" > "$MEM/working/pflegelauf.json"; }
+stamp2 10
+[ -z "$(pfl)" ] && pass "25 rows with tag 'id' and an escaped key in the text: 15 new, no line" || fail "tag id counted: $(pfl)"
+stamp2 0
+[ "$(pfl)" = "" ] && pass "stamp 0, 25 rows: 25 new, below 30, no line" || fail "stamp 0/25 tag id: $(pfl)"
+# Codex re-check: a stamp from before 6.0.2 (no "zaehlung") was counted over every '"id"' - it is compared with that
+# count: 50 hits (key + tag per row) - 20 = 30 new -> due; with the new count (25 - 20 = 5) the line would stay away
+stamp 20
+[ "$(pfl)" = "PFLEGELAUF: 30 neue Learnings seit 2026-11-01 → /agentic-os:maintain" ] \
+  && pass "old stamp: compared with the old count, the due run is not hidden" || fail "old stamp after upgrade: $(pfl)"
+# Codex re-checks: valid JSON with "id" at the start of a line, or "id" and the colon on two lines, is counted
+python -c "print('[' + ','.join('{\n\"id\"\n: \"L%d\"\n}' % i for i in range(1, 41)) + ']')" > "$MEM/learnings/learnings.json"
+stamp2 10
+[ "$(pfl)" = "PFLEGELAUF: 30 neue Learnings seit 2026-11-01 → /agentic-os:maintain" ] \
+  && pass "40 unindented rows, 'id' and colon on two lines, stamp 10: 30 new, line" || fail "unindented rows: $(pfl)"
+# an unparsable file falls back to the "id" keys by text: 40 keys, stamp 10 -> 30 new, the line comes (Codex: a
+# fallback that always gave 0 must not pass)
+python -c "print('[' + ', '.join('{\"id\": \"L%d\"}' % i for i in range(1, 41)) + ',')" > "$MEM/learnings/learnings.json"
+stamp2 10
+out=$(bash "$SCRIPT" "$MEM"); rc=$?
+[ "$rc" -eq 10 ] && [ "$(pfl)" = "PFLEGELAUF: 30 neue Learnings seit 2026-11-01 → /agentic-os:maintain" ] \
+  && pass "broken learnings.json: text fallback counts 40 keys, line" || fail "broken learnings: rc=$rc $out"
+
 echo 'not json at all' > "$MEM/working/pflegelauf.json"
 out=$(bash "$SCRIPT" "$MEM"); rc=$?
 [ -z "$(pfl)" ] && [ "$rc" -ne 1 ] && pass "broken stamp: no PFLEGELAUF line, exit not 1" || fail "broken stamp: rc=$rc $out"

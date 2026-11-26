@@ -66,7 +66,7 @@ each change in the row's `update_log` ({date, reason, by, field, old, new}).
 sets `superseded_by = obsolete:pflegelauf-<plan date>`. A rule-class learning, a pointer row and
 a pointer member are refused (no protection is loosened by the run; those keep
 `principle_retire` and the rule-class gate). `pflegelauf_stamp: true` writes
-working/pflegelauf.json = {date, id_keys}, the counter base of the trigger.
+working/pflegelauf.json = {date, id_keys, zaehlung}, the counter base of the trigger.
 
 IDENTITY QUALITY (P1/B2, design 2026-10-27)
 -------------------------------------------
@@ -170,6 +170,7 @@ import store_snapshot  # noqa: E402
 import harvest_state  # noqa: E402
 import identity_quote  # noqa: E402
 import identity_store  # noqa: E402
+import learning_count  # noqa: E402
 import identity_briefing  # noqa: E402
 from identity_briefing import is_placeholder_line  # noqa: E402,F401  (one home for the placeholder rule)
 
@@ -280,9 +281,12 @@ def preflight_readable(mem: str, plan: dict | None = None, paths=None) -> None:
     if plan_reads_queue(plan):
         checks.append((paths.root, paths.queue, list))
     if paths.central and plan_touches_identity(plan):
-        # P2: the central queue and changelog are read instead of the project's; a broken one stops the run here
-        # (no silent fallback to the project files)
-        checks += [(paths.root, paths.queue, list), (paths.root, paths.changelog, list)]
+        # P2: the central changelog is read instead of the project's; a broken one stops the run here (no silent
+        # fallback to the project files). 6.0.2: the central queue only for a plan that reads it - user_md_supersede
+        # looks up a legacy line's new id there (_migrated_id); user_md_retire never reads it.
+        checks.append((paths.root, paths.changelog, list))
+        if plan.get("user_md_supersede"):
+            checks.append((paths.root, paths.queue, list))
     for root, rel, kind in checks:
         data = load_json(root, rel, missing)
         if data is not missing and not isinstance(data, kind):
@@ -2456,7 +2460,8 @@ def validate_learning_updates(mem, plan):
     and the rule-class gate; `review_after` is allowed on them (spec 5). A target must
     exist, differ from the id and be live, also after this plan (no chains, no pairs,
     not retired by the same plan's `principle_retire`), and must not be a pointer, a
-    rejected or retired bridge entry or an unreleased rule-class learning.
+    rejected or retired bridge entry or an unreleased rule-class learning. `obsolete` is refused on a source
+    (`derived_from`) of a rule-class learning, of this plan's `learnings` or a live row (6.0.2).
     """
     if "pflegelauf_stamp" in plan and not isinstance(plan["pflegelauf_stamp"], bool):
         raise PlanError("pflegelauf_stamp must be a JSON bool")
@@ -2488,6 +2493,15 @@ def validate_learning_updates(mem, plan):
         succ = r.get("superseded_by")
         if isinstance(succ, str) and str(r.get("id")) not in planned:
             incoming.setdefault(succ, []).append(str(r.get("id")))
+    # 6.0.2 (Task-10a review): the source of a rule-class learning (derived_from) stays visible while the rule waits
+    # in or has passed the rule gate - a rule proposal of the same plan and a live rule-class row of an earlier chunk
+    rule_sources = {}
+    for r in [*(x for x in live.values() if not x.get("superseded_by")),
+              *(x for x in (plan.get("learnings") or []) if isinstance(x, dict))]:
+        if _rule_like(r):
+            for m in (r.get("derived_from") or []):
+                if isinstance(m, str):
+                    rule_sources.setdefault(m.strip(), str(r.get("id") or "Regelvorschlag dieses Plans"))
     seen, targets, obsoleted = set(), {}, set()
     for it in items:
         if not isinstance(it, dict):
@@ -2545,6 +2559,10 @@ def validate_learning_updates(mem, plan):
             if row.get("superseded_by"):
                 raise PlanError(f"learning update {lid}: already superseded by {row['superseded_by']} - "
                                 f"'gegenstandslos' is for a live row only")
+            if lid in rule_sources:
+                raise PlanError(f"learning update {lid}: source (derived_from) of the rule-class learning "
+                                f"{rule_sources[lid]} - 'gegenstandslos' would hide the rule's evidence; judge "
+                                f"{lid} 'bleibt' or take the rule back through the rule gate")
             obsoleted.add(lid)
             continue
         target = it["superseded_by"]
@@ -2634,10 +2652,18 @@ def apply_learning_updates(mem, plan, date, dry, touched, tally):
     render_learnings_md(mem, rows, dry, touched)
 
 
+# 6.0.2: the stamp counts parsed learning rows (learning_count.py, the trigger's count too - L154). STAMP_COUNT marks
+# such a stamp; a stamp without it was counted over every '"id"' text hit before 6.0.2.
+STAMP_COUNT = 2
+
+
 def write_pflegelauf_stamp(mem, plan, date, dry, touched, tally):
-    """`pflegelauf_stamp: true` -> working/pflegelauf.json = {date, id_keys}. id_keys counts '"id"' in the text
-    of learnings.json as it stands after this run's writes - the same count as count_ids in
-    memory-thresholds.sh (grep -o '"id"' | wc -l), so trigger and stamp measure alike (L154)."""
+    """`pflegelauf_stamp: true` -> working/pflegelauf.json = {date, id_keys, zaehlung}. id_keys = the learnings in
+    learnings.json, as it stands after this run's writes, dated before the run's start date (`date`), counted by
+    learning_count.py like the trigger. 6.0.2 (Codex): a learning another session writes while a run of several days
+    is open is dated on or after the start date, so the next trigger counts it as new instead of hiding it in the
+    base. A row without a readable date stays in the base (counted as new it would come back after every run). An
+    unreadable file gives 0: the trigger then counts every learning as new (early rather than silent)."""
     if plan.get("pflegelauf_stamp") is not True:
         return
     path = os.path.join(mem, "learnings", "learnings.json")
@@ -2645,7 +2671,7 @@ def write_pflegelauf_stamp(mem, plan, date, dry, touched, tally):
     if os.path.exists(path):
         with open(path, encoding="utf-8-sig") as fh:
             text = fh.read()
-    stamp = {"date": date, "id_keys": text.count('"id"')}
+    stamp = {"date": date, "id_keys": learning_count.count(text, before=date) or 0, "zaehlung": STAMP_COUNT}
     tally["pflegelauf_stamp"] = stamp
     write_json(mem, PFLEGELAUF_STAMP, stamp, dry, touched, via="learning_updates")
 
